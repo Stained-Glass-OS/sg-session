@@ -79,20 +79,24 @@ window_list() { xwininfo -root -children 2>/dev/null; }
 # Windows drawn inside the Wine desktop are children of the desktop's X window,
 # not top-level X windows. Enumerating the root only shows the desktop itself,
 # so anything that looks for an app has to look one level down.
-desktop_id() { window_list | grep 'Wine Desktop' | awk '{print $1}' | head -1; }
+# Matched case-insensitively on purpose: Wine titles this window
+# "shell - Wine Desktop" in Debian's build and "shell - Wine desktop" in
+# Ubuntu's. Matching one spelling passes on one distribution and fails on the
+# other, which is how CI found this.
+desktop_id() { window_list | grep -i 'wine desktop' | awk '{print $1}' | head -1; }
 desktop_children() {
     id=$(desktop_id)
     [ -n "$id" ] && xwininfo -id "$id" -children 2>/dev/null
 }
 
 waited=0
-while ! window_list | grep -q 'Wine Desktop'; do
+while ! window_list | grep -qi 'wine desktop'; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if window_list | grep -q 'Wine Desktop'; then
-    DESKTOP_LINE=$(window_list | grep 'Wine Desktop' | sed 's/^ *//' | head -1)
+if window_list | grep -qi 'wine desktop'; then
+    DESKTOP_LINE=$(window_list | grep -i 'wine desktop' | sed 's/^ *//' | head -1)
     pass "desktop window exists: $DESKTOP_LINE"
 else
     fail "no Wine desktop window on $DISPLAY"
