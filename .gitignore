@@ -3,4 +3,6 @@ debian/sg-session/
 debian/.debhelper/
 debian/files
 debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
 debian/debhelper-build-stamp
