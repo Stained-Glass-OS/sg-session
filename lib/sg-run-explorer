@@ -34,5 +34,15 @@ sg_log "explorer starting: driver=$SG_DRIVER desktop=shell,$GEOM display=${DISPL
 # environment variable, so anything launched later in the session agrees.
 wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d "$SG_DRIVER" /f >/dev/null 2>&1 || true
 
+# Make the virtual desktop the default for every process in this prefix.
+#
+# This is what makes the shell a shell. Without it, `wine notepad` opens its own
+# X toplevel outside the desktop -- and under a fullscreen compositor like cage
+# that toplevel covers the desktop entirely, taskbar included. With it, apps
+# render inside the desktop window as child windows and appear in the taskbar,
+# which is the behaviour Phase 0 is actually aiming at.
+wine reg add 'HKCU\Software\Wine\Explorer' /v Desktop /t REG_SZ /d shell /f >/dev/null 2>&1 || true
+wine reg add 'HKCU\Software\Wine\Explorer\Desktops' /v shell /t REG_SZ /d "$GEOM" /f >/dev/null 2>&1 || true
+
 # The shell: a single virtual-desktop window named "shell" at the output size.
 exec wine explorer "/desktop=shell,$GEOM"

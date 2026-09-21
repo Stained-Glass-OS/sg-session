@@ -8,17 +8,21 @@ case "$1" in
     configure)
         # The session user owns the system prefix. Phase 0 has exactly one.
         # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
+        #
+        # --no-create-home is deliberate. adduser would chown the home
+        # directory, and that fails with EINVAL inside an unprivileged user
+        # namespace, which is exactly where image builders like mkosi run.
+        # The directories are created and owned by tmpfiles.d instead, at boot,
+        # where the uid actually exists and the chown is legal.
         if ! getent passwd "$SG_USER" >/dev/null; then
-            adduser --system --group --home "$SG_ROOT" \
+            adduser --system --group --no-create-home --home "$SG_ROOT" \
                     --gecos "Stained Glass session user" \
                     --disabled-password "$SG_USER"
         fi
-        # seat/input access for the compositor, and a home for Wine.
+        # Seat and input access for the compositor.
         for grp in video input render; do
             getent group "$grp" >/dev/null && adduser "$SG_USER" "$grp" >/dev/null 2>&1 || true
         done
-        mkdir -p "$SG_ROOT" /var/log/stained-glass
-        chown "$SG_USER:$SG_USER" "$SG_ROOT" /var/log/stained-glass
         ;;
 esac
 

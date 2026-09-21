@@ -1,10 +1,13 @@
 [Unit]
 Description=Initialize the Stained Glass system Wine prefix
 Documentation=https://github.com/Stained-Glass-OS/stained-glass
-# The prefix is normally baked into the image. This unit is the first-boot
-# fallback, so it must finish before anything tries to use the prefix.
+# The prefix is built on first boot rather than baked into the image: the image
+# build runs in a sandbox where /var is not the image's /var, so anything
+# written there at build time is liable to be thrown away.
+# It must exist before greetd starts a session against it.
 Before=greetd.service
-After=local-fs.target
+After=local-fs.target systemd-tmpfiles-setup.service
+Requires=systemd-tmpfiles-setup.service
 ConditionPathExists=!/var/lib/stained-glass/prefix/.sg-initialized
 
 [Service]
@@ -13,6 +16,14 @@ RemainAfterExit=yes
 User=sguser
 Group=sguser
 Environment=HOME=/var/lib/stained-glass
+
+# Wine wants an XDG_RUNTIME_DIR. There is no logind session here -- this runs
+# before anyone logs in -- so systemd makes one for us and we point Wine at it.
+# Without this, wineboot prints "XDG_RUNTIME_DIR is invalid or not set" and
+# parts of the prefix build misbehave.
+RuntimeDirectory=stained-glass
+Environment=XDG_RUNTIME_DIR=/run/stained-glass
+
 ExecStart=/usr/bin/sg-prefix-init
 TimeoutStartSec=600
 

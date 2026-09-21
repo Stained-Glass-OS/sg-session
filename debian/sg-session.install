@@ -6,3 +6,4 @@ lib/sg-run-explorer       usr/lib/stained-glass
 config/sg-session.env     usr/share/stained-glass
 config/greetd-config.toml usr/share/stained-glass
 systemd/sg-prefix-init.service usr/lib/systemd/system
+tmpfiles/sg-session.conf  usr/lib/tmpfiles.d

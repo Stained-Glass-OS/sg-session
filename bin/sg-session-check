@@ -76,6 +76,15 @@ fi
 
 window_list() { xwininfo -root -children 2>/dev/null; }
 
+# Windows drawn inside the Wine desktop are children of the desktop's X window,
+# not top-level X windows. Enumerating the root only shows the desktop itself,
+# so anything that looks for an app has to look one level down.
+desktop_id() { window_list | grep 'Wine Desktop' | awk '{print $1}' | head -1; }
+desktop_children() {
+    id=$(desktop_id)
+    [ -n "$id" ] && xwininfo -id "$id" -children 2>/dev/null
+}
+
 waited=0
 while ! window_list | grep -q 'Wine Desktop'; do
     [ "$waited" -ge "$TIMEOUT" ] && break
@@ -83,30 +92,73 @@ while ! window_list | grep -q 'Wine Desktop'; do
     waited=$((waited + 2))
 done
 if window_list | grep -q 'Wine Desktop'; then
-    pass "desktop window exists: $(window_list | grep 'Wine Desktop' | sed 's/^ *//' | head -1)"
+    DESKTOP_LINE=$(window_list | grep 'Wine Desktop' | sed 's/^ *//' | head -1)
+    pass "desktop window exists: $DESKTOP_LINE"
 else
     fail "no Wine desktop window on $DISPLAY"
     info "window list was:"; window_list | sed 's/^/      /' | head -20
+    echo; echo "RESULT: FAIL"
+    exit 1
 fi
 
-# --- 3. a Win32 app launches and shows up ---------------------------------
+# --- 3. the desktop has a taskbar -----------------------------------------
+# The brief's Phase 0 target is a taskbar with a running app in it, so the gate
+# checks for one rather than taking the desktop window as proof.
+#
+# Wine's taskbar is an unnamed child of the desktop spanning its full width, a
+# few tens of pixels tall, sitting at the bottom. Identify it by that shape:
+# there is no window name or class to match on.
+DESKTOP_W=$(echo "$DESKTOP_LINE" | sed -n 's/.*  \([0-9]\+\)x[0-9]\+[+-].*/\1/p')
+#
+# Kept to POSIX awk deliberately: gawk's three-argument match() is not in mawk,
+# which is what a Debian image actually ships.
+taskbar_line() {
+    desktop_children | awk -v w="$DESKTOP_W" '
+        NF >= 2 {
+            geom = $(NF - 1)                    # e.g. 1280x20+0+700
+            if (split(geom, a, "x") != 2) next
+            if (split(a[2], b, "+") != 3) next
+            width = a[1]; height = b[1]; x = b[2]
+            if (width == w && height <= 64 && x == 0) { print; exit }
+        }'
+}
+waited=0
+while [ -z "$(taskbar_line)" ]; do
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep 2
+    waited=$((waited + 2))
+done
+if [ -n "$(taskbar_line)" ]; then
+    pass "taskbar present: $(taskbar_line | sed 's/^ *//')"
+else
+    fail "no taskbar found among the desktop's children"
+    info "desktop children were:"; desktop_children | sed 's/^/      /' | head -20
+fi
+
+# --- 4. a Win32 app launches and shows up in the desktop ------------------
 # notepad is the canary: a stock Win32 app with a titled top-level window.
+# It must appear as a child of the desktop, not as its own X toplevel -- an app
+# outside the desktop is an app that is not in the taskbar, and under a
+# fullscreen compositor it covers the shell entirely.
 info "launching notepad.exe"
 wine notepad >"$SG_LOG_DIR/notepad.out" 2>&1 &
 NOTEPAD_SHELL_PID=$!
 
 waited=0
-while ! window_list | grep -q 'Notepad'; do
+while ! desktop_children | grep -q 'Notepad'; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if window_list | grep -q 'Notepad'; then
-    pass "notepad window appeared: $(window_list | grep 'Notepad' | sed 's/^ *//' | head -1)"
+if desktop_children | grep -q 'Notepad'; then
+    pass "notepad is inside the desktop: $(desktop_children | grep 'Notepad' | sed 's/^ *//' | head -1)"
 else
-    fail "notepad did not appear in the window list after ${TIMEOUT}s"
+    fail "notepad did not appear inside the desktop after ${TIMEOUT}s"
+    if window_list | grep -q 'Notepad'; then
+        fail "  (it opened as its own X toplevel -- the virtual desktop is not the prefix default)"
+    fi
     info "notepad output:"; sed 's/^/      /' "$SG_LOG_DIR/notepad.out" 2>/dev/null | head -20
-    info "window list was:"; window_list | sed 's/^/      /' | head -20
+    info "desktop children were:"; desktop_children | sed 's/^/      /' | head -20
 fi
 
 if pgrep -f 'notepad.exe' >/dev/null 2>&1; then

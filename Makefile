@@ -11,6 +11,7 @@ BINDIR       = $(DESTDIR)$(PREFIX)/bin
 LIBDIR       = $(DESTDIR)$(PREFIX)/lib/stained-glass
 SHAREDIR     = $(DESTDIR)$(PREFIX)/share/stained-glass
 UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
+TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 
 BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer
@@ -21,11 +22,12 @@ all:
 	@echo "nothing to build; this package is scripts. try 'make test' or 'make deb'."
 
 install:
-	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR)
+	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	install -m 0644 systemd/sg-prefix-init.service $(UNITDIR)
+	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
