@@ -1,0 +1,128 @@
+#!/bin/sh
+# The Phase 0 gate, guest side.
+#
+# Answers one question with an exit code: is a Windows shell actually running
+# on this machine, and can it launch and show a Win32 app? Printed output is
+# for a human reading CI logs; the exit code is what the gate consumes.
+#
+#   0  all checks passed
+#   1  a check failed
+#   2  the session never came up (nothing to check)
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+TIMEOUT="${SG_CHECK_TIMEOUT:-120}"
+FAILED=0
+
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*"; FAILED=1; }
+info() { echo "info  $*"; }
+
+# --- wait for the session to publish itself -------------------------------
+waited=0
+while [ ! -f "$SG_STATE/session.env" ]; do
+    [ "$waited" -ge "$TIMEOUT" ] && { echo "FAIL  session never started (no $SG_STATE/session.env after ${TIMEOUT}s)"; exit 2; }
+    sleep 2
+    waited=$((waited + 2))
+done
+# shellcheck source=/dev/null  # written by sg-run-explorer at session start
+. "$SG_STATE/session.env"
+export DISPLAY XDG_RUNTIME_DIR WAYLAND_DISPLAY WINEPREFIX
+info "session.env found after ${waited}s (display=${DISPLAY:-none} path=${SG_DISPLAY_PATH:-?})"
+
+sg_wine_env
+
+# --- 1. the Wine system is alive ------------------------------------------
+# wineserver is the kernel of the Wine personality. If it is not running,
+# nothing else below means anything.
+waited=0
+while ! pgrep -x wineserver >/dev/null 2>&1 && ! pgrep -f 'wineserver' >/dev/null 2>&1; do
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep 2
+    waited=$((waited + 2))
+done
+if pgrep -f wineserver >/dev/null 2>&1; then
+    pass "wineserver is running"
+else
+    fail "wineserver is not running"
+fi
+
+# explorer must be the one we asked for: the virtual-desktop shell, not the
+# bare autostart instance wineboot leaves behind.
+waited=0
+while ! pgrep -f 'explorer.exe .*/desktop=shell' >/dev/null 2>&1; do
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep 2
+    waited=$((waited + 2))
+done
+if pgrep -f 'explorer.exe .*/desktop=shell' >/dev/null 2>&1; then
+    pass "explorer.exe is running as the shell desktop"
+else
+    fail "explorer.exe is not running as the shell desktop"
+fi
+
+# --- 2. the desktop window exists -----------------------------------------
+# Only the X11 path can be checked this way. cage exposes no toplevel
+# enumeration protocol, so on the Wayland path there is nothing to query --
+# which is itself the reason Phase 0 ships the X11 path (ADR 0003).
+if [ "${SG_DISPLAY_PATH:-x11}" != "x11" ]; then
+    fail "display path is '${SG_DISPLAY_PATH}': window checks are only implemented for x11"
+    echo; echo "RESULT: $([ "$FAILED" -eq 0 ] && echo PASS || echo FAIL)"
+    exit "$FAILED"
+fi
+
+window_list() { xwininfo -root -children 2>/dev/null; }
+
+waited=0
+while ! window_list | grep -q 'Wine Desktop'; do
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep 2
+    waited=$((waited + 2))
+done
+if window_list | grep -q 'Wine Desktop'; then
+    pass "desktop window exists: $(window_list | grep 'Wine Desktop' | sed 's/^ *//' | head -1)"
+else
+    fail "no Wine desktop window on $DISPLAY"
+    info "window list was:"; window_list | sed 's/^/      /' | head -20
+fi
+
+# --- 3. a Win32 app launches and shows up ---------------------------------
+# notepad is the canary: a stock Win32 app with a titled top-level window.
+info "launching notepad.exe"
+wine notepad >"$SG_LOG_DIR/notepad.out" 2>&1 &
+NOTEPAD_SHELL_PID=$!
+
+waited=0
+while ! window_list | grep -q 'Notepad'; do
+    [ "$waited" -ge "$TIMEOUT" ] && break
+    sleep 2
+    waited=$((waited + 2))
+done
+if window_list | grep -q 'Notepad'; then
+    pass "notepad window appeared: $(window_list | grep 'Notepad' | sed 's/^ *//' | head -1)"
+else
+    fail "notepad did not appear in the window list after ${TIMEOUT}s"
+    info "notepad output:"; sed 's/^/      /' "$SG_LOG_DIR/notepad.out" 2>/dev/null | head -20
+    info "window list was:"; window_list | sed 's/^/      /' | head -20
+fi
+
+if pgrep -f 'notepad.exe' >/dev/null 2>&1; then
+    pass "notepad.exe process is alive"
+else
+    fail "notepad.exe process is not running"
+fi
+
+# Leave the session as we found it, so the gate can be run twice.
+pkill -f 'notepad.exe' >/dev/null 2>&1 || true
+kill "$NOTEPAD_SHELL_PID" >/dev/null 2>&1 || true
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+    echo "RESULT: PASS"
+else
+    echo "RESULT: FAIL"
+fi
+exit "$FAILED"

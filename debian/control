@@ -1,0 +1,28 @@
+Source: sg-session
+Section: x11
+Priority: optional
+Maintainer: Stained Glass OS <ke7oxh@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/Stained-Glass-OS/sg-session
+Rules-Requires-Root: no
+
+Package: sg-session
+Architecture: all
+Depends: ${misc:Depends},
+         wine,
+         cage,
+         xwayland,
+         x11-utils,
+         procps,
+         greetd,
+         adduser
+Description: Stained Glass OS session glue
+ Brings up a Stained Glass desktop session: a compositor hosting Wine's
+ explorer as the shell, running against a system-wide Wine prefix rather than
+ a per-user one.
+ .
+ This package supplies the session entry point, the prefix initializer, the
+ greetd integration and the scripted session check that the image boot gate
+ consumes. It does not supply the compositor, the greeter or the shell itself;
+ those are cage, greetd autologin and Wine's explorer during Phase 0.

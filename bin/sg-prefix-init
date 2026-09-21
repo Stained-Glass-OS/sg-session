@@ -1,0 +1,39 @@
+#!/bin/sh
+# Initialize the system-wide Wine prefix.
+#
+# Idempotent by design: the image build runs it once to bake a prefix into the
+# image, and first boot runs it again in case the image build could not. The
+# stamp file is what makes the second run cheap.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+STAMP="$SG_PREFIX/.sg-initialized"
+
+if [ -e "$STAMP" ]; then
+    sg_log "prefix already initialized at $SG_PREFIX"
+    exit 0
+fi
+
+sg_log "initializing system prefix at $SG_PREFIX (arch=$WINEARCH)"
+mkdir -p "$SG_PREFIX" "$SG_STATE" "$SG_LOG_DIR"
+
+# wineboot --init builds the prefix. It forks a wineserver that lingers for a
+# few seconds after; wineserver -w waits for it so the build step cannot race
+# against a half-written registry.
+wineboot --init
+wineserver -w
+
+# The prefix is machine state, not user state. Phase 0 has a single session
+# user, so it owns the prefix outright.
+# MULTIUSER-DEBT: D1 — a real deployment needs HKLM shared read-only and a
+# per-user HKCU, which this ownership model cannot express.
+if getent passwd "$SG_USER" >/dev/null 2>&1; then
+    chown -R "$SG_USER:$SG_USER" "$SG_ROOT" "$SG_LOG_DIR"
+fi
+
+: > "$STAMP"
+sg_log "prefix initialized"

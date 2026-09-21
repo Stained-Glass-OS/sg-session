@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: lint + session gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            shellcheck cage xwayland x11-utils wine wine64 \
+            debhelper build-essential devscripts
+
+      - name: Lint
+        run: make lint
+
+      - name: Session gate
+        # The gate needs a runtime dir for the Wayland socket; GitHub runners
+        # do not give the job one.
+        run: |
+          export XDG_RUNTIME_DIR="${RUNNER_TEMP}/xdg"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          make test-session
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-logs
+          path: test/tmp/log/
+          if-no-files-found: ignore
+
+  package:
+    name: build .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            debhelper build-essential devscripts shellcheck
+
+      - name: Build package
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Collect package
+        run: |
+          mkdir -p dist && cp ../sg-session_*.deb dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sg-session-deb
+          path: dist/*.deb

@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# The full gate stands up a compositor and a Wine prefix. That belongs in CI
+# and on a developer box, not inside a package build, which may have neither a
+# seat nor a writable HOME. Package builds lint only.
+override_dh_auto_test:
+	$(MAKE) lint
+
+override_dh_auto_build:
+
+override_dh_installsystemd:
+	dh_installsystemd --name=sg-prefix-init

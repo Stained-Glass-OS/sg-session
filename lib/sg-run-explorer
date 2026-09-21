@@ -1,0 +1,38 @@
+#!/bin/sh
+# Runs inside the compositor as its single client. Starting explorer is the
+# whole job; when explorer exits, the compositor exits and the session ends.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+GEOM="${1:-${SG_DESKTOP_W}x${SG_DESKTOP_H}}"
+
+case "${SG_DISPLAY_PATH:-x11}" in
+    x11)     SG_DRIVER=x11 ;;
+    wayland) SG_DRIVER=wayland ;;
+    *)       SG_DRIVER=x11 ;;
+esac
+
+# Publish where the session lives, so a check running over ssh can attach to it
+# without having to guess. Without this the gate cannot find the display.
+mkdir -p "$SG_STATE"
+cat > "$SG_STATE/session.env" <<ENV
+DISPLAY=${DISPLAY:-}
+WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
+XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}
+WINEPREFIX=$WINEPREFIX
+SG_DISPLAY_PATH=${SG_DISPLAY_PATH:-x11}
+SG_DESKTOP_GEOMETRY=$GEOM
+ENV
+
+sg_log "explorer starting: driver=$SG_DRIVER desktop=shell,$GEOM display=${DISPLAY:-none}"
+
+# Write the driver choice into the prefix registry rather than relying on an
+# environment variable, so anything launched later in the session agrees.
+wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d "$SG_DRIVER" /f >/dev/null 2>&1 || true
+
+# The shell: a single virtual-desktop window named "shell" at the output size.
+exec wine explorer "/desktop=shell,$GEOM"

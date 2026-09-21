@@ -1,0 +1,6 @@
+/test/tmp/
+debian/sg-session/
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/debhelper-build-stamp

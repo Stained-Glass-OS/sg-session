@@ -1,0 +1,8 @@
+sg-session (0.1.0-1) unstable; urgency=medium
+
+  * Initial release: Phase 0 session glue.
+  * Bring up cage + XWayland + Wine explorer /desktop as the shell.
+  * Initialize a system-wide Wine prefix at /var/lib/stained-glass/prefix.
+  * Ship sg-session-check, the guest side of the image boot gate.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 21 Sep 2026 00:00:00 +0000

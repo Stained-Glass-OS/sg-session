@@ -1,0 +1,16 @@
+# greetd configuration for Phase 0.
+#
+# Autologin is a placeholder for sg-greeter. It exists so the boot gate can run
+# unattended; it is not a login story and must not ship to a real fleet.
+# MULTIUSER-DEBT: D2 — no authentication, one hardcoded user.
+
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/bin/sg-session-start"
+user = "sguser"
+
+[initial_session]
+command = "/usr/bin/sg-session-start"
+user = "sguser"

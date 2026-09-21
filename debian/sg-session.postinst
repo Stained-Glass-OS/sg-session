@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+SG_ROOT=/var/lib/stained-glass
+SG_USER=sguser
+
+case "$1" in
+    configure)
+        # The session user owns the system prefix. Phase 0 has exactly one.
+        # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
+        if ! getent passwd "$SG_USER" >/dev/null; then
+            adduser --system --group --home "$SG_ROOT" \
+                    --gecos "Stained Glass session user" \
+                    --disabled-password "$SG_USER"
+        fi
+        # seat/input access for the compositor, and a home for Wine.
+        for grp in video input render; do
+            getent group "$grp" >/dev/null && adduser "$SG_USER" "$grp" >/dev/null 2>&1 || true
+        done
+        mkdir -p "$SG_ROOT" /var/log/stained-glass
+        chown "$SG_USER:$SG_USER" "$SG_ROOT" /var/log/stained-glass
+        ;;
+esac
+
+#DEBHELPER#
+exit 0
