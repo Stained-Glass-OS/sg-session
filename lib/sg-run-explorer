@@ -16,6 +16,38 @@ case "${SG_DISPLAY_PATH:-x11}" in
     *)       SG_DRIVER=x11 ;;
 esac
 
+# Find the X display, waiting for it if necessary.
+#
+# cage starts XWayland asynchronously and will happily exec us before it is
+# ready, in which case DISPLAY is simply absent from our environment -- and,
+# since a process cannot gain environment variables after exec, it will never
+# appear there however long we wait on it. So discover the display from the
+# socket instead.
+#
+# This is a real race, not a theoretical one: it stayed hidden on fast machines
+# and showed up on a loaded CI runner as a session published with an empty
+# DISPLAY, which the gate then could not attach to.
+if [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && [ -z "${DISPLAY:-}" ]; then
+    sg_log "DISPLAY unset; waiting for an X server socket"
+    waited=0
+    while [ -z "${DISPLAY:-}" ] && [ "$waited" -lt "${SG_XWAYLAND_TIMEOUT:-60}" ]; do
+        for sock in /tmp/.X11-unix/X*; do
+            [ -S "$sock" ] || continue
+            DISPLAY=":${sock##*/X}"
+            export DISPLAY
+            break
+        done
+        [ -n "${DISPLAY:-}" ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ -n "${DISPLAY:-}" ]; then
+        sg_log "found X server at $DISPLAY after ${waited}s"
+    else
+        sg_die "no X server socket appeared within ${SG_XWAYLAND_TIMEOUT:-60}s"
+    fi
+fi
+
 # Publish where the session lives, so a check running over ssh can attach to it
 # without having to guess. Without this the gate cannot find the display.
 mkdir -p "$SG_STATE"

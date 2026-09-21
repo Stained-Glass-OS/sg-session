@@ -64,6 +64,16 @@ else
     fail "explorer.exe is not running as the shell desktop"
 fi
 
+# The session must have published a usable display. Treat an empty one as an
+# explicit failure: under `set -u` it would otherwise surface as a bare
+# "DISPLAY: parameter not set" from the shell, which says nothing about what
+# actually went wrong.
+if [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && [ -z "${DISPLAY:-}" ]; then
+    fail "the session published an empty DISPLAY -- XWayland had not started when the session was written"
+    echo; echo "RESULT: FAIL"
+    exit 1
+fi
+
 # --- 2. the desktop window exists -----------------------------------------
 # Only the X11 path can be checked this way. cage exposes no toplevel
 # enumeration protocol, so on the Wayland path there is nothing to query --
