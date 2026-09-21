@@ -10,26 +10,39 @@ jobs:
   gate:
     name: lint + session gate
     runs-on: ubuntu-latest
+    # Runs in Debian trixie, not on the Ubuntu runner directly, because that is
+    # what this package actually ships to -- sg-image builds a trixie image.
+    #
+    # It is not merely tidiness. Ubuntu's Wine and Debian's differ in ways that
+    # reach this gate: Ubuntu titles the virtual desktop window "Wine desktop"
+    # where Debian says "Wine Desktop", and on Ubuntu's build the desktop window
+    # never appeared on the X display at all. Testing the distribution we target
+    # keeps the gate measuring our code instead of that difference.
+    container:
+      image: debian:trixie
+      options: --user root
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            shellcheck cage xwayland x11-utils wine wine64 \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            make shellcheck cage xwayland x11-utils procps \
+            wine wine64 ca-certificates adduser \
             debhelper build-essential devscripts
 
       - name: Lint
         run: make lint
 
       - name: Session gate
-        # The gate needs a runtime dir for the Wayland socket; GitHub runners
-        # do not give the job one.
+        # Wine is unhappy run as root, and the gate is meant to look like a real
+        # session, so run it as an ordinary user with its own runtime dir.
         run: |
-          export XDG_RUNTIME_DIR="${RUNNER_TEMP}/xdg"
-          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
-          make test-session
+          adduser --disabled-password --gecos '' ci
+          chown -R ci:ci .
+          install -d -o ci -g ci -m 700 /tmp/xdg
+          runuser -u ci -- env XDG_RUNTIME_DIR=/tmp/xdg HOME=/home/ci make test-session
 
       - name: Upload logs on failure
         if: failure()
@@ -42,21 +55,23 @@ jobs:
   package:
     name: build .deb
     runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
+      options: --user root
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            debhelper build-essential devscripts shellcheck
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            make debhelper build-essential devscripts shellcheck ca-certificates
 
       - name: Build package
         run: dpkg-buildpackage -us -uc -b
 
       - name: Collect package
-        run: |
-          mkdir -p dist && cp ../sg-session_*.deb dist/
+        run: mkdir -p dist && cp ../sg-session_*.deb dist/
 
       - uses: actions/upload-artifact@v4
         with:
