@@ -71,4 +71,10 @@ This package is full of them, deliberately. Every one is tagged
 
 ## License
 
-LGPL-2.1+ (the brief's default for this repo — pending David's confirmation).
+**AGPL-3.0-or-later.** See [ADR 0004](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0004-licensing.md).
+
+One consequence worth knowing before you write code here: **AGPL-3.0 cannot be
+incorporated into Wine, which is LGPL-2.1+.** If you find yourself fixing
+something that really belongs in Wine, it does not belong in this repo — it
+belongs in `wine-sg` as an upstreamable patch. Writing it here quietly forecloses
+sending it upstream.
