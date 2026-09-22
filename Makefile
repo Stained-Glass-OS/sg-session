@@ -128,6 +128,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
 	@# The gate looks for its fixtures beside the bridge, because in the image
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
