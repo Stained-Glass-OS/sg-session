@@ -221,6 +221,37 @@ funnels both console-shadow and pre-authenticated RDP through the same bridge,
 so the credential always terminates at PAM. That is future work; the design is
 recorded.
 
+## The lock screen
+
+`sg-lockd` (a machine-session service) WATCHes sg-compositor's control socket.
+When the machine locks — Win+L, Ctrl+Alt+Del, `LockWorkStation()`, idle — it
+runs `lib/sg-lock-ui`, which starts **its own X server** on the compositor's
+privileged socket and the Windows-style greeter on it in lock mode
+(`sg-greeter.exe /lock <user>`). What the greeter collects goes to PAM
+(service `stained-glass-lock`) through a root monitor, as in `sg-rdp-authd`;
+only a PAM yes sends `UNLOCK`.
+
+- **Whose password** comes from `SO_PEERCRED` on the connection to the
+  compositor, which runs as the session user — the kernel's word.
+- **A lock UI that dies leaves the machine locked**: the compositor shows only
+  privileged clients, so the screen is blank, and `sg-lockd` restarts the UI
+  (with a 1s backoff, never a tight loop).
+- **The lock screen's X server is separate from the session's on purpose.**
+  While locked, the compositor routes input only to it, so the session's X
+  server receives nothing for a keylogger in it to see (ADR 0009).
+
+**`make test-lock`** runs it end to end, with keys injected over the privileged
+virtual keyboard the way remote access types: teeth first, then Win+L locks,
+the lock screen appears, a wrong password is refused, the right one unlocks and
+the UI goes away — and not one key typed at the lock screen reaches the user
+session. PAM is real, under `pam_wrapper`.
+
+**The greeter reads its pipe on a thread.** It used to poll with
+`PeekNamedPipe`, which fails with `ERROR_NOT_SUPPORTED` on a Unix pipe
+inherited through Wine — so the real greeter never read a byte from the bridge,
+at the login screen either. The login-screen gate missed it because it stood a
+shell script in for the greeter; `make test-lock` drives the real one.
+
 ## Remote login over RDP
 
 `sg-rdp-authd` is pattern B of ADR 0010: the technician types the username and

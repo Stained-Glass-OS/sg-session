@@ -40,6 +40,9 @@ static HBRUSH g_bg;
 static HWND g_title;
 static BOOL g_awaiting_secret = FALSE;
 static BOOL g_done = FALSE;
+/* Lock mode ("/lock <user>"): the session's user is fixed -- the lock service
+ * got it from the kernel -- so the screen only asks for the password. */
+static const char *g_lock_user;
 
 /* Windows 10's sign-in screen is a flat blue field; matching it is the whole
  * point of this program existing. */
@@ -93,6 +96,7 @@ static void submit( void )
     char buf[512];
 
     if (g_done) return;
+    if (!g_awaiting_secret && g_lock_user) return;   /* waiting for the prompt */
     if (!g_awaiting_secret)
     {
         GetWindowTextA( g_user, buf, sizeof(buf) );
@@ -113,61 +117,74 @@ static void submit( void )
     }
 }
 
-/* Drain whatever the bridge has said. Called from a timer so the UI thread
- * never blocks on a read: a greeter that stops repainting while PAM thinks is
- * indistinguishable from a hung machine. */
-static void pump_bridge( HWND hwnd )
+/* One line from the bridge, on the UI thread. */
+static void handle_bridge_line( HWND hwnd, char *line )
 {
-    char line[1024];
-    DWORD avail = 0;
-
-    while (PeekNamedPipe( g_in, NULL, 0, NULL, &avail, NULL ) && avail)
+    if (!strncmp( line, "PROMPT_SECRET ", 14 ) || !strncmp( line, "PROMPT_VISIBLE ", 15 ))
     {
-        if (!read_line( line, sizeof(line) )) return;
-
-        if (!strncmp( line, "PROMPT_SECRET ", 14 ))
+        const char *text = line + (line[7] == 'S' ? 14 : 15);
+        g_awaiting_secret = TRUE;
+        SetWindowTextA( g_prompt, text );
+        ShowWindow( g_secret, SW_SHOW );
+        EnableWindow( g_submit, TRUE );
+        SetFocus( g_secret );
+    }
+    else if (!strncmp( line, "SUCCESS", 7 ))
+    {
+        g_done = TRUE;
+        set_status( "Welcome", FALSE );
+        PostMessage( hwnd, WM_CLOSE, 0, 0 );
+    }
+    else if (!strncmp( line, "FAILURE ", 8 ))
+    {
+        /* At the lock screen the user is fixed and the service re-prompts;
+         * at the login screen, start over from the user name. */
+        g_awaiting_secret = FALSE;
+        SetWindowTextA( g_secret, "" );
+        if (!g_lock_user)
         {
-            g_awaiting_secret = TRUE;
-            SetWindowTextA( g_prompt, line + 14 );
-            ShowWindow( g_secret, SW_SHOW );
-            EnableWindow( g_submit, TRUE );
-            SetFocus( g_secret );
-            set_status( "", FALSE );
-        }
-        else if (!strncmp( line, "PROMPT_VISIBLE ", 15 ))
-        {
-            g_awaiting_secret = TRUE;
-            SetWindowTextA( g_prompt, line + 15 );
-            ShowWindow( g_secret, SW_SHOW );
-            EnableWindow( g_submit, TRUE );
-            SetFocus( g_secret );
-        }
-        else if (!strncmp( line, "SUCCESS", 7 ))
-        {
-            g_done = TRUE;
-            set_status( "Welcome", FALSE );
-            PostMessage( hwnd, WM_CLOSE, 0, 0 );
-        }
-        else if (!strncmp( line, "FAILURE ", 8 ))
-        {
-            g_awaiting_secret = FALSE;
             SetWindowTextA( g_prompt, "" );
             ShowWindow( g_secret, SW_HIDE );
-            SetWindowTextA( g_secret, "" );
-            EnableWindow( g_submit, TRUE );
-            set_status( line + 8, TRUE );
             SetFocus( g_user );
         }
-        else if (!strncmp( line, "ERROR ", 6 ))
-        {
-            EnableWindow( g_submit, TRUE );
-            set_status( line + 6, TRUE );
-        }
-        else if (!strncmp( line, "INFO ", 5 ))
-        {
-            set_status( line + 5, FALSE );
-        }
+        EnableWindow( g_submit, TRUE );
+        set_status( line + 8, TRUE );
     }
+    else if (!strncmp( line, "ERROR ", 6 ))
+    {
+        EnableWindow( g_submit, TRUE );
+        set_status( line + 6, TRUE );
+    }
+    else if (!strncmp( line, "INFO ", 5 ))
+    {
+        set_status( line + 5, FALSE );
+    }
+}
+
+#define WM_BRIDGE_LINE (WM_APP + 1)
+#define WM_BRIDGE_EOF  (WM_APP + 2)
+
+/* Reads the bridge on its own thread and posts each line to the window.
+ *
+ * Blocking reads, not polling: the first version polled with PeekNamedPipe
+ * from a timer, and PeekNamedPipe fails with ERROR_NOT_SUPPORTED on a Unix
+ * pipe inherited through Wine -- which is exactly what the bridge hands us --
+ * so it never read a byte. A gate that stood a shell script in for this
+ * program could not see that. A reader thread works with any handle, and the
+ * UI thread still never blocks on I/O. */
+static DWORD WINAPI reader_thread( void *arg )
+{
+    HWND hwnd = arg;
+    char line[1024];
+
+    while (read_line( line, sizeof(line) ))
+    {
+        char *copy = _strdup( line );
+        SecureZeroMemory( line, sizeof(line) );
+        if (copy) PostMessageA( hwnd, WM_BRIDGE_LINE, 0, (LPARAM)copy );
+    }
+    PostMessageA( hwnd, WM_BRIDGE_EOF, 0, 0 );
+    return 0;
 }
 
 static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
@@ -188,8 +205,17 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_COMMAND:
         if (LOWORD(wp) == ID_SUBMIT) submit();
         return 0;
-    case WM_TIMER:
-        pump_bridge( hwnd );
+    case WM_BRIDGE_LINE:
+    {
+        char *line = (char *)lp;
+        handle_bridge_line( hwnd, line );
+        SecureZeroMemory( line, strlen( line ) );
+        free( line );
+        return 0;
+    }
+    case WM_BRIDGE_EOF:
+        /* The bridge is gone; there is no one to authenticate with. */
+        PostMessage( hwnd, WM_CLOSE, 0, 0 );
         return 0;
     case WM_DESTROY:
         PostQuitMessage( 0 );
@@ -212,7 +238,8 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     MSG msg;
     int sw, sh, cx, cy;
 
-    (void)prev; (void)cmdline; (void)show;
+    (void)prev; (void)show;
+    if (cmdline && !strncmp( cmdline, "/lock ", 6 ) && cmdline[6]) g_lock_user = cmdline + 6;
     g_in  = GetStdHandle( STD_INPUT_HANDLE );
     g_out = GetStdHandle( STD_OUTPUT_HANDLE );
 
@@ -239,7 +266,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     cx = sw / 2;
     cy = sh / 2 - 60;
 
-    g_title = CreateWindowExA( 0, "STATIC", "Stained Glass OS",
+    g_title = CreateWindowExA( 0, "STATIC", g_lock_user ? "Locked" : "Stained Glass OS",
                      WS_CHILD | WS_VISIBLE | SS_CENTER,
                      cx - 300, cy - 130, 600, 52, hwnd, NULL, inst, NULL );
 
@@ -275,8 +302,13 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
         }
     }
 
+    if (g_lock_user)
+    {
+        SetWindowTextA( g_user, g_lock_user );
+        EnableWindow( g_user, FALSE );
+    }
     SetFocus( g_user );
-    SetTimer( hwnd, 1, 50, NULL );
+    CloseHandle( CreateThread( NULL, 0, reader_thread, hwnd, 0, NULL ) );
     send_line( "HELLO" );
 
     while (GetMessageA( &msg, NULL, 0, 0 ))

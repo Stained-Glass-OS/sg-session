@@ -1,0 +1,31 @@
+#!/bin/sh
+# Start the lock screen: its own X server on the compositor's privileged
+# socket, and the Windows-style greeter on it, in lock mode for user $1.
+#
+# Started by sg-lockd, whose pipes are this script's stdin and stdout; the
+# greeter inherits them and speaks the lock protocol on them. Nothing else may
+# hold them open, so Xwayland gets /dev/null.
+#
+# The X server is separate from the user session's on purpose: while locked the
+# compositor routes input only to privileged clients, so the user session's X
+# server receives no key events at all -- there is nothing for a keylogger in
+# it to see, frozen or not (ADR 0009).
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+unset WAYLAND_DISPLAY SG_WINSTATION
+
+user="${1:?user}"
+N="${SG_LOCK_DISPLAY_NUM:-99}"
+while [ -e "/tmp/.X${N}-lock" ] || [ -e "/tmp/.X11-unix/X${N}" ]; do N=$((N + 1)); done
+
+WAYLAND_DISPLAY="${SG_LOCK_PRIV:?SG_LOCK_PRIV}" Xwayland ":$N" -noreset \
+    </dev/null >/dev/null 2>&1 &
+_w=0
+while [ ! -e "/tmp/.X11-unix/X$N" ] && [ "$_w" -lt 100 ]; do sleep 0.1; _w=$((_w + 1)); done
+
+DISPLAY=":$N"
+export DISPLAY
+exec wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-greeter64.exe" /lock "$user" 2>>"${SG_LOG_DIR:-/tmp}/lock-ui.log"

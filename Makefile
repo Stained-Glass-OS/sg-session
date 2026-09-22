@@ -18,7 +18,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-run-explorer
+LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
 
@@ -127,6 +127,7 @@ greeter:
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
 	@# The gate looks for its fixtures beside the bridge, because in the image
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
@@ -175,3 +176,9 @@ rdp:
 test-rdp: rdp
 	@SG_LIBEXEC=$(CURDIR)/build $(CURDIR)/bin/sg-rdp-check; \
 	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The lock screen end to end: sg-compositor (beside this repo) + sg-lockd + the
+# Wine greeter in lock mode. Needs the session prefix from `make test`.
+.PHONY: test-lock
+test-lock: greeter rdp
+	@sh test/lock-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
