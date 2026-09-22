@@ -182,3 +182,8 @@ test-rdp: rdp
 .PHONY: test-lock
 test-lock: greeter rdp
 	@sh test/lock-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The login screen end to end, with the real Wine greeter against a greetd stub.
+.PHONY: test-login
+test-login: greeter
+	@sh test/login-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
