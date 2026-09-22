@@ -71,13 +71,26 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- fixtures -------------------------------------------------------------
+# $WORK is wiped, so refuse to proceed if the prefix lives inside it. Getting
+# this wrong deletes the system prefix, which is a bad way to learn that the
+# gate takes a path from the environment.
+case "$SG_PREFIX/" in
+    "$WORK"/*)
+        echo "FAIL: SG_MU_WORK ($WORK) contains the prefix ($SG_PREFIX);" >&2
+        echo "      this directory gets wiped. Point SG_MU_WORK elsewhere." >&2
+        exit 2 ;;
+esac
 rm -rf "$WORK"; mkdir -p "$WORK"; chmod 755 "$WORK"
 for u in "$U1" "$U2"; do
     getent passwd "$u" >/dev/null 2>&1 || \
         adduser --system --group --no-create-home --home "$WORK/$u" \
                 --gecos "Stained Glass S2 test user" --disabled-password "$u" >/dev/null 2>&1
     mkdir -p "$WORK/$u" "$WORK/$u/run"
-    chown -R "$u:$u" "$WORK/$u"
+    # Not "$u:$u": an account may have no like-named group, and assuming one
+    # makes the chown fail silently and the test users unable to reach their
+    # own home. Ask for the account's actual primary group.
+    _gid=$(id -gn "$u" 2>/dev/null) || _gid=""
+    chown -R "$u${_gid:+:$_gid}" "$WORK/$u"
     chmod 700 "$WORK/$u/run"
 done
 info "test users: $U1 (uid $(id -u "$U1")), $U2 (uid $(id -u "$U2"))"
