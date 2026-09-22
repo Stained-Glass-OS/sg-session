@@ -1,0 +1,36 @@
+[Unit]
+Description=Stained Glass machine-level wineserver (the Windows system)
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# This is the machine's Windows side. It must exist before any login session,
+# and outlive every logout -- a wineserver started by a session cannot host a
+# service that runs from boot. See debt item D5.
+After=sg-prefix-init.service systemd-tmpfiles-setup.service
+Requires=sg-prefix-init.service
+Before=greetd.service
+ConditionPathExists=/var/lib/stained-glass/prefix/.sg-initialized
+
+[Service]
+Type=exec
+# Runs as root, which wine-sg maps to the SYSTEM SID -- the account Windows
+# services run as.
+#
+# SECURITY: this is a root process serving a socket that every desktop user can
+# reach, so a wineserver flaw becomes a root flaw. It is the model Windows uses
+# (SYSTEM is privileged and the SCM serves everyone), and the socket is guarded
+# by wine-sg's SO_PEERCRED check rather than left open. The safer alternative --
+# a dedicated unprivileged account mapped to the SYSTEM SID -- would keep the NT
+# semantics without the real privilege, and is worth doing before this ships to
+# anything that matters.
+User=root
+Environment=HOME=/var/lib/stained-glass
+Environment=XDG_RUNTIME_DIR=/run/stained-glass
+RuntimeDirectory=stained-glass
+ExecStart=/usr/bin/sg-wineserver
+# The SCM is started once the server is up, not by the server itself: services
+# belong to the Windows system, not to the process that happens to host it.
+ExecStartPost=/usr/bin/sg-services-start
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

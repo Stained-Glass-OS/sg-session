@@ -1,0 +1,41 @@
+#!/bin/sh
+# The machine-level wineserver: the Windows side of this machine, running
+# before anyone logs in and outliving every logout.
+#
+# This is what a session-scoped wineserver cannot be. Windows services run as
+# SYSTEM from boot, survive logout, and are visible to every logged-in user
+# through one SCM. A server started by a login session and dying with it cannot
+# express any of that -- debt item D5, and the hardest clause of the S2 gate.
+#
+# Runs as root, which wine-sg maps to the SYSTEM SID. See the security note in
+# systemd/sg-wineserver.service before changing that.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+# The prefix must exist before there is anything to serve.
+if [ ! -e "$SG_PREFIX/.sg-initialized" ]; then
+    sg_die "no initialized prefix at $SG_PREFIX; sg-prefix-init must run first"
+fi
+
+# HOME matters: Wine reads it for per-user paths, and root's must not be a
+# session user's.
+HOME="${HOME:-$SG_ROOT}"
+export HOME
+
+# A runtime dir for the server itself. There is no logind session here.
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/stained-glass}"
+export XDG_RUNTIME_DIR
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+
+sg_log "starting the machine-level wineserver (prefix: $SG_PREFIX)"
+
+# -p with no argument means persistent forever: the server must not exit when
+# the last client goes away, or logging out would take the machine's services
+# with it -- which is the whole problem this exists to fix.
+# -f keeps it in the foreground so systemd can supervise it.
+exec wineserver -p -f

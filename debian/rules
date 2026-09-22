@@ -13,3 +13,4 @@ override_dh_auto_build:
 
 override_dh_installsystemd:
 	dh_installsystemd --name=sg-prefix-init
+	dh_installsystemd --name=sg-wineserver

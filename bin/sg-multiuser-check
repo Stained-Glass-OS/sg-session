@@ -85,7 +85,7 @@ for u in "$U1" "$U2"; do
     getent passwd "$u" >/dev/null 2>&1 || \
         adduser --system --group --no-create-home --home "$WORK/$u" \
                 --gecos "Stained Glass S2 test user" --disabled-password "$u" >/dev/null 2>&1
-    mkdir -p "$WORK/$u" "$WORK/$u/run"
+    mkdir -p "$WORK/$u" "$WORK/$u/run" "$WORK/admin"
     # Not "$u:$u": an account may have no like-named group, and assuming one
     # makes the chown fail silently and the test users unable to reach their
     # own home. Ask for the account's actual primary group.
@@ -94,6 +94,19 @@ for u in "$U1" "$U2"; do
     chmod 700 "$WORK/$u/run"
 done
 info "test users: $U1 (uid $(id -u "$U1")), $U2 (uid $(id -u "$U2"))"
+
+# Run a command as the administrator of the prefix. We are root, which wine-sg
+# maps to the SYSTEM SID -- the account that owns machine state on Windows.
+sg_admin_wine() {
+    env HOME="$WORK/admin" \
+        XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/stained-glass}" \
+        WINEPREFIX="$SG_PREFIX" \
+        WINEARCH=win64 \
+        WINEDEBUG=-all \
+        WINEDLLOVERRIDES='mscoree,mshtml=' \
+        PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" \
+        "$@" 2>&1
+}
 
 # Run a command as a test user, against the *system* prefix. Output and exit
 # status are captured; nothing here assumes it will succeed.
@@ -177,13 +190,26 @@ MARK="SG_HKLM_$$"
 if [ "$BOTH_IN" != yes ]; then
     block "cannot test: clause 1 must pass first"
 else
-    as_user "$U1" wine reg add 'HKLM\Software\StainedGlass\S2' /v Mark /t REG_SZ /d "$MARK" /f >/dev/null 2>&1
+    # The write is done by an administrator, because HKLM is machine state:
+    # an ordinary user should *not* be able to write it, and having a test user
+    # do so would be testing the wrong thing. We are root here, which wine-sg
+    # maps to SYSTEM.
+    # Report the administrator's write rather than hiding it: if that fails,
+    # the clause fails for a reason that has nothing to do with the users, and
+    # silently swallowing it sends the next person looking in the wrong place.
+    AW=$(sg_admin_wine wine reg add 'HKLM\Software\StainedGlass\S2' /v Mark /t REG_SZ /d "$MARK" /f)
+    if ! echo "$AW" | grep -qi 'completed successfully'; then
+        info "the administrator's own HKLM write did not succeed:"
+        info "  $(echo "$AW" | head -2 | tr '\n' ' ')"
+    fi
+    R1=$(as_user "$U1" wine reg query 'HKLM\Software\StainedGlass\S2' /v Mark 2>&1)
     R2=$(as_user "$U2" wine reg query 'HKLM\Software\StainedGlass\S2' /v Mark 2>&1)
-    if echo "$R2" | grep -q "$MARK"; then
-        pass "a value written to HKLM by $U1 is visible to $U2"
+    if echo "$R1" | grep -q "$MARK" && echo "$R2" | grep -q "$MARK"; then
+        pass "a value written to HKLM by an administrator is visible to both users"
     else
-        fail "$U2 cannot see the HKLM value written by $U1"
-        info "got: $(echo "$R2" | head -2 | tr '\n' ' ')"
+        fail "the HKLM value is not visible to both users"
+        info "$U1: $(echo "$R1" | head -2 | tr '\n' ' ')"
+        info "$U2: $(echo "$R2" | head -2 | tr '\n' ' ')"
     fi
 fi
 
@@ -235,25 +261,47 @@ fi
 head2 "clause 5: a service started at boot as SYSTEM is visible to both via SCM"
 
 # The prerequisite is a wineserver that exists before anyone logs in and
-# outlives every logout. Check for one that is not owned by a session user.
-BOOT_WS=$(pgrep -a wineserver 2>/dev/null | grep -v "$U1\|$U2" | head -3)
+# outlives every logout. sg-wineserver.service runs one as root, which wine-sg
+# maps to the SYSTEM SID.
 SYSTEM_WS=no
 if pgrep -u 0 -x wineserver >/dev/null 2>&1; then SYSTEM_WS=yes; fi
 
-if [ "$SYSTEM_WS" = yes ]; then
-    S1=$(as_user "$U1" wine sc query 2>&1)
-    S2Q=$(as_user "$U2" wine sc query 2>&1)
-    if echo "$S1" | grep -q 'SERVICE_NAME' && echo "$S2Q" | grep -q 'SERVICE_NAME'; then
-        pass "both users see services via the SCM"
-    else
-        fail "the SCM is not reporting services to both users"
-    fi
-else
+if [ "$SYSTEM_WS" != yes ]; then
     fail "no machine-level wineserver: none running as root/SYSTEM"
-    [ -n "$BOOT_WS" ] && info "wineservers seen: $(echo "$BOOT_WS" | head -1)"
-    info "the wineserver is started by the login session and dies with it, so"
-    info "there is nothing to host a SYSTEM service before a user logs in."
-    info "This is debt item D5 and the hardest clause of the gate."
+    info "wineservers seen: $(pgrep -a wineserver 2>/dev/null | head -1)"
+    info "the wineserver must be started by sg-wineserver.service, before any"
+    info "login, or there is nothing to host a service that runs from boot."
+    info "This is debt item D5."
+else
+    info "a machine-level wineserver is running as root (SYSTEM)"
+
+    # Wine's sc.exe has no bare "query" that enumerates everything -- it wants a
+    # service name -- so ask about a service the system itself starts. Trying
+    # several avoids resting the clause on one name staying present forever.
+    SVC=""
+    for candidate in PlugPlay Winmgmt Eventlog Spooler; do
+        if as_user "$U1" wine sc query "$candidate" 2>&1 | grep -q 'SERVICE_NAME'; then
+            SVC="$candidate"
+            break
+        fi
+    done
+
+    if [ -z "$SVC" ]; then
+        fail "no system service answered the SCM for $U1"
+        info "tried: PlugPlay Winmgmt Eventlog Spooler"
+        info "services.exe may not be running in the machine-level server;"
+        info "sg-services-start is what puts it there."
+    else
+        S1=$(as_user "$U1" wine sc query "$SVC" 2>&1)
+        S2Q=$(as_user "$U2" wine sc query "$SVC" 2>&1)
+        if echo "$S1" | grep -q 'SERVICE_NAME' && echo "$S2Q" | grep -q 'SERVICE_NAME'; then
+            pass "both users see '$SVC' via the SCM: $(echo "$S1" | grep -i 'STATE' | sed 's/^ *//')"
+        else
+            fail "the SCM did not report '$SVC' to both users"
+            info "$U1: $(echo "$S1" | head -1)"
+            info "$U2: $(echo "$S2Q" | head -1)"
+        fi
+    fi
 fi
 
 # --- summary --------------------------------------------------------------

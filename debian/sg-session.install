@@ -2,9 +2,12 @@ bin/sg-prefix-init        usr/bin
 bin/sg-session-start      usr/bin
 bin/sg-session-check      usr/bin
 bin/sg-multiuser-check    usr/bin
+bin/sg-wineserver         usr/bin
+bin/sg-services-start     usr/bin
 lib/sg-common.sh          usr/lib/stained-glass
 lib/sg-run-explorer       usr/lib/stained-glass
 config/sg-session.env     usr/share/stained-glass
 config/greetd-config.toml usr/share/stained-glass
 systemd/sg-prefix-init.service usr/lib/systemd/system
+systemd/sg-wineserver.service  usr/lib/systemd/system
 tmpfiles/sg-session.conf  usr/lib/tmpfiles.d

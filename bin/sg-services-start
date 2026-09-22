@@ -1,0 +1,38 @@
+#!/bin/sh
+# Start the Windows service control manager in the machine-level wineserver.
+#
+# Runs after sg-wineserver, as root, so services.exe and everything it starts
+# carry the SYSTEM SID. Clients reach it over RPC inside the server's object
+# namespace, which is shared by every process attached to that server -- so one
+# SCM serves every logged-in user, as on Windows.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+HOME="${HOME:-$SG_ROOT}"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/stained-glass}"
+export HOME XDG_RUNTIME_DIR
+
+sg_log "starting services.exe as SYSTEM"
+
+# Launched detached: services.exe is a long-running Windows process, and this
+# script's job is only to get it going inside the already-running server.
+wine services.exe &
+
+# Wait for the SCM to answer rather than assuming it is up. A session that
+# starts before the SCM is ready sees no services and looks broken.
+waited=0
+while [ "$waited" -lt "${SG_SERVICES_TIMEOUT:-60}" ]; do
+    if wine sc query >/dev/null 2>&1; then
+        sg_log "SCM is answering after ${waited}s"
+        exit 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+done
+
+sg_log "WARNING: the SCM did not answer within ${SG_SERVICES_TIMEOUT:-60}s"
+exit 0

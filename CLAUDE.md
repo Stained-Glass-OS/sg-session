@@ -38,12 +38,31 @@ separately.
 | `lib/sg-common.sh` | shared paths and the Wine environment, in one place |
 | `lib/sg-run-explorer` | runs inside the compositor; starts explorer |
 | `config/greetd-config.toml` | autologin placeholder for `sg-greeter` |
+| `bin/sg-wineserver` | **the machine-level wineserver**: the Windows system itself |
+| `bin/sg-services-start` | starts the SCM inside it, as SYSTEM |
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
+| `systemd/sg-wineserver.service` | runs the machine-level server before greetd |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
 environment variables — `SG_LIB`, `SG_BIN`, `SG_ROOT`, `SG_PREFIX`, `SG_STATE`,
 `SG_LOG_DIR`. That overridability exists so the gate can run against a staged
 tree; keep it working.
+
+## The machine-level wineserver
+
+`sg-wineserver.service` runs a persistent wineserver as root, before `greetd`,
+and `sg-services-start` starts `services.exe` inside it. That is what makes a
+Windows service exist from boot, survive every logout, and be visible to every
+logged-in user through one SCM — none of which a session-scoped server can do.
+It is debt item `D5`, and the hardest clause of the S2 gate.
+
+**It runs as root, and that is a real security decision.** `wine-sg` maps root
+to the SYSTEM SID, which is the Windows model — but it also means a root
+process serving a socket every desktop user can reach, so a wineserver flaw
+becomes a root flaw. The socket is guarded by `wine-sg`'s `SO_PEERCRED` check
+rather than left open. **A dedicated unprivileged account mapped to the SYSTEM
+SID would keep the NT semantics without the real privilege, and is worth doing
+before this ships to anything that matters.**
 
 ## The shared system prefix
 
@@ -88,9 +107,10 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
 five clauses of the S2 gate verbatim from the brief. `sg-image`'s
 `make multiuser-test` drives the same check against a booted image.
 
-**It is expected to fail — 3 of 5 today — and that is its job.** Clauses 1, 2
-and 4 pass (two users on one prefix, shared HKLM, isolated HKCU each) on a Wine
-with `wine-sg`'s `patches/sg` applied. Do not "fix" it
+**It is expected to fail — 4 of 5 today — and that is its job.** Clauses 1, 2,
+4 and 5 pass on a Wine with `wine-sg`'s `patches/sg` applied, with
+`sg-wineserver.service` running. Only clause 3 is open, and it is blocked on a
+design decision rather than on code — see issue #8. Do not "fix" it
 by weakening a clause. It is deliberately excluded from `make test` and from CI,
 because a known-red gate sitting in CI would mask real regressions.
 

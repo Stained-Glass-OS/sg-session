@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 
 BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
-               bin/sg-multiuser-check
+               bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start
 LIBS         = lib/sg-common.sh lib/sg-run-explorer
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -27,7 +27,7 @@ install:
 	install -m 0755 $(BINS) $(BINDIR)
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
-	install -m 0644 systemd/sg-prefix-init.service $(UNITDIR)
+	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service $(UNITDIR)
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
