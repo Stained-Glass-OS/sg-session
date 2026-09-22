@@ -6,3 +6,6 @@ debian/*.substvars
 debian/*.debhelper
 debian/*.debhelper.log
 debian/debhelper-build-stamp
+
+# Cross-compiled probe binaries, rebuilt by `make d3d-probe`.
+/build/
