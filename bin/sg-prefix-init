@@ -21,6 +21,14 @@ fi
 sg_log "initializing system prefix at $SG_PREFIX (arch=$WINEARCH)"
 mkdir -p "$SG_PREFIX" "$SG_STATE" "$SG_LOG_DIR"
 
+# The group must be able to write the prefix, or no second user can use it --
+# wine-sg requires R_OK|W_OK|X_OK on it. mkdir applies the umask, which under
+# systemd leaves it group-read-only, so set the mode explicitly rather than
+# leaving it to a later conditional.
+if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
+    chmod 2770 "$SG_PREFIX" "$SG_STATE" 2>/dev/null || true
+fi
+
 # Mark the prefix as shared between Unix users before wineboot runs, so the
 # server comes up in that mode from the start rather than being converted
 # afterwards. On a Wine without wine-sg's patches the marker is inert.

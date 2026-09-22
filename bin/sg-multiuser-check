@@ -86,6 +86,18 @@ for u in "$U1" "$U2"; do
         adduser --system --group --no-create-home --home "$WORK/$u" \
                 --gecos "Stained Glass S2 test user" --disabled-password "$u" >/dev/null 2>&1
     mkdir -p "$WORK/$u" "$WORK/$u/run" "$WORK/admin"
+    # Admitting a user to the machine's Windows side *is* adding them to
+    # SG_WINE_GROUP: wine-sg decides who may connect to the shared wineserver
+    # by membership of the group owning its directory. A test user outside that
+    # group is not a user of this machine, and clause 1 would fail for a reason
+    # that says nothing about the code.
+    if getent group "$SG_WINE_GROUP" >/dev/null 2>&1; then
+        adduser "$u" "$SG_WINE_GROUP" >/dev/null 2>&1 || \
+            usermod -aG "$SG_WINE_GROUP" "$u" >/dev/null 2>&1 || true
+    else
+        info "NOTE: group '$SG_WINE_GROUP' does not exist; users cannot be admitted"
+    fi
+
     # Not "$u:$u": an account may have no like-named group, and assuming one
     # makes the chown fail silently and the test users unable to reach their
     # own home. Ask for the account's actual primary group.
@@ -94,6 +106,7 @@ for u in "$U1" "$U2"; do
     chmod 700 "$WORK/$u/run"
 done
 info "test users: $U1 (uid $(id -u "$U1")), $U2 (uid $(id -u "$U2"))"
+info "group '$SG_WINE_GROUP': $(getent group "$SG_WINE_GROUP" 2>/dev/null | cut -d: -f4)"
 
 # Run a command as the administrator of the prefix. We are root, which wine-sg
 # maps to the SYSTEM SID -- the account that owns machine state on Windows.
