@@ -1,0 +1,100 @@
+#!/bin/sh
+# The remote-login gate (ADR 0010, pattern B).
+#
+# Runs sg-rdp-authd, connects real FreeRDP clients over TLS, and checks the
+# daemon's verdicts. PAM runs for real, under pam_wrapper with a pam_matrix
+# password file, so no real account or credential is involved -- and no root.
+#
+# The cases are the ones that matter for a credential path: the right password
+# gets in; a wrong one, an unknown user, a missing password and a domain account
+# do not; and nothing that failed ever reaches the session stage. That last one
+# is not hypothetical: FreeRDP 3 continues a connection whatever its Logon hook
+# returns, and the first build of this daemon let a refused logon through.
+set -u
+
+LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+AUTHD="$LIBEXEC/sg-rdp-authd"
+PAMCHECK="$LIBEXEC/sg-rdp-pamcheck"
+PW=/usr/lib/x86_64-linux-gnu/libpam_wrapper.so
+PMDIR=/usr/lib/x86_64-linux-gnu/pam_wrapper
+PORT="${SG_RDP_TEST_PORT:-33899}"
+RC=0
+WORK=$(mktemp -d)
+DPY_N=97
+DPID=""; XPID=""
+
+# shellcheck disable=SC2317  # invoked via trap
+cleanup() {
+    [ -n "$DPID" ] && kill "$DPID" 2>/dev/null
+    [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
+    rm -f "/tmp/.X${DPY_N}-lock"
+    rm -rf "$WORK"
+}
+trap cleanup EXIT INT TERM
+
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*"; RC=1; }
+
+for t in xfreerdp3 Xvfb openssl; do command -v "$t" >/dev/null 2>&1 || { echo "SKIP: $t not installed"; exit 77; }; done
+[ -x "$AUTHD" ] && [ -x "$PAMCHECK" ] || { echo "SKIP: sg-rdp-authd not built"; exit 77; }
+[ -f "$PW" ] && [ -f "$PMDIR/pam_matrix.so" ] || { echo "SKIP: libpam-wrapper not installed"; exit 77; }
+
+mkdir -p "$WORK/pam.d"
+for svc in stained-glass-remote other; do
+    printf 'auth required %s passdb=%s\naccount required %s passdb=%s\n' \
+        "$PMDIR/pam_matrix.so" "$WORK/passdb" "$PMDIR/pam_matrix.so" "$WORK/passdb" > "$WORK/pam.d/$svc"
+done
+printf 'alice:correct-horse:stained-glass-remote\nbob:bobpass:not-remote\n' > "$WORK/passdb"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/key.pem" -out "$WORK/cert.pem" \
+    -days 1 -subj /CN=sg-rdp-gate >/dev/null 2>&1
+
+PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$WORK/pam.d" LD_PRELOAD="$PW" \
+SG_RDP_PAMCHECK="$PAMCHECK" SG_RDP_CERT="$WORK/cert.pem" SG_RDP_KEY="$WORK/key.pem" \
+SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$WORK/authd.log" \
+    "$AUTHD" "$PORT" >/dev/null 2>&1 &
+DPID=$!
+
+rm -f "/tmp/.X${DPY_N}-lock"
+Xvfb ":$DPY_N" -screen 0 1024x768x24 >/dev/null 2>&1 & XPID=$!
+_w=0
+while ! grep -q LISTENING "$WORK/authd.log" 2>/dev/null && [ "$_w" -lt 50 ]; do sleep 0.2; _w=$((_w + 1)); done
+grep -q LISTENING "$WORK/authd.log" || { fail "daemon did not start: $(cat "$WORK/authd.log" 2>/dev/null)"; exit 1; }
+sleep 1
+
+# Each case: client args, then the verdict line the daemon must log for it.
+attempt() {
+    _before=$(wc -l < "$WORK/authd.log")
+    DISPLAY=":$DPY_N" timeout 25 xfreerdp3 "/v:127.0.0.1:$PORT" "$@" \
+        /sec:tls /cert:ignore /log-level:OFF </dev/null >/dev/null 2>&1
+    sleep 0.5
+    tail -n +"$((_before + 1))" "$WORK/authd.log"
+}
+
+out=$(attempt /u:alice /p:correct-horse)
+case "$out" in *"LOGON OK user=alice"*) pass "the right password authenticates" ;;
+    *) fail "right password: $out" ;; esac
+
+out=$(attempt /u:alice /p:wrong)
+case "$out" in *"LOGON FAIL user=alice"*) pass "a wrong password is refused" ;;
+    *) fail "wrong password: $out" ;; esac
+case "$out" in *SESSION*) fail "a refused logon reached the session stage" ;;
+    *) pass "a refused logon never reaches the session stage" ;; esac
+
+out=$(attempt /u:mallory /p:x)
+case "$out" in *"LOGON FAIL user=mallory"*) pass "an unknown user is refused, like a wrong password" ;;
+    *) fail "unknown user: $out" ;; esac
+
+out=$(attempt /u:bob /p:bobpass)
+case "$out" in *"LOGON FAIL user=bob"*) pass "a correct password for a disallowed account is refused" ;;
+    *) fail "disallowed account: $out" ;; esac
+
+out=$(attempt /u:alice /d:CORP /p:correct-horse)
+case "$out" in *"REFUSED domain account"*) pass "a domain account is never matched to a local one" ;;
+    *) fail "domain account: $out" ;; esac
+
+case "$(cat "$WORK/authd.log")" in *correct-horse*|*bobpass*) fail "a password appeared in the log" ;;
+    *) pass "no password appears in the log" ;; esac
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

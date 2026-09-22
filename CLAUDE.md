@@ -221,6 +221,47 @@ funnels both console-shadow and pre-authenticated RDP through the same bridge,
 so the credential always terminates at PAM. That is future work; the design is
 recorded.
 
+## Remote login over RDP
+
+`sg-rdp-authd` is pattern B of ADR 0010: the technician types the username and
+password into the RDP client before connecting and lands in an unlocked desktop,
+as with `mstsc`. It authenticates; streaming the session needs `sg-compositor`,
+so it is **built and gated but not installed** — a login service that leads
+nowhere should not run on machines. `make test-rdp` is the gate.
+
+**Privilege separation, as in sshd.** At startup, as root, it forks a *monitor*
+that keeps root and does exactly one thing: run `sg-rdp-pamcheck` for a
+credential handed to it over a socketpair. The RDP side then drops to an
+unprivileged account (all four UIDs, no supplementary groups — verified) before
+the listener opens. The TLS key is read into memory before the drop and
+`mlock`ed, so the key file can be root-only (0600). A failed guess costs 2s,
+enforced in the monitor, where reconnecting cannot skip it.
+
+**TLS plus PAM, not NLA, for local accounts.** Server-side NLA has to verify the
+client's NTLM exchange, which needs every user's NT hash — the MD4 hashes
+Windows keeps in the SAM and pass-the-hash attacks go after. We store none;
+PAM checks the password against the normal store. Domain accounts get NLA via
+Kerberos in Phase 2, which needs only the machine keytab. Until then a
+`DOMAIN\user` login is refused, so it can never fall through to a local
+account of the same name.
+
+Things that will bite you:
+
+- **FreeRDP 3's `Logon` hook is not an authentication point under TLS.** It
+  runs during negotiation, *before* the client has sent a credential (empty
+  identity, `automatic=FALSE`), and the connection continues whatever it
+  returns (`libfreerdp/core/peer.c`, `CONNECTION_STATE_NEGO`). The first build
+  here let a refused logon through to the session stage. Authentication is in
+  `PostConnect`, from the Client Info packet, and every connection starts
+  unauthenticated — default deny.
+- **The client sends the password only with `INFO_AUTOLOGON`**, which the
+  FreeRDP client sets whenever it has a username and password on a TLS
+  connection. A client with no credential is refused; showing it the on-screen
+  login instead, as Windows RDP does, is the compositor's half.
+- **The gate runs PAM for real** under `pam_wrapper`/`pam_matrix`, so it needs
+  `libpam-wrapper`. It has been seen to fail: a build that ignores the PAM
+  verdict fails with "a refused logon reached the session stage".
+
 ## The login screen
 
 `sg-greeter` is a **Windows program**, deliberately. Remote-support tools —

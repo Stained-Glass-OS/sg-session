@@ -1,0 +1,9 @@
+# PAM policy for remote login over RDP (sg-rdp-authd, ADR 0010).
+#
+# Deliberately the same stacks as a console login: a remote login must face the
+# same password rules, lockout (pam_faillock, if configured) and account expiry
+# as someone at the keyboard. Anything weaker here would make RDP the easy way
+# in. Not installed yet -- the daemon ships once sg-compositor can give it a
+# session to start.
+@include common-auth
+@include common-account

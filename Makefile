@@ -157,3 +157,21 @@ test-security: security
 	@SG_LIB=$(CURDIR)/lib SG_LIBEXEC=$(CURDIR)/build \
 	 SG_PREFIX=$(CURDIR)/test/tmp/state/prefix $(CURDIR)/bin/sg-lock-security-check; \
 	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# --- remote login over RDP (ADR 0010, pattern B) ---------------------------
+#
+# Built when FreeRDP's server library is present, and not installed yet: the
+# daemon authenticates but cannot stream a session until sg-compositor exists,
+# and a login service that leads nowhere should not be running on machines.
+.PHONY: rdp test-rdp
+rdp:
+	@pkg-config --exists freerdp-server3 winpr3 || { echo "SKIP: freerdp3-dev not installed"; exit 0; }
+	@mkdir -p build
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-authd greeter/sg-rdp-authd.c \
+	    $$(pkg-config --cflags --libs freerdp-server3 freerdp3 winpr3)
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
+	@echo "built the RDP login daemon and its PAM helper"
+
+test-rdp: rdp
+	@SG_LIBEXEC=$(CURDIR)/build $(CURDIR)/bin/sg-rdp-check; \
+	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
