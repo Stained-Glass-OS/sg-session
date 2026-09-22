@@ -16,5 +16,9 @@ LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 # Wine prefers its Wayland driver whenever WAYLAND_DISPLAY is set, and the
 # compositor always sets it; the greeter is drawn through XWayland like the
 # desktop is (ADR 0003), so the greeter command drops it.
-exec "$SG_COMPOSITOR" -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
+#
+# Through systemd-cat so the compositor's and bridge's output -- including the
+# compositor's audit lines -- reaches the journal (tag sg-login); greetd does
+# not forward a greeter's output anywhere.
+exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
     "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-greeter64.exe"

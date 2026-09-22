@@ -298,6 +298,10 @@ int main( int argc, char **argv )
     {
         if (!strncmp( line, "HELLO", 5 ))
         {
+            /* The greeter says HELLO once its window exists: the moment it can
+             * take input. Logged so anything waiting to sign in -- the boot
+             * gate, an RMM tool -- has a real readiness signal, not a sleep. */
+            logmsg( "greeter ready" );
             to_ui( "READY" );
         }
         else if (!strncmp( line, "USER ", 5 ))

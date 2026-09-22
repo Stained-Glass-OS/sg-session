@@ -42,8 +42,10 @@ case "$SG_DISPLAY_PATH" in
         set --
         if [ "$(basename "$SG_COMPOSITOR")" = sg-compositor ]; then
             _dir="$SG_SEAT_DIR/$(id -u)"
-            { mkdir -m 0755 "$_dir" 2>/dev/null || [ -d "$_dir" ]; }
-            if [ -w "$_dir" ]; then
+            # `|| true`: this script runs under set -e, and a missing seat
+            # directory must mean "no lock support", not a silently dead session.
+            mkdir -m 0755 "$_dir" 2>/dev/null || true
+            if [ -d "$_dir" ] && [ -w "$_dir" ]; then
                 SG_LOCK_PRIV="$_dir/priv.sock"
                 SG_LOCK_CONTROL="$_dir/control.sock"
                 export SG_LOCK_PRIV SG_LOCK_CONTROL
@@ -53,6 +55,13 @@ case "$SG_DISPLAY_PATH" in
             else
                 sg_log "WARNING: no writable $SG_SEAT_DIR: this session cannot be locked"
             fi
+        fi
+        # The compositor's audit lines (lock, unlock, refusals) must reach the
+        # journal, and greetd forwards a session's output nowhere; systemd-cat
+        # tags it sg-session. Where there is no journal (the dev-box gate),
+        # plain exec keeps output on the harness's log.
+        if [ "${SG_LOG_TO_JOURNAL:-1}" = 1 ] && command -v systemd-cat >/dev/null 2>&1 && [ -S /run/systemd/journal/stdout ]; then
+            exec systemd-cat -t sg-session -- "$SG_COMPOSITOR" "$@" -- "$SG_LIB/sg-run-explorer" "$GEOM"
         fi
         exec "$SG_COMPOSITOR" "$@" -- "$SG_LIB/sg-run-explorer" "$GEOM"
         ;;

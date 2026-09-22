@@ -81,7 +81,7 @@ reap_stale_wine() {
     # something (plugplay.exe, svchost.exe, start.exe, the compositor...), and
     # the ones it misses are exactly the ones that then pile up.
     for _p in $(pgrep -u "$(id -u)" 2>/dev/null); do
-        _env=$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^WINEPREFIX=//p')
+        _env=$( { tr '\0' '\n' < "/proc/$_p/environ"; } 2>/dev/null | sed -n 's/^WINEPREFIX=//p')
         [ "$_env" = "$_pfx" ] || continue
         kill -9 "$_p" 2>/dev/null && _killed=$((_killed + 1))
     done
@@ -108,6 +108,9 @@ SG_LOG_DIR="$TMP/log"
 SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 SG_USER="__sg_no_such_user__"
 export SG_LIB SG_BIN SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_DISPLAY_PATH SG_USER
+# Keep the session's output on this harness's log rather than the journal.
+SG_LOG_TO_JOURNAL=0
+export SG_LOG_TO_JOURNAL
 mkdir -p "$SG_ROOT" "$SG_LOG_DIR"
 
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
