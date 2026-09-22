@@ -11,21 +11,25 @@ ConditionPathExists=/var/lib/stained-glass/prefix/.sg-initialized
 
 [Service]
 Type=exec
-# Runs as root, which wine-sg maps to the SYSTEM SID -- the account Windows
-# services run as.
+# Runs as sgsystem, which owns the prefix and which wine-sg therefore maps to
+# the SYSTEM SID. Unprivileged on the Unix side, on purpose: nothing about
+# hosting the Windows system needs root. Device access for driver work comes
+# from sgsystem's membership of lp, scanner, plugdev and friends, and the
+# privilege to *install* a driver is NT administrator, which wine-sg decides
+# from prefix ownership rather than from the kernel.
 #
-# SECURITY: this is a root process serving a socket that every desktop user can
-# reach, so a wineserver flaw becomes a root flaw. It is the model Windows uses
-# (SYSTEM is privileged and the SCM serves everyone), and the socket is guarded
-# by wine-sg's SO_PEERCRED check rather than left open. The safer alternative --
-# a dedicated unprivileged account mapped to the SYSTEM SID -- would keep the NT
-# semantics without the real privilege, and is worth doing before this ships to
-# anything that matters.
-User=root
+# Running this as root would put a root process on a socket every desktop user
+# can reach and buy no capability an ordinary account lacks.
+User=sgsystem
+Group=sgwine
 Environment=HOME=/var/lib/stained-glass
 Environment=XDG_RUNTIME_DIR=/run/stained-glass
 RuntimeDirectory=stained-glass
 ExecStart=/usr/bin/sg-wineserver
+# The prefix must be initialized before there is anything to serve, but a
+# oneshot that has not finished holds this unit off entirely -- and a machine
+# with no Windows system is worse than one that waits a little longer for it.
+
 # The SCM is started once the server is up, not by the server itself: services
 # belong to the Windows system, not to the process that happens to host it.
 ExecStartPost=/usr/bin/sg-services-start

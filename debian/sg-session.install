@@ -11,3 +11,4 @@ config/greetd-config.toml usr/share/stained-glass
 systemd/sg-prefix-init.service usr/lib/systemd/system
 systemd/sg-wineserver.service  usr/lib/systemd/system
 tmpfiles/sg-session.conf  usr/lib/tmpfiles.d
+udev/70-stained-glass-devices.rules usr/lib/udev/rules.d

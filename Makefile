@@ -12,6 +12,7 @@ LIBDIR       = $(DESTDIR)$(PREFIX)/lib/stained-glass
 SHAREDIR     = $(DESTDIR)$(PREFIX)/share/stained-glass
 UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
+UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
 BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start
@@ -23,12 +24,13 @@ all:
 	@echo "nothing to build; this package is scripts. try 'make test' or 'make deb'."
 
 install:
-	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR)
+	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service $(UNITDIR)
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
+	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.

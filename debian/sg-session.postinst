@@ -3,6 +3,7 @@ set -e
 
 SG_ROOT=/var/lib/stained-glass
 SG_USER=sguser
+SG_SYSTEM_USER=sgsystem
 SG_WINE_GROUP=sgwine
 
 case "$1" in
@@ -22,6 +23,24 @@ case "$1" in
         if ! getent group "$SG_WINE_GROUP" >/dev/null; then
             addgroup --system "$SG_WINE_GROUP"
         fi
+
+        # The account that is SYSTEM: owns the prefix, runs the machine-level
+        # wineserver. Unprivileged on the Unix side -- see sg-common.sh.
+        if ! getent passwd "$SG_SYSTEM_USER" >/dev/null; then
+            adduser --system --group --no-create-home --home "$SG_ROOT" \
+                    --gecos "Stained Glass SYSTEM account" \
+                    --disabled-password "$SG_SYSTEM_USER"
+        fi
+        adduser "$SG_SYSTEM_USER" "$SG_WINE_GROUP" >/dev/null 2>&1 || true
+
+        # Device access for driver work -- printers, scanners, USB and serial
+        # devices. This is what an installed Windows driver actually needs from
+        # the Unix side; the NT privilege to install it is a separate thing,
+        # decided by wine-sg from who owns the prefix.
+        for grp in lp lpadmin scanner plugdev dialout video render input; do
+            getent group "$grp" >/dev/null && \
+                adduser "$SG_SYSTEM_USER" "$grp" >/dev/null 2>&1 || true
+        done
 
         if ! getent passwd "$SG_USER" >/dev/null; then
             adduser --system --group --no-create-home --home "$SG_ROOT" \

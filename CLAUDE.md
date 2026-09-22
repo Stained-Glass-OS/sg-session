@@ -56,13 +56,39 @@ Windows service exist from boot, survive every logout, and be visible to every
 logged-in user through one SCM — none of which a session-scoped server can do.
 It is debt item `D5`, and the hardest clause of the S2 gate.
 
-**It runs as root, and that is a real security decision.** `wine-sg` maps root
-to the SYSTEM SID, which is the Windows model — but it also means a root
-process serving a socket every desktop user can reach, so a wineserver flaw
-becomes a root flaw. The socket is guarded by `wine-sg`'s `SO_PEERCRED` check
-rather than left open. **A dedicated unprivileged account mapped to the SYSTEM
-SID would keep the NT semantics without the real privilege, and is worth doing
-before this ships to anything that matters.**
+**It runs unprivileged**, as `sgsystem` — the account that owns the prefix,
+which `wine-sg` therefore maps to the SYSTEM SID. It is deliberately not root.
+
+Hosting the Windows system needs no Unix root, including for driver work:
+
+- `winebus.sys` reaches devices through **udev**, not privileged syscalls
+- `winedevice` has no uid or capability checks
+- printing goes through **CUPS**, which is a socket and a group
+
+Driver install needs two things, and neither is root. **Permission to touch the
+device** comes from `udev/70-stained-glass-devices.rules` plus `sgsystem`'s
+membership of `lp`, `scanner`, `plugdev` and `dialout`. **NT administrator**, to
+write HKLM, comes from `wine-sg` reading who owns the prefix.
+
+Running it as root would put a root process on a socket every desktop user can
+reach and buy no capability an ordinary account lacks.
+
+## Scanners, and other USB devices a Windows driver drives
+
+Two paths, and `wine-sg` has both:
+
+- **`sane.ds`** — Wine's TWAIN data source over SANE. Present only because
+  `wine-sg` builds `--with-sane`; **Debian's Wine is `--without-sane` and cannot
+  do TWAIN at all**, which would be a baffling thing to discover in the middle
+  of S3.
+- **`wineusb.sys`** — raw USB, for a real Windows vendor driver talking to the
+  device itself. This is the one S3 is actually about.
+
+Both need the device readable and writable by the `sgwine` group, which is what
+the udev rules do. There is deliberately **no blanket "all USB to sgwine"
+rule** — that would hand every desktop user raw access to every USB device on
+the machine. A device the class rules do not match gets its own line; the rules
+file shows the form.
 
 ## The shared system prefix
 

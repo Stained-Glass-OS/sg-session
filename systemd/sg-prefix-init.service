@@ -13,8 +13,10 @@ ConditionPathExists=!/var/lib/stained-glass/prefix/.sg-initialized
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-User=sguser
-Group=sguser
+# Runs as the SYSTEM account so the prefix is owned by it -- wine-sg reads
+# ownership as "who administers this machine's Windows side".
+User=sgsystem
+Group=sgwine
 Environment=HOME=/var/lib/stained-glass
 
 # Wine wants an XDG_RUNTIME_DIR. There is no logind session here -- this runs

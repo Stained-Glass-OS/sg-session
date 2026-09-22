@@ -1,0 +1,46 @@
+# Device access for the Stained Glass Windows system.
+#
+# Windows driver work needs two separate things, and only one of them is here:
+#
+#   * permission to touch the device on the Unix side  -- this file
+#   * NT administrator, to install the driver into HKLM -- decided by wine-sg
+#     from who owns the system prefix, not by the kernel
+#
+# Neither is Unix root. Running the Windows system as root would buy no
+# capability these rules do not already grant.
+#
+# Access is given to the sgwine group, which is the same group that admits a
+# user to the machine's Windows side, so "can use Windows here" and "can reach
+# the devices" stay one decision rather than two.
+
+# --- scanners -------------------------------------------------------------
+# Covers both scanner paths: Wine's TWAIN data source over SANE (sane.ds), and
+# a real Windows vendor driver talking to the device through wineusb.sys. The
+# second needs the raw usbfs node, which is what the second rule grants.
+SUBSYSTEM=="usb", ENV{libsane_matched}=="yes", MODE="0660", GROUP="sgwine"
+SUBSYSTEM=="usb", ENV{ID_SCANNER}=="1", MODE="0660", GROUP="sgwine"
+SUBSYSTEM=="usb", ATTRS{bInterfaceClass}=="ff", ENV{ID_SCANNER}=="1", MODE="0660", GROUP="sgwine"
+
+# --- printers, including label printers -----------------------------------
+# USB printer class (07). Label printers are usually plain class-07 devices, so
+# this covers a Zebra or Brother QL as well as an office laser.
+SUBSYSTEM=="usb", ATTRS{bInterfaceClass}=="07", MODE="0660", GROUP="sgwine"
+SUBSYSTEM=="usbmisc", KERNEL=="lp[0-9]*", MODE="0660", GROUP="sgwine"
+SUBSYSTEM=="usb", DRIVERS=="usblp", MODE="0660", GROUP="sgwine"
+
+# --- smartcard readers ----------------------------------------------------
+SUBSYSTEM=="usb", ENV{ID_SMARTCARD_READER}=="1", MODE="0660", GROUP="sgwine"
+
+# --- serial, for devices behind a USB-serial bridge -----------------------
+SUBSYSTEM=="tty", ENV{ID_BUS}=="usb", MODE="0660", GROUP="sgwine"
+
+# --- per-device rules -----------------------------------------------------
+# Deliberately no blanket "all USB to sgwine" rule: that would hand every
+# desktop user raw access to every USB device on the machine, including ones
+# that have nothing to do with Windows.
+#
+# A device a vendor driver needs but the classes above do not match gets its
+# own line. Find the ids with `lsusb`, then:
+#
+#   SUBSYSTEM=="usb", ATTRS{idVendor}=="1234", ATTRS{idProduct}=="5678", \
+#       MODE="0660", GROUP="sgwine"

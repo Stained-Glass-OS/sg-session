@@ -10,6 +10,17 @@ SG_LOG_DIR="${SG_LOG_DIR:-/var/log/stained-glass}"
 # MULTIUSER-DEBT: one prefix, one owner. See docs/multiuser-debt.md (D1).
 SG_USER="${SG_USER:-sguser}"
 
+# The account that *is* SYSTEM: it owns the system prefix and runs the
+# machine-level wineserver, so wine-sg maps it to the SYSTEM SID.
+#
+# Deliberately not root. Nothing about hosting the Windows system needs Unix
+# root -- device access comes from udev rules and group membership, and the
+# privilege that matters for installing a driver is NT administrator, which
+# wine-sg decides from the prefix's ownership rather than from the kernel.
+# Running it as root would put a root process on a socket every desktop user
+# can reach, buying no capability an ordinary account lacks.
+SG_SYSTEM_USER="${SG_SYSTEM_USER:-sgsystem}"
+
 # The Unix group whose members may use the system prefix. wine-sg decides who
 # may connect to a shared wineserver by membership of the group owning its
 # server directory, which it takes from the prefix -- so this group *is* the
@@ -43,7 +54,7 @@ SG_WINE_DIR="${SG_WINE_DIR-/opt/wine-sg}"
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
 export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER
 export SG_DESKTOP_W SG_DESKTOP_H SG_DISPLAY_PATH SG_WINE_DIR
-export SG_WINE_GROUP SG_SYSTEM_PREFIX
+export SG_WINE_GROUP SG_SYSTEM_PREFIX SG_SYSTEM_USER
 
 sg_log() { echo "[sg-session] $*" >&2; }
 sg_die() { echo "[sg-session] FATAL: $*" >&2; exit 1; }
