@@ -32,15 +32,16 @@ sg_log "starting session: display path=$SG_DISPLAY_PATH geometry=$GEOM"
 
 case "$SG_DISPLAY_PATH" in
     x11)
-        # cage hosts a single Wayland client full-screen. XWayland gives Wine an
-        # X server, and winex11's virtual desktop draws the shell and taskbar
-        # into one window sized to the output. See ADR 0003.
-        exec cage -- "$SG_LIB/sg-run-explorer" "$GEOM"
+        # The compositor hosts a single Wayland client full-screen. XWayland
+        # gives Wine an X server, and winex11's virtual desktop draws the shell
+        # and taskbar into one window sized to the output. See ADR 0003.
+        sg_log "compositor: $SG_COMPOSITOR"
+        exec "$SG_COMPOSITOR" -- "$SG_LIB/sg-run-explorer" "$GEOM"
         ;;
     wayland)
         WINE_DISPLAY_DRIVER=wayland
         export WINE_DISPLAY_DRIVER
-        exec cage -- "$SG_LIB/sg-run-explorer" "$GEOM"
+        exec "$SG_COMPOSITOR" -- "$SG_LIB/sg-run-explorer" "$GEOM"
         ;;
     *)
         sg_die "unknown SG_DISPLAY_PATH: $SG_DISPLAY_PATH (expected x11 or wayland)"

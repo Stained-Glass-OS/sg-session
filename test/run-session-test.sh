@@ -32,8 +32,17 @@ cleanup() {
         kill "$MACHINE_PID" 2>/dev/null || true
     fi
     # The session user here is us, so this only ever reaps our own processes.
-    WINEPREFIX="$SG_PREFIX" wineserver -k 2>/dev/null || true
-    pkill -f "cage -- $STAGE" 2>/dev/null || true
+    # Named explicitly: a bare `wineserver` resolves to the distribution's, which
+    # looks for the server where stock Wine puts it -- not where wine-sg puts a
+    # system prefix's (/tmp/.wine-sg-*) -- finds nothing, and silently kills
+    # nothing. That left seven Wine processes behind every run.
+    WINEPREFIX="$SG_PREFIX" "${SG_WINE_DIR:-/opt/wine-sg}/bin/wineserver" -k 2>/dev/null || true
+    # Then anything still standing, however it got reparented.
+    if [ -n "${RUN:-}" ]; then
+        systemctl --user kill --signal=SIGKILL "$SLICE" 2>/dev/null || true
+        systemctl --user stop "$SLICE" 2>/dev/null || true
+    fi
+    reap_stale_wine "$SG_PREFIX" >/dev/null 2>&1 || true
     exit "$rc"
 }
 
@@ -48,9 +57,30 @@ cleanup() {
 # environment rather than by name, so a developer's unrelated Wine session is
 # left alone. Anything else still running is reported, because it is the first
 # thing to suspect if this run then behaves strangely.
+# Containment. The session and the machine-level server run inside one
+# transient systemd slice, and cleanup stops the slice. On a real machine the
+# session lives in a logind scope and systemd kills the whole cgroup at logout;
+# without the equivalent here, every run leaked a process tree, because the
+# compositor waits for its child on SIGTERM, the child (a Wine process) blocks
+# on a server that is already gone, and everything is reparented to init where
+# no PID the harness holds can reach it. cgroup membership survives
+# reparenting, so a slice catches all of it.
+#
+# Where there is no user systemd (some CI containers), RUN is empty and the
+# name-agnostic reaper below is the fallback.
+SLICE="sg-gate-$$.slice"
+if systemd-run --user --scope --quiet --slice="$SLICE" -- true 2>/dev/null; then
+    RUN="systemd-run --user --scope --quiet --slice=$SLICE --"
+else
+    RUN=""
+fi
+
 reap_stale_wine() {
     _pfx=$1 _killed=0
-    for _p in $(pgrep -u "$(id -u)" -x 'wineserver|wine|wineboot.exe|explorer.exe|services.exe|winedevice.exe' 2>/dev/null); do
+    # Every process of ours, not a list of names: a list is always missing
+    # something (plugplay.exe, svchost.exe, start.exe, the compositor...), and
+    # the ones it misses are exactly the ones that then pile up.
+    for _p in $(pgrep -u "$(id -u)" 2>/dev/null); do
         _env=$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^WINEPREFIX=//p')
         [ "$_env" = "$_pfx" ] || continue
         kill -9 "$_p" 2>/dev/null && _killed=$((_killed + 1))
@@ -90,7 +120,11 @@ WLR_LIBINPUT_NO_DEVICES=1
 WLR_RENDERER=pixman
 export WLR_BACKENDS WLR_LIBINPUT_NO_DEVICES WLR_RENDERER
 
-for tool in cage Xwayland wine xwininfo; do
+# The compositor comes from sg-common.sh: SG_COMPOSITOR if set (sg-compositor's
+# own gate sets it to its build tree), else sg-compositor, else cage.
+. "$STAGE/usr/lib/stained-glass/sg-common.sh" 2>/dev/null || true
+echo "== compositor: ${SG_COMPOSITOR:-cage}"
+for tool in "${SG_COMPOSITOR:-cage}" Xwayland wine xwininfo; do
     command -v "$tool" >/dev/null 2>&1 || { echo "SKIP: $tool not installed"; exit 77; }
 done
 
@@ -105,14 +139,14 @@ trap cleanup EXIT INT TERM
 # explorers in one prefix is a real configuration, so the gate has to see it.
 if [ "${SG_TEST_MACHINE_SERVER:-1}" = "1" ]; then
     echo "== starting the machine-level wineserver"
-    "$SG_BIN/sg-wineserver" >"$SG_LOG_DIR/machine.log" 2>&1 &
+    $RUN "$SG_BIN/sg-wineserver" >"$SG_LOG_DIR/machine.log" 2>&1 &
     MACHINE_PID=$!
-    SG_SERVICES_TIMEOUT=60 "$SG_BIN/sg-services-start" >"$SG_LOG_DIR/services.log" 2>&1 \
+    SG_SERVICES_TIMEOUT=60 $RUN "$SG_BIN/sg-services-start" >"$SG_LOG_DIR/services.log" 2>&1 \
         || echo "   (services.exe did not report ready; continuing)"
 fi
 
 echo "== starting session (display path: $SG_DISPLAY_PATH)"
-"$SG_BIN/sg-session-start" >"$SG_LOG_DIR/session.log" 2>&1 &
+$RUN "$SG_BIN/sg-session-start" >"$SG_LOG_DIR/session.log" 2>&1 &
 SESSION_PID=$!
 
 echo "== running sg-session-check"

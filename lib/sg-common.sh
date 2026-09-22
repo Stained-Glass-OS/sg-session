@@ -37,7 +37,7 @@ SG_SYSTEM_PREFIX="${SG_SYSTEM_PREFIX:-1}"
 SG_DESKTOP_W="${SG_DESKTOP_W:-1280}"
 SG_DESKTOP_H="${SG_DESKTOP_H:-800}"
 
-# Display path: x11 (cage + XWayland + winex11 virtual desktop) or wayland
+# Display path: x11 (compositor + XWayland + winex11 virtual desktop) or wayland
 # (winewayland). See docs/decisions/0003 in the stained-glass repo.
 SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 
@@ -49,6 +49,16 @@ SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 # distribution Wine still works. Note that a distribution Wine cannot run
 # 32-bit Windows binaries without i386 multiarch.
 SG_WINE_DIR="${SG_WINE_DIR-/opt/wine-sg}"
+# The compositor that hosts the session. sg-compositor (ADR 0011) when it is
+# installed, cage otherwise -- the same "works on stock parts, better on ours"
+# arrangement as the Wine prefix. Overridable so a gate can point at a build
+# tree.
+if [ -z "${SG_COMPOSITOR:-}" ]; then
+    if command -v sg-compositor >/dev/null 2>&1; then SG_COMPOSITOR=sg-compositor
+    else SG_COMPOSITOR=cage; fi
+fi
+export SG_COMPOSITOR
+
 # Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
 # as PE DLLs. Absent on a machine that did not install them, which is a
 # supported configuration: the prefix simply keeps Wine's own D3D.
