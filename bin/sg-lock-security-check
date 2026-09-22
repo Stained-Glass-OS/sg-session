@@ -1,0 +1,109 @@
+#!/bin/sh
+# The credential-UI isolation gate.
+#
+# ADR 0009 claims a program in the user's session cannot observe what is typed
+# into the lock screen. This proves it against a real adversary rather than
+# asserting it, and it encodes the finding that shaped the design: freezing the
+# user session is NOT sufficient on its own, because GetAsyncKeyState's
+# "pressed since last call" bits accumulate while a process is frozen and are
+# recovered on thaw. The load-bearing property is that the lock-screen key
+# events never reach the user session's display server at all.
+#
+# The gate models the deployment with two display servers: the lock surface's
+# (session 0) and the user session's. The adversary lives on the user display;
+# the secret is typed into the lock display. It must not appear.
+#
+# Requires Xvfb, xdotool, wine and the adversary fixture; skips (77) otherwise,
+# because it cannot run without a display server it can drive.
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+ADV="$LIBEXEC/sg-keylog-adversary.exe"
+RC=0
+WORK=$(mktemp -d)
+XU="" ; XL=""
+
+# shellcheck disable=SC2317  # invoked via trap
+cleanup() {
+    pkill -9 -f 'sg-keylog-adversary|notepad.exe' 2>/dev/null || true
+    [ -n "$XU" ] && kill "$XU" 2>/dev/null
+    [ -n "$XL" ] && kill "$XL" 2>/dev/null
+    [ -n "${_nu:-}" ] && rm -f "/tmp/.X${_nu}-lock" 2>/dev/null
+    [ -n "${_nl:-}" ] && rm -f "/tmp/.X${_nl}-lock" 2>/dev/null
+    rm -rf "$WORK"
+}
+trap cleanup EXIT INT TERM
+
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*"; RC=1; }
+
+for t in Xvfb xdotool; do command -v "$t" >/dev/null 2>&1 || { echo "SKIP: $t not installed"; exit 77; }; done
+[ -x "$SG_WINE_DIR/bin/wine" ] || { echo "SKIP: wine-sg not installed"; exit 77; }
+[ -f "$ADV" ] || { echo "SKIP: adversary fixture not built ($ADV)"; exit 77; }
+[ -d "$SG_PREFIX/drive_c" ] || { echo "SKIP: no prefix at $SG_PREFIX"; exit 77; }
+
+# Distinct-character analysis: the leak of interest is the *set* of characters,
+# since GetAsyncKeyState loses order and repeats. A secret is "present" if any
+# character unique to it (not in the control secret) shows up.
+captured() { grep -iE 'HOOK|ASYNC|KBSTATE' "$1" 2>/dev/null | grep -oiE ' [a-z0-9]$' | tr -d ' \n' | tr 'A-Z' 'a-z'; }
+
+USER_SECRET=teethcontrol7
+LOCK_SECRET=lockphrase49          # unique chars vs control: p,h,a,4,9 ... choose distinct
+# Ensure the lock secret has characters the control does not, or "absent" is trivially true.
+# control set: t,e,h,c,o,n,r,l,7 ; lock unique: p,a,s,4,9
+LOCK_SECRET=passphrase4900
+
+DL_USER=":82"; DL_LOCK=":81"
+# A leftover wineserver on this prefix blocks every wine we launch. Reap ours.
+for _p in $(pgrep -u "$(id -u)" -x wineserver 2>/dev/null); do
+    _e=$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^WINEPREFIX=//p')
+    [ "$_e" = "$SG_PREFIX" ] && kill -9 "$_p" 2>/dev/null
+done
+sleep 1
+rm -f /tmp/sg-lock-adv.txt
+echo "info  displays $DL_USER (user) and $DL_LOCK (lock)"
+Xvfb "$DL_USER" -screen 0 1280x800x24 >/dev/null 2>&1 & XU=$!
+Xvfb "$DL_LOCK" -screen 0 1280x800x24 >/dev/null 2>&1 & XL=$!
+sleep 3
+
+echo "info  starting adversary on the user display"
+DISPLAY="$DL_USER" WINEPREFIX="$SG_PREFIX" WINEARCH="${WINEARCH:-win64}" WINEDEBUG=-all \
+  PATH="$SG_WINE_DIR/bin:$PATH" wine "$ADV" 'Z:\tmp\sg-lock-adv.txt' >/dev/null 2>&1 &
+sleep 5
+DISPLAY="$DL_USER" WINEPREFIX="$SG_PREFIX" WINEARCH="${WINEARCH:-win64}" WINEDEBUG=-all \
+  PATH="$SG_WINE_DIR/bin:$PATH" wine notepad >/dev/null 2>&1 &
+sleep 7
+
+LOG="/tmp/sg-lock-adv.txt"
+echo "info  typing control + lock secrets"
+WID=$(timeout 15 env DISPLAY="$DL_USER" xdotool search --name Notepad 2>/dev/null | head -1)
+[ -n "$WID" ] && timeout 15 env DISPLAY="$DL_USER" xdotool windowactivate "$WID" 2>/dev/null
+sleep 1
+
+# Control: the adversary must catch what is typed on its own display, or a clean
+# isolation result means only that the setup is broken.
+timeout 15 env DISPLAY="$DL_USER" xdotool type --delay 70 "$USER_SECRET"; sleep 2
+# The real test: type into the lock display.
+timeout 15 env DISPLAY="$DL_LOCK" xdotool type --delay 70 "$LOCK_SECRET"; sleep 2
+
+cap=$(captured "$LOG")
+case "$cap" in
+    *teethcontrol*|*teeth*) pass "adversary captures its own display (the gate has teeth)" ;;
+    *) fail "adversary caught nothing on its own display -- setup broken, result meaningless: [$cap]" ;;
+esac
+# unique lock chars: p,a,s,4,9  (none in teethcontrol7)
+_leak=""
+for c in p a s 4 9; do case "$cap" in *"$c"*) _leak="$_leak$c";; esac; done
+if [ -z "$_leak" ]; then
+    pass "the lock secret never reached the user session's display server"
+else
+    fail "lock-secret characters leaked to the user display: [$_leak]"
+fi
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

@@ -139,3 +139,21 @@ test-greeter: greeter
 	@# that simply cannot build a PE.
 	@SG_LIB=$(CURDIR)/lib SG_LIBEXEC=$(CURDIR)/build $(CURDIR)/bin/sg-greeter-check; \
 	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# --- credential-UI security gate (CI only, never installed) ----------------
+#
+# sg-keylog-adversary is a keylogger. It exists to be defeated by the isolation
+# ADR 0009 requires, and it is a TEST FIXTURE: built under build/, run from
+# there by the gate, and NEVER installed into the image. Shipping a keylogger
+# in a product would be indefensible; `install` deliberately omits it.
+.PHONY: security test-security
+security:
+	@command -v $(MINGW64) >/dev/null 2>&1 || { echo "SKIP: $(MINGW64) not installed"; exit 0; }
+	@mkdir -p build
+	$(MINGW64) -O2 -mwindows -o build/sg-keylog-adversary.exe greeter/sg-keylog-adversary.c -luser32 -lgdi32
+	@echo "built the adversarial keylogger fixture (CI only)"
+
+test-security: security
+	@SG_LIB=$(CURDIR)/lib SG_LIBEXEC=$(CURDIR)/build \
+	 SG_PREFIX=$(CURDIR)/test/tmp/state/prefix $(CURDIR)/bin/sg-lock-security-check; \
+	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc

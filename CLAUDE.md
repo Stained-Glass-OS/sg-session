@@ -168,6 +168,46 @@ that follows `wineboot`, or the hive on disk is incomplete.
 Check it with `grep -c '^\[' userdef.reg`: 52-ish means a real profile, 16
 means the stub.
 
+## Lock-screen isolation (the security gate)
+
+`sg-keylog-adversary` is a keylogger, and `sg-lock-security-check` is the gate
+that must defeat it. Together they hold [ADR 0009](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0009-credential-ui-security-model.md)
+to account: a program in the user's session must not observe what is typed into
+the lock screen.
+
+**The adversary is a test fixture and is never installed.** `make security`
+builds it under `build/`; `install` deliberately omits it. Shipping a keylogger
+in the image would be indefensible.
+
+Two findings from running it, both of which changed the design:
+
+- **Freezing the user session is not sufficient on its own.** A frozen
+  `GetAsyncKeyState` poller recovers the *distinct characters* of anything typed
+  while it was frozen, on its first poll after thaw — the "pressed since last
+  call" bits accumulate and are not cleared by the freeze. Proven, not
+  supposed. The load-bearing defense is therefore #3 below, not the freeze.
+- **Cross-display isolation holds.** A secret typed into a separate display
+  server never reached an adversary on the user's display. This is the property
+  the compositor must provide: lock input goes to the lock surface's display,
+  never the user session's, so there is nothing to accumulate.
+
+The gate models this with two display servers and a distinct-character analysis
+(order and repeats are lost to `GetAsyncKeyState`, so a secret "leaks" if any
+character unique to it appears). It has a teeth check first — the adversary must
+capture what is typed on its *own* display — because a gate that can catch
+nothing proves nothing.
+
+**Status, stated plainly:** the three properties above are proven by direct
+experiment. The packaged gate reaches its logic but its `&`-spawned Xvfb
+children keep the output pipe open under some harnesses; finishing that
+process-group handling, and adding a case that runs the adversary as a
+capture/inject client once `sg-compositor` exists, is open work.
+
+Remote access ([ADR 0010](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0010-remote-access-and-the-lock-screen.md))
+funnels both console-shadow and pre-authenticated RDP through the same bridge,
+so the credential always terminates at PAM. That is future work; the design is
+recorded.
+
 ## The login screen
 
 `sg-greeter` is a **Windows program**, deliberately. Remote-support tools —
