@@ -52,6 +52,24 @@ echo "S2 gate: multi-user system Wine"
 echo "prefix: $SG_PREFIX"
 echo "wine:   $(wine --version 2>/dev/null)"
 
+# Wine drags a dbus-launch daemon in behind it, and that daemon outlives the
+# check -- long enough to hold the test accounts open and make `deluser` fail
+# with "user is currently used by process". Reap everything the test users own
+# on the way out, however we exit.
+# shellcheck disable=SC2317  # invoked via trap
+cleanup() {
+    _rc=$?
+    for _u in "$U1" "$U2"; do
+        getent passwd "$_u" >/dev/null 2>&1 || continue
+        runuser -u "$_u" -- env WINEPREFIX="$SG_PREFIX" \
+            PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" \
+            wineserver -k >/dev/null 2>&1 || true
+        pkill -9 -u "$_u" >/dev/null 2>&1 || true
+    done
+    exit "$_rc"
+}
+trap cleanup EXIT INT TERM
+
 # --- fixtures -------------------------------------------------------------
 rm -rf "$WORK"; mkdir -p "$WORK"; chmod 755 "$WORK"
 for u in "$U1" "$U2"; do
