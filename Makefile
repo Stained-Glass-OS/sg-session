@@ -13,10 +13,11 @@ SHAREDIR     = $(DESTDIR)$(PREFIX)/share/stained-glass
 UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 
-BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check
+BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+               bin/sg-multiuser-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer
 
-.PHONY: all install lint test test-session deb clean
+.PHONY: all install lint test test-session test-multiuser deb clean
 
 all:
 	@echo "nothing to build; this package is scripts. try 'make test' or 'make deb'."
@@ -47,6 +48,12 @@ test: lint test-session
 # inside it, and let sg-session-check decide. Exits non-zero on failure.
 test-session:
 	@test/run-session-test.sh
+
+# The S2 gate. Expected to fail until S2 lands -- see bin/sg-multiuser-check.
+# Deliberately not part of 'make test': a known-red gate wired into CI would
+# mask real regressions. Run it on purpose, as root.
+test-multiuser:
+	@SG_LIB=$(CURDIR)/lib sudo -E env PATH="$$PATH" $(CURDIR)/bin/sg-multiuser-check
 
 deb:
 	dpkg-buildpackage -us -uc -b

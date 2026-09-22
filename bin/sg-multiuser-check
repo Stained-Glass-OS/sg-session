@@ -1,0 +1,237 @@
+#!/bin/sh
+# The S2 gate: multi-user system Wine.
+#
+# Verbatim from the brief, section 5:
+#
+#   Two Unix users on one boot. Both read the same HKLM. Non-admin cannot write
+#   HKLM\Software\Policies. Each has an isolated HKCU. A service started at boot
+#   as SYSTEM is visible to both via SCM. Scripted, exit code.
+#
+# THIS GATE IS EXPECTED TO FAIL until S2 lands. That is its job. A red gate that
+# names precisely what is missing is the point; it is not a broken test, and it
+# should not be "fixed" by weakening it.
+#
+# Each clause reports separately, so progress is visible one clause at a time
+# rather than as a single wall. Where a clause cannot even be attempted, the
+# gate says what blocks it instead of reporting a bare failure.
+#
+# Run as root: it creates test users and runs Wine as each of them.
+#
+# Analysis behind the expected failures:
+#   stained-glass/docs/s2-wineserver-analysis.md
+#
+#   0  every clause passed -- S2 is done
+#   1  at least one clause failed (the expected state today)
+#   2  could not run (not root, no prefix, no Wine)
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+U1="${SG_TEST_USER1:-sgtest1}"
+U2="${SG_TEST_USER2:-sgtest2}"
+WORK="${SG_MU_WORK:-/tmp/sg-multiuser}"
+
+CLAUSES=0
+PASSED=0
+
+pass()  { CLAUSES=$((CLAUSES+1)); PASSED=$((PASSED+1)); echo "PASS    $*"; }
+fail()  { CLAUSES=$((CLAUSES+1)); echo "FAIL    $*"; }
+block() { CLAUSES=$((CLAUSES+1)); echo "BLOCKED $*"; }
+info()  { echo "        $*"; }
+head2() { echo; echo "== $*"; }
+
+[ "$(id -u)" -eq 0 ] || { echo "FAIL: must run as root (it creates users and runs Wine as each)"; exit 2; }
+
+sg_wine_env
+command -v wine >/dev/null 2>&1 || { echo "FAIL: no wine on PATH (SG_WINE_DIR=$SG_WINE_DIR)"; exit 2; }
+[ -d "$SG_PREFIX" ] || { echo "FAIL: no system prefix at $SG_PREFIX"; exit 2; }
+
+echo "S2 gate: multi-user system Wine"
+echo "prefix: $SG_PREFIX"
+echo "wine:   $(wine --version 2>/dev/null)"
+
+# --- fixtures -------------------------------------------------------------
+rm -rf "$WORK"; mkdir -p "$WORK"; chmod 755 "$WORK"
+for u in "$U1" "$U2"; do
+    getent passwd "$u" >/dev/null 2>&1 || \
+        adduser --system --group --no-create-home --home "$WORK/$u" \
+                --gecos "Stained Glass S2 test user" --disabled-password "$u" >/dev/null 2>&1
+    mkdir -p "$WORK/$u" "$WORK/$u/run"
+    chown -R "$u:$u" "$WORK/$u"
+    chmod 700 "$WORK/$u/run"
+done
+info "test users: $U1 (uid $(id -u "$U1")), $U2 (uid $(id -u "$U2"))"
+
+# Run a command as a test user, against the *system* prefix. Output and exit
+# status are captured; nothing here assumes it will succeed.
+as_user() {
+    _u=$1; shift
+    runuser -u "$_u" -- env \
+        HOME="$WORK/$_u" \
+        XDG_RUNTIME_DIR="$WORK/$_u/run" \
+        WINEPREFIX="$SG_PREFIX" \
+        WINEARCH=win64 \
+        WINEDEBUG=-all \
+        WINEDLLOVERRIDES='mscoree,mshtml=' \
+        PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" \
+        "$@" 2>&1
+}
+
+# --- clause 1: two Unix users on one boot ---------------------------------
+head2 "clause 1: two Unix users can both use the system Wine"
+
+U1_OUT=$(as_user "$U1" wine cmd /c "echo SG_OK_$U1" 2>&1)
+U2_OUT=$(as_user "$U2" wine cmd /c "echo SG_OK_$U2" 2>&1)
+U1_CAN=no; U2_CAN=no
+echo "$U1_OUT" | grep -q "SG_OK_$U1" && U1_CAN=yes
+echo "$U2_OUT" | grep -q "SG_OK_$U2" && U2_CAN=yes
+
+if [ "$U1_CAN" = yes ] && [ "$U2_CAN" = yes ]; then
+    pass "both users ran a Windows process against the system prefix"
+    BOTH_IN=yes
+else
+    fail "not both users can use the system prefix ($U1=$U1_CAN, $U2=$U2_CAN)"
+    BOTH_IN=no
+    info "$U1: $(echo "$U1_OUT" | grep -iE 'wine|denied|owned' | head -2 | tr '\n' ' ')"
+    info "$U2: $(echo "$U2_OUT" | grep -iE 'wine|denied|owned' | head -2 | tr '\n' ' ')"
+
+    # The first failure is usually a plain Unix permission error, which invites
+    # the conclusion that a chmod would fix it. It would not, and it is worth
+    # demonstrating rather than asserting: build a prefix owned by one user,
+    # make it fully accessible to everyone, and watch Wine refuse anyway.
+    info ""
+    info "diagnostic: is this just file permissions?"
+    SHARED="$WORK/shared-prefix"
+    rm -rf "$SHARED"; mkdir -p "$SHARED"; chown "$U1:$U1" "$SHARED"
+    runuser -u "$U1" -- env HOME="$WORK/$U1" XDG_RUNTIME_DIR="$WORK/$U1/run" \
+        WINEPREFIX="$SHARED/prefix" WINEARCH=win64 WINEDEBUG=-all \
+        WINEDLLOVERRIDES='mscoree,mshtml=' \
+        PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" \
+        wineboot --init >/dev/null 2>&1
+    runuser -u "$U1" -- env WINEPREFIX="$SHARED/prefix" \
+        PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" wineserver -w 2>/dev/null
+
+    if [ -d "$SHARED/prefix" ]; then
+        chmod -R a+rwX "$SHARED" 2>/dev/null
+        SHARED_OUT=$(runuser -u "$U2" -- env HOME="$WORK/$U2" \
+            XDG_RUNTIME_DIR="$WORK/$U2/run" WINEPREFIX="$SHARED/prefix" \
+            WINEARCH=win64 WINEDEBUG=-all WINEDLLOVERRIDES='mscoree,mshtml=' \
+            PATH="${SG_WINE_DIR:-/opt/wine-sg}/bin:/usr/bin:/bin" \
+            wine cmd /c "echo SG_SHARED_OK" 2>&1)
+        if echo "$SHARED_OUT" | grep -q SG_SHARED_OK; then
+            info "  a world-writable prefix DID work for a second user --"
+            info "  so on this build the blocker is file permissions after all."
+        else
+            info "  no. With $U1's prefix chmod'ed a+rwX, $U2 still cannot use it:"
+            info "    $(echo "$SHARED_OUT" | grep -iE 'wine:|owned|denied' | head -1)"
+            info "  Wine compares the directory's st_uid against getuid() and calls"
+            info "  fatal_error when they differ (server/request.c:591,637). No"
+            info "  permission bits can satisfy that -- it needs a code change."
+        fi
+    else
+        info "  (could not build a probe prefix as $U1; skipping)"
+    fi
+    info ""
+    info "See s2-wineserver-analysis.md, changes 1 and 2: a machine-wide server"
+    info "directory, and SO_PEERCRED authentication to replace the ownership"
+    info "check the current code relies on. They must land together."
+fi
+
+# --- clause 2: both read the same HKLM ------------------------------------
+head2 "clause 2: both users read the same HKLM"
+
+MARK="SG_HKLM_$$"
+if [ "$BOTH_IN" != yes ]; then
+    block "cannot test: clause 1 must pass first"
+else
+    as_user "$U1" wine reg add 'HKLM\Software\StainedGlass\S2' /v Mark /t REG_SZ /d "$MARK" /f >/dev/null 2>&1
+    R2=$(as_user "$U2" wine reg query 'HKLM\Software\StainedGlass\S2' /v Mark 2>&1)
+    if echo "$R2" | grep -q "$MARK"; then
+        pass "a value written to HKLM by $U1 is visible to $U2"
+    else
+        fail "$U2 cannot see the HKLM value written by $U1"
+        info "got: $(echo "$R2" | head -2 | tr '\n' ' ')"
+    fi
+fi
+
+# --- clause 3: non-admin cannot write HKLM\Software\Policies --------------
+head2 "clause 3: a non-admin cannot write HKLM\\Software\\Policies"
+
+# Two things must hold: the write must be refused, and the user attempting it
+# must actually be a non-admin. The second is the part that does not exist yet
+# -- every process token in Wine comes from token_create_admin().
+if [ "$BOTH_IN" != yes ]; then
+    block "cannot test: clause 1 must pass first"
+    info "note: even once it can run, Wine creates every process token with"
+    info "token_create_admin() (server/process.c:715). There is currently no"
+    info "such thing as a non-admin, so this clause cannot pass by tuning a"
+    info "security descriptor. See s2-wineserver-analysis.md, change 4."
+else
+    W=$(as_user "$U2" wine reg add 'HKLM\Software\Policies\StainedGlass' /v Denied /t REG_SZ /d x /f 2>&1)
+    Q=$(as_user "$U2" wine reg query 'HKLM\Software\Policies\StainedGlass' /v Denied 2>&1)
+    if echo "$Q" | grep -q 'Denied'; then
+        fail "$U2 wrote to HKLM\\Software\\Policies and the value is readable back"
+        info "every Wine process token is created by token_create_admin();"
+        info "there is no non-admin to deny. See change 4 in the analysis."
+    else
+        pass "the write was refused"
+        info "$(echo "$W" | head -1)"
+    fi
+fi
+
+# --- clause 4: isolated HKCU per user -------------------------------------
+head2 "clause 4: each user has an isolated HKCU"
+
+if [ "$BOTH_IN" != yes ]; then
+    block "cannot test: clause 1 must pass first"
+    info "note: the server loads one user.reg at startup, for one SID"
+    info "(server/registry.c:1948). One HKCU exists per prefix, not per user."
+    info "See change 5 in the analysis."
+else
+    PRIV="SG_HKCU_$$"
+    as_user "$U1" wine reg add 'HKCU\Software\StainedGlass\S2' /v Private /t REG_SZ /d "$PRIV" /f >/dev/null 2>&1
+    LEAK=$(as_user "$U2" wine reg query 'HKCU\Software\StainedGlass\S2' /v Private 2>&1)
+    if echo "$LEAK" | grep -q "$PRIV"; then
+        fail "$U2 can read $U1's HKCU value -- the hive is shared, not per-user"
+    else
+        pass "$U1's HKCU value is not visible to $U2"
+    fi
+fi
+
+# --- clause 5: a SYSTEM service started at boot is visible via SCM --------
+head2 "clause 5: a service started at boot as SYSTEM is visible to both via SCM"
+
+# The prerequisite is a wineserver that exists before anyone logs in and
+# outlives every logout. Check for one that is not owned by a session user.
+BOOT_WS=$(pgrep -a wineserver 2>/dev/null | grep -v "$U1\|$U2" | head -3)
+SYSTEM_WS=no
+if pgrep -u 0 -x wineserver >/dev/null 2>&1; then SYSTEM_WS=yes; fi
+
+if [ "$SYSTEM_WS" = yes ]; then
+    S1=$(as_user "$U1" wine sc query 2>&1)
+    S2Q=$(as_user "$U2" wine sc query 2>&1)
+    if echo "$S1" | grep -q 'SERVICE_NAME' && echo "$S2Q" | grep -q 'SERVICE_NAME'; then
+        pass "both users see services via the SCM"
+    else
+        fail "the SCM is not reporting services to both users"
+    fi
+else
+    fail "no machine-level wineserver: none running as root/SYSTEM"
+    [ -n "$BOOT_WS" ] && info "wineservers seen: $(echo "$BOOT_WS" | head -1)"
+    info "the wineserver is started by the login session and dies with it, so"
+    info "there is nothing to host a SYSTEM service before a user logs in."
+    info "This is debt item D5 and the hardest clause of the gate."
+fi
+
+# --- summary --------------------------------------------------------------
+echo
+echo "-------------------------------------------------------------"
+echo "S2 gate: $PASSED of $CLAUSES clauses passing"
+if [ "$PASSED" -eq "$CLAUSES" ]; then
+    echo "RESULT: PASS -- S2 is complete"
+    exit 0
+fi
+echo "RESULT: FAIL -- expected until S2 lands; see s2-wineserver-analysis.md"
+exit 1

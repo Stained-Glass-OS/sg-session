@@ -1,6 +1,7 @@
 bin/sg-prefix-init        usr/bin
 bin/sg-session-start      usr/bin
 bin/sg-session-check      usr/bin
+bin/sg-multiuser-check    usr/bin
 lib/sg-common.sh          usr/lib/stained-glass
 lib/sg-run-explorer       usr/lib/stained-glass
 config/sg-session.env     usr/share/stained-glass

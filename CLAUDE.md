@@ -33,7 +33,8 @@ separately.
 |---|---|
 | `bin/sg-session-start` | session entry point; greetd exec's this |
 | `bin/sg-prefix-init` | builds the system prefix; idempotent, stamp-guarded |
-| `bin/sg-session-check` | **the gate**: is a Windows shell really running? |
+| `bin/sg-session-check` | **the Phase 0 gate**: is a Windows shell really running? |
+| `bin/sg-multiuser-check` | **the S2 gate**: expected red until S2 lands |
 | `lib/sg-common.sh` | shared paths and the Wine environment, in one place |
 | `lib/sg-run-explorer` | runs inside the compositor; starts explorer |
 | `config/greetd-config.toml` | autologin placeholder for `sg-greeter` |
@@ -61,6 +62,24 @@ tree; keep it working.
   guaranteed present. `make lint` enforces it.
 - **`SG_*` variables must be exported** — the session crosses a process boundary
   from `sg-session-start` into `sg-run-explorer` under cage.
+
+## The S2 gate
+
+`make test-multiuser` (root) runs `bin/sg-multiuser-check`, which encodes the
+five clauses of the S2 gate verbatim from the brief. `sg-image`'s
+`make multiuser-test` drives the same check against a booted image.
+
+**It is expected to fail — 0 of 5 today — and that is its job.** Do not "fix" it
+by weakening a clause. It is deliberately excluded from `make test` and from CI,
+because a known-red gate sitting in CI would mask real regressions.
+
+Each clause reports separately, and clauses that cannot yet be attempted say
+what blocks them rather than failing bare. Clause 1 goes further and
+*demonstrates* that the blocker is not file permissions: it builds a prefix
+owned by one test user, chmods it `a+rwX`, and shows Wine still refusing with
+`is not owned by you`.
+
+Background: [`stained-glass/docs/s2-wineserver-analysis.md`](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/s2-wineserver-analysis.md).
 
 ## Single-user assumptions
 
