@@ -7,6 +7,13 @@
 #
 # This is deliberately the same check the image boot gate runs in the guest.
 # If this passes and the boot gate fails, the fault is in the image, not here.
+#
+# That claim is only true if this harness stands up what the image does, and for
+# a while it did not: the image runs a machine-level wineserver before greetd
+# and this ran only the session. A bug that needs both -- two explorers sharing
+# one prefix -- passed here and failed in the guest, and cost several 25-minute
+# image rebuilds to find. So the machine-level server is started here too.
+# SG_TEST_MACHINE_SERVER=0 turns it off to isolate a session-only fault.
 set -eu
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -20,6 +27,9 @@ cleanup() {
     rc=$?
     if [ -n "${SESSION_PID:-}" ]; then
         kill "$SESSION_PID" 2>/dev/null || true
+    fi
+    if [ -n "${MACHINE_PID:-}" ]; then
+        kill "$MACHINE_PID" 2>/dev/null || true
     fi
     # The session user here is us, so this only ever reaps our own processes.
     WINEPREFIX="$SG_PREFIX" wineserver -k 2>/dev/null || true
@@ -65,6 +75,16 @@ echo "== initializing prefix (this takes a minute on first run)"
 
 trap cleanup EXIT INT TERM
 
+# The Windows system itself, before any login -- as the image does it. Two
+# explorers in one prefix is a real configuration, so the gate has to see it.
+if [ "${SG_TEST_MACHINE_SERVER:-1}" = "1" ]; then
+    echo "== starting the machine-level wineserver"
+    "$SG_BIN/sg-wineserver" >"$SG_LOG_DIR/machine.log" 2>&1 &
+    MACHINE_PID=$!
+    SG_SERVICES_TIMEOUT=60 "$SG_BIN/sg-services-start" >"$SG_LOG_DIR/services.log" 2>&1 \
+        || echo "   (services.exe did not report ready; continuing)"
+fi
+
 echo "== starting session (display path: $SG_DISPLAY_PATH)"
 "$SG_BIN/sg-session-start" >"$SG_LOG_DIR/session.log" 2>&1 &
 SESSION_PID=$!
@@ -79,6 +99,14 @@ if [ "$RC" -ne 0 ]; then
     echo
     echo "== session log =="
     sed 's/^/   /' "$SG_LOG_DIR/session.log" 2>/dev/null | tail -40
+    if [ -f "$SG_LOG_DIR/machine.log" ]; then
+        echo
+        echo "== machine-level server log =="
+        sed 's/^/   /' "$SG_LOG_DIR/machine.log" 2>/dev/null | tail -20
+    fi
+    echo
+    echo "== explorers running (more than one means the session shares with session 0) =="
+    pgrep -u "$(id -u)" -a explorer.exe 2>/dev/null | sed 's/^/   /' || echo "   (none)"
 fi
 
 echo

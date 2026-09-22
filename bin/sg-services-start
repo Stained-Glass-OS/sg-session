@@ -16,6 +16,12 @@ HOME="${HOME:-$SG_ROOT}"
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/stained-glass}"
 export HOME XDG_RUNTIME_DIR
 
+# Session 0; see the note in sg-wineserver. services.exe already puts the
+# services it launches on this station -- it just never put itself there,
+# because on Windows its parent does that for it.
+SG_WINSTATION='__wineservice_winstation\Default'
+export SG_WINSTATION
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this

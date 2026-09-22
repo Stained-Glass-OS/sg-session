@@ -32,6 +32,15 @@ export XDG_RUNTIME_DIR
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
+# Session 0. The Windows system runs on the non-interactive window station, as
+# it does on Windows, so Wine creates the desktop window for these processes
+# itself instead of starting an explorer for them. Without this the machine
+# gets a second shell that no one asked for, sharing a prefix and a wineserver
+# with the logged-in user's real one, and the taskbar ends up laid out for
+# whichever screen size won the race. See wine-sg patch 0007.
+SG_WINSTATION='__wineservice_winstation\Default'
+export SG_WINSTATION
+
 sg_log "starting the machine-level wineserver (prefix: $SG_PREFIX)"
 
 # -p with no argument means persistent forever: the server must not exit when

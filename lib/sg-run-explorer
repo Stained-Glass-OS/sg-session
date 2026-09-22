@@ -60,6 +60,11 @@ SG_DISPLAY_PATH=${SG_DISPLAY_PATH:-x11}
 SG_DESKTOP_GEOMETRY=$GEOM
 ENV
 
+# The shell is the interactive session and must be on WinSta0. Unset rather
+# than assume: this process may have inherited session 0's station from a
+# service manager that started the session.
+unset SG_WINSTATION
+
 sg_log "explorer starting: driver=$SG_DRIVER desktop=shell,$GEOM display=${DISPLAY:-none}"
 
 # Write the driver choice into the prefix registry rather than relying on an

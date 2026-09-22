@@ -122,6 +122,20 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
 - **The window checks are x11-only,** because cage exposes no toplevel
   enumeration protocol. `sg-session-check` fails loudly rather than skipping if
   pointed at the wayland path. That is intentional.
+- **The gate runs the machine-level wineserver too**, because the image does.
+  It did not until a bug that needs *two* explorers in one prefix passed here
+  and failed in the guest, costing several 25-minute image rebuilds.
+  `SG_TEST_MACHINE_SERVER=0` turns it off to isolate a session-only fault.
+- **Session 0 must not have a shell.** `sg-wineserver` and `sg-services-start`
+  set `SG_WINSTATION=__wineservice_winstation\Default`; `sg-run-explorer`
+  unsets it, because the interactive shell belongs on `WinSta0`. If
+  `pgrep -a explorer.exe` shows a bare `/desktop` next to the session's
+  `/desktop=shell,WxH`, that is the bug. See wine-sg patch 0007.
+- **`\\` in a POSIX single-quoted string is two backslashes.** Writing
+  `'...\\Default'` produced a desktop named `\Default`, which cannot be
+  created, and Wine answered by starting an explorer that did the same thing
+  again. Wine now refuses to start a shell for session 0, but the quoting is
+  still worth getting right.
 - **Scripts are POSIX `sh`, not bash.** They run early, before anything is
   guaranteed present. `make lint` enforces it.
 - **`SG_*` variables must be exported** — the session crosses a process boundary
