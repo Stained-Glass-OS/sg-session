@@ -45,6 +45,25 @@ environment variables — `SG_LIB`, `SG_BIN`, `SG_ROOT`, `SG_PREFIX`, `SG_STATE`
 `SG_LOG_DIR`. That overridability exists so the gate can run against a staged
 tree; keep it working.
 
+## The shared system prefix
+
+`sg-prefix-init` marks the prefix with `.sg-system-prefix`, which puts `wine-sg`
+into shared mode: one wineserver for several Unix users, a SID and an HKCU hive
+each. On a stock Wine the marker is simply ignored, so this repo still works
+against a distribution Wine — without the sharing.
+
+**`SG_WINE_GROUP` (default `sgwine`) is the access policy.** `wine-sg` decides
+who may connect to a shared wineserver by membership of the group owning its
+directory, which it takes from the prefix. Adding a Unix user to that group is
+how you give them a Windows session; there is no separate policy file.
+
+`sg-prefix-init` also creates `HKLM\Software\Policies` as the prefix owner, so
+it carries an administrator-owned descriptor. That is deliberately *policy*
+rather than Wine behaviour: which branches a machine protects is the operating
+system's business, the same way Windows ships those ACLs in its image.
+
+Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
+
 ## Things that will bite you
 
 - **Wine's driver must be pinned.** Wine prefers `winewayland` whenever a
@@ -69,15 +88,19 @@ tree; keep it working.
 five clauses of the S2 gate verbatim from the brief. `sg-image`'s
 `make multiuser-test` drives the same check against a booted image.
 
-**It is expected to fail — 0 of 5 today — and that is its job.** Do not "fix" it
+**It is expected to fail — 3 of 5 today — and that is its job.** Clauses 1, 2
+and 4 pass (two users on one prefix, shared HKLM, isolated HKCU each) on a Wine
+with `wine-sg`'s `patches/sg` applied. Do not "fix" it
 by weakening a clause. It is deliberately excluded from `make test` and from CI,
 because a known-red gate sitting in CI would mask real regressions.
 
 Each clause reports separately, and clauses that cannot yet be attempted say
-what blocks them rather than failing bare. Clause 1 goes further and
-*demonstrates* that the blocker is not file permissions: it builds a prefix
-owned by one test user, chmods it `a+rwX`, and shows Wine still refusing with
-`is not owned by you`.
+what blocks them rather than failing bare.
+
+**Run it against a settled prefix.** The gate starts processes as two users; run
+straight after `sg-prefix-init` it can race that prefix's wineserver still
+shutting down, and report clause 1 failing for a reason that has nothing to do
+with the code.
 
 Background: [`stained-glass/docs/s2-wineserver-analysis.md`](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/s2-wineserver-analysis.md).
 

@@ -3,6 +3,7 @@ set -e
 
 SG_ROOT=/var/lib/stained-glass
 SG_USER=sguser
+SG_WINE_GROUP=sgwine
 
 case "$1" in
     configure)
@@ -14,11 +15,21 @@ case "$1" in
         # namespace, which is exactly where image builders like mkosi run.
         # The directories are created and owned by tmpfiles.d instead, at boot,
         # where the uid actually exists and the chown is legal.
+        # Membership of this group is what admits a Unix user to the shared
+        # system prefix: wine-sg decides who may connect to the wineserver by
+        # the group owning its directory, which it takes from the prefix. So
+        # adding someone here is how you give them a Windows session.
+        if ! getent group "$SG_WINE_GROUP" >/dev/null; then
+            addgroup --system "$SG_WINE_GROUP"
+        fi
+
         if ! getent passwd "$SG_USER" >/dev/null; then
             adduser --system --group --no-create-home --home "$SG_ROOT" \
                     --gecos "Stained Glass session user" \
                     --disabled-password "$SG_USER"
         fi
+        adduser "$SG_USER" "$SG_WINE_GROUP" >/dev/null 2>&1 || true
+
         # Seat and input access for the compositor.
         for grp in video input render; do
             getent group "$grp" >/dev/null && adduser "$SG_USER" "$grp" >/dev/null 2>&1 || true

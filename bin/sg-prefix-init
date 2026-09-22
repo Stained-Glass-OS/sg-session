@@ -21,18 +21,54 @@ fi
 sg_log "initializing system prefix at $SG_PREFIX (arch=$WINEARCH)"
 mkdir -p "$SG_PREFIX" "$SG_STATE" "$SG_LOG_DIR"
 
+# Mark the prefix as shared between Unix users before wineboot runs, so the
+# server comes up in that mode from the start rather than being converted
+# afterwards. On a Wine without wine-sg's patches the marker is inert.
+if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
+    : > "$SG_PREFIX/.sg-system-prefix"
+    sg_log "marked as a system prefix (shared between users)"
+fi
+
 # wineboot --init builds the prefix. It forks a wineserver that lingers for a
 # few seconds after; wineserver -w waits for it so the build step cannot race
 # against a half-written registry.
 wineboot --init
 wineserver -w
 
-# The prefix is machine state, not user state. Phase 0 has a single session
-# user, so it owns the prefix outright.
-# MULTIUSER-DEBT: D1 — a real deployment needs HKLM shared read-only and a
-# per-user HKCU, which this ownership model cannot express.
+# --- protect the policy branch -------------------------------------------
+# Creating HKLM\Software\Policies here, as the prefix's owner, is what makes it
+# administrator-owned. wine-sg gives a new key a descriptor from the creating
+# process's token, so a key made by an administrator gets the HKLM arrangement
+# — administrators write, everyone else reads — and a later attempt by an
+# ordinary user to write beneath it is refused.
+#
+# This is deliberately policy rather than Wine behaviour: which branches a
+# machine protects is the operating system's business, the same way Windows
+# ships those ACLs in its image rather than inventing them in the kernel.
+if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
+    sg_log "creating protected policy branches"
+    for key in \
+        'HKLM\Software\Policies' \
+        'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies'
+    do
+        wine reg add "$key" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $key"
+    done
+    wineserver -w
+fi
+
+# The prefix is machine state, not user state.
+# MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the
+# hives are separated per user and HKLM is administrator-writable, but the
+# prefix is still owned by one Unix user who is implicitly its administrator.
 if getent passwd "$SG_USER" >/dev/null 2>&1; then
-    chown -R "$SG_USER:$SG_USER" "$SG_ROOT" "$SG_LOG_DIR"
+    # Group-owned so other users can be admitted by adding them to
+    # SG_WINE_GROUP; setgid so anything created inside keeps that group.
+    if getent group "$SG_WINE_GROUP" >/dev/null 2>&1; then
+        chown -R "$SG_USER:$SG_WINE_GROUP" "$SG_ROOT" "$SG_LOG_DIR"
+        chmod 2770 "$SG_ROOT" "$SG_PREFIX"
+    else
+        chown -R "$SG_USER:$SG_USER" "$SG_ROOT" "$SG_LOG_DIR"
+    fi
 fi
 
 : > "$STAMP"

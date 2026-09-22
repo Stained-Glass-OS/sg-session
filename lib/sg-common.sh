@@ -10,6 +10,17 @@ SG_LOG_DIR="${SG_LOG_DIR:-/var/log/stained-glass}"
 # MULTIUSER-DEBT: one prefix, one owner. See docs/multiuser-debt.md (D1).
 SG_USER="${SG_USER:-sguser}"
 
+# The Unix group whose members may use the system prefix. wine-sg decides who
+# may connect to a shared wineserver by membership of the group owning its
+# server directory, which it takes from the prefix -- so this group *is* the
+# access policy, expressed with ordinary Unix tools.
+SG_WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
+
+# Whether to mark the prefix as shared between Unix users (wine-sg's
+# .sg-system-prefix). Requires a Wine with patches/sg applied; on a stock Wine
+# the marker is simply ignored.
+SG_SYSTEM_PREFIX="${SG_SYSTEM_PREFIX:-1}"
+
 # Virtual desktop geometry. The compositor gives us a fixed-size output in
 # Phase 0, so the Wine desktop matches it exactly and nothing has to resize.
 SG_DESKTOP_W="${SG_DESKTOP_W:-1280}"
@@ -32,6 +43,7 @@ SG_WINE_DIR="${SG_WINE_DIR-/opt/wine-sg}"
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
 export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER
 export SG_DESKTOP_W SG_DESKTOP_H SG_DISPLAY_PATH SG_WINE_DIR
+export SG_WINE_GROUP SG_SYSTEM_PREFIX
 
 sg_log() { echo "[sg-session] $*" >&2; }
 sg_die() { echo "[sg-session] FATAL: $*" >&2; exit 1; }
