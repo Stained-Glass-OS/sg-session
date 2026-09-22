@@ -1,16 +1,13 @@
-# greetd configuration for Phase 0.
+# greetd: the Windows-style login screen (ADR 0008).
 #
-# Autologin is a placeholder for sg-greeter. It exists so the boot gate can run
-# unattended; it is not a login story and must not ship to a real fleet.
-# MULTIUSER-DEBT: D2 — no authentication, one hardcoded user.
+# greetd runs sg-login-ui as `sggreet`; the greeter collects a user name and
+# password, greetd authenticates them with PAM, and only then starts
+# /usr/bin/sg-session-start as that user. There is no autologin: the Phase 0
+# placeholder that logged `sguser` in unattended is gone (multiuser debt D2).
 
 [terminal]
 vt = 1
 
 [default_session]
-command = "/usr/bin/sg-session-start"
-user = "sguser"
-
-[initial_session]
-command = "/usr/bin/sg-session-start"
-user = "sguser"
+command = "/usr/lib/stained-glass/sg-login-ui"
+user = "sggreet"

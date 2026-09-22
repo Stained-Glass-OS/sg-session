@@ -1,0 +1,20 @@
+#!/bin/sh
+# The login screen. greetd runs this as `sggreet` (config/greetd-config.toml).
+#
+# sg-compositor hosts sg-greet-bridge, which runs the Windows-style greeter
+# and relays what it collects to greetd over GREETD_SOCK; PAM decides (ADR
+# 0008). On success greetd itself starts the user's session with the command
+# given here -- the greeter cannot choose it.
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+unset SG_WINSTATION
+
+LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+# Wine prefers its Wayland driver whenever WAYLAND_DISPLAY is set, and the
+# compositor always sets it; the greeter is drawn through XWayland like the
+# desktop is (ADR 0003), so the greeter command drops it.
+exec "$SG_COMPOSITOR" -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
+    "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-greeter64.exe"

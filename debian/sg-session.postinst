@@ -49,10 +49,29 @@ case "$1" in
         fi
         adduser "$SG_USER" "$SG_WINE_GROUP" >/dev/null 2>&1 || true
 
-        # Seat and input access for the compositor.
-        for grp in video input render; do
-            getent group "$grp" >/dev/null && adduser "$SG_USER" "$grp" >/dev/null 2>&1 || true
+        # NOT video or input. Membership of `input` lets any program the user
+        # runs read /dev/input/event* -- raw keystrokes straight from the
+        # kernel, including the password typed at the lock screen, going round
+        # the compositor and defeating ADR 0009 entirely. The compositor does
+        # not need it: under logind (greetd's PAM session) it is handed its
+        # devices for the active session only. Existing installs are corrected
+        # too, since the first packages did add the user to both. `render`
+        # stays: GPU render nodes carry no input.
+        for grp in video input; do
+            getent group "$grp" >/dev/null && deluser "$SG_USER" "$grp" >/dev/null 2>&1 || true
         done
+        getent group render >/dev/null && adduser "$SG_USER" render >/dev/null 2>&1 || true
+
+        # The login screen's account. It runs the Windows-style greeter in the
+        # shared prefix (with its own hive) and nothing else; no password, no
+        # device groups, no home.
+        if ! getent passwd sggreet >/dev/null; then
+            adduser --system --group --no-create-home --home "$SG_ROOT" \
+                    --gecos "Stained Glass login screen" \
+                    --disabled-password sggreet
+        fi
+        adduser sggreet "$SG_WINE_GROUP" >/dev/null 2>&1 || true
+        getent group render >/dev/null && adduser sggreet render >/dev/null 2>&1 || true
         ;;
 esac
 

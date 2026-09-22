@@ -18,7 +18,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui
+LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
 
@@ -46,13 +46,23 @@ install: d3d-probe greeter
 	    install -m 0755 build/sg-greet-bridge build/greetd-stub \
 	        greeter/test-greeter.sh $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The lock service and its helpers. sg-rdp-pamcheck is the PAM check the
+	@# lock service's root monitor runs; it has no setuid bit and is only of
+	@# use to root.
+	@if [ -f build/sg-lockd ]; then \
+	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
+	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	install -d $(DESTDIR)/etc/pam.d
+	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote $(DESTDIR)/etc/pam.d/
 	@if [ -f build/sg-greeter64.exe ]; then \
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
-	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service $(UNITDIR)
+	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service \
+	    systemd/sg-lockd.service $(UNITDIR)
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 
@@ -129,6 +139,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
 	@# The gate looks for its fixtures beside the bridge, because in the image
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/

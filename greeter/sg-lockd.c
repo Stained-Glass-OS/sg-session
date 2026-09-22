@@ -34,6 +34,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <dirent.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -41,7 +42,8 @@
 
 static FILE *g_log;
 static int g_monitor = -1;
-static const char *g_control, *g_ui_cmd;
+static const char *g_control, *g_ui_cmd, *g_seat_dir;
+static char g_control_buf[256], g_priv_buf[256];
 
 static void logmsg( const char *fmt, ... )
 {
@@ -163,6 +165,49 @@ static int control_command( const char *cmd, char *reply, size_t max )
     return 0;
 }
 
+/* Find the session on this seat: a directory named by uid holding a control
+ * socket whose compositor -- by SO_PEERCRED -- really runs as that uid. Anyone
+ * in sgwine can make a directory there, so the name alone proves nothing; a
+ * directory named for someone else, served by a different uid, is skipped.
+ * Sets g_control, and SG_LOCK_PRIV for the lock UI. */
+static int find_session( void )
+{
+    DIR *d = opendir( g_seat_dir );
+    struct dirent *e;
+    int found = 0;
+
+    if (!d) return 0;
+    while (!found && (e = readdir( d )))
+    {
+        char *end;
+        long want = strtol( e->d_name, &end, 10 );
+        struct ucred cred;
+        socklen_t clen = sizeof(cred);
+        int fd;
+
+        if (!e->d_name[0] || *end || want < 0) continue;
+        /* A truncated path could name a different socket: skip, never trim. */
+        if ((size_t)snprintf( g_control_buf, sizeof(g_control_buf), "%s/%s/control.sock",
+                              g_seat_dir, e->d_name ) >= sizeof(g_control_buf))
+            continue;
+        g_control = g_control_buf;
+        if ((fd = control_connect()) < 0) continue;
+        if (!getsockopt( fd, SOL_SOCKET, SO_PEERCRED, &cred, &clen ) && (long)cred.uid == want)
+        {
+            if ((size_t)snprintf( g_priv_buf, sizeof(g_priv_buf), "%s/%s/priv.sock",
+                                  g_seat_dir, e->d_name ) < sizeof(g_priv_buf))
+            {
+                setenv( "SG_LOCK_PRIV", g_priv_buf, 1 );
+                found = 1;
+            }
+        }
+        else logmsg( "ignoring %s: not served by uid %ld", g_control_buf, want );
+        close( fd );
+    }
+    closedir( d );
+    return found;
+}
+
 /* ---- the lock UI ------------------------------------------------------- */
 
 struct ui { pid_t pid; int to, from; };
@@ -280,8 +325,12 @@ int main( void )
     int sv[2];
     pid_t mon;
 
+    /* A fixed control socket (the gate), or a seat directory to scan. */
     g_control = getenv( "SG_LOCK_CONTROL" );
+    g_seat_dir = getenv( "SG_SEAT_DIR" );
+    if (!g_seat_dir) g_seat_dir = "/run/stained-glass/seat0";
     g_ui_cmd = getenv( "SG_LOCK_UI" );
+    if (!g_ui_cmd) g_ui_cmd = "/usr/lib/stained-glass/sg-lock-ui";
     if (!helper) helper = "/usr/libexec/stained-glass/sg-rdp-pamcheck";
     /* Its own PAM service, so an administrator can give unlocking a different
      * policy from remote login. The helper reads this. */
@@ -289,7 +338,7 @@ int main( void )
     if (!account) account = "sgsystem";
     g_log = logpath ? fopen( logpath, "a" ) : stderr;
     if (!g_log) g_log = stderr;
-    if (!g_control || !g_ui_cmd) { logmsg( "SG_LOCK_CONTROL and SG_LOCK_UI are required" ); return 2; }
+    int scan = !g_control;
     signal( SIGPIPE, SIG_IGN );
 
     if (socketpair( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv ) < 0 || (mon = fork()) < 0) return 1;
@@ -307,7 +356,10 @@ int main( void )
         struct passwd *pw;
         char user[MAXFIELD], ev[64];
         struct ui ui = { 0 };
-        int w = control_connect();
+        int w;
+
+        if (scan && !find_session()) { sleep( 1 ); continue; }
+        w = control_connect();
 
         if (w < 0) { sleep( 1 ); continue; }
         /* The compositor runs as the session user: whose session this is. */

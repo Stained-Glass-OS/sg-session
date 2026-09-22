@@ -59,6 +59,14 @@ if [ -z "${SG_COMPOSITOR:-}" ]; then
 fi
 export SG_COMPOSITOR
 
+# Where a session's compositor puts its privileged and control sockets: one
+# directory per session user, named by uid, under a seat directory that
+# tmpfiles creates 1770 root:sgwine. Per-uid because the sticky bit would stop
+# a later user removing an earlier user's stale socket, and the compositor
+# refuses to start without its sockets. sg-lockd trusts a directory only if
+# its name matches the compositor's peer uid.
+SG_SEAT_DIR="${SG_SEAT_DIR:-/run/stained-glass/seat0}"
+
 # Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
 # as PE DLLs. Absent on a machine that did not install them, which is a
 # supported configuration: the prefix simply keeps Wine's own D3D.

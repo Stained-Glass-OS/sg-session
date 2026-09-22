@@ -1,0 +1,21 @@
+[Unit]
+Description=Stained Glass lock screen service
+Documentation=https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0009-credential-ui-security-model.md
+# The lock screen is drawn by Wine in the shared prefix, as the machine account,
+# so it needs the machine-level wineserver running.
+After=sg-wineserver.service
+Wants=sg-wineserver.service
+
+[Service]
+Type=exec
+# Starts as root only to fork the PAM monitor; everything else, including the
+# Wine that draws the lock screen, runs as the machine account (sgsystem).
+ExecStart=/usr/libexec/stained-glass/sg-lockd
+Environment=SG_LOCKD_LOG=/var/log/stained-glass/lockd.log
+Restart=always
+RestartSec=1
+# If this service is down the machine does not unlock -- the compositor shows
+# nothing but privileged clients -- so it must come back, and quickly.
+
+[Install]
+WantedBy=multi-user.target

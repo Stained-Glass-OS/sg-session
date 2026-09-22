@@ -36,7 +36,25 @@ case "$SG_DISPLAY_PATH" in
         # gives Wine an X server, and winex11's virtual desktop draws the shell
         # and taskbar into one window sized to the output. See ADR 0003.
         sg_log "compositor: $SG_COMPOSITOR"
-        exec "$SG_COMPOSITOR" -- "$SG_LIB/sg-run-explorer" "$GEOM"
+        # sg-compositor gets its lock and privileged sockets (ADR 0009/0011);
+        # cage has no such options. Without a writable seat directory the
+        # session still runs, just without lock support -- and says so.
+        set --
+        if [ "$(basename "$SG_COMPOSITOR")" = sg-compositor ]; then
+            _dir="$SG_SEAT_DIR/$(id -u)"
+            { mkdir -m 0755 "$_dir" 2>/dev/null || [ -d "$_dir" ]; }
+            if [ -w "$_dir" ]; then
+                SG_LOCK_PRIV="$_dir/priv.sock"
+                SG_LOCK_CONTROL="$_dir/control.sock"
+                export SG_LOCK_PRIV SG_LOCK_CONTROL
+                _uid=$(id -u "$SG_SYSTEM_USER" 2>/dev/null || true)
+                set -- -L "$SG_LOCK_PRIV" -C "$SG_LOCK_CONTROL"
+                [ -n "$_uid" ] && set -- "$@" -U "$_uid"
+            else
+                sg_log "WARNING: no writable $SG_SEAT_DIR: this session cannot be locked"
+            fi
+        fi
+        exec "$SG_COMPOSITOR" "$@" -- "$SG_LIB/sg-run-explorer" "$GEOM"
         ;;
     wayland)
         WINE_DISPLAY_DRIVER=wayland

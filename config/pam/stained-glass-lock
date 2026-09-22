@@ -1,0 +1,6 @@
+# PAM policy for unlocking a Stained Glass session (sg-lockd, ADR 0009).
+#
+# The same stacks as a console login: the lock screen must face the same
+# password rules and lockout (pam_faillock, if configured) as signing in.
+@include common-auth
+@include common-account
