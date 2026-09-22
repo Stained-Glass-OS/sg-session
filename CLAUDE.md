@@ -197,11 +197,24 @@ character unique to it appears). It has a teeth check first — the adversary mu
 capture what is typed on its *own* display — because a gate that can catch
 nothing proves nothing.
 
-**Status, stated plainly:** the three properties above are proven by direct
-experiment. The packaged gate reaches its logic but its `&`-spawned Xvfb
-children keep the output pipe open under some harnesses; finishing that
-process-group handling, and adding a case that runs the adversary as a
-capture/inject client once `sg-compositor` exists, is open work.
+**`make test-security` is green, and has been seen to fail.** A mutant that
+sends the lock secret to the user's display fails with the leaked characters
+named, so the pass means something. Adding a case that runs the adversary as a
+capture/inject client is open work until `sg-compositor` exists.
+
+Three things that made this gate report nonsense before it worked:
+
+- **Its cleanup used `pkill -f notepad.exe`**, which matches every process on
+  the machine whose command line contains that string — including the shell
+  that launched the gate, so it killed its own caller and "printed nothing",
+  and in the field it would kill a user's real Notepad. Cleanup is
+  `wineserver -k` on the test prefix and nothing else.
+- **The adversary writes `\r\n`**, being a Windows program in text mode, so a
+  `$`-anchored grep matched nothing and every capture read as empty — which is
+  indistinguishable from "the adversary caught nothing". Strip `\r` first.
+- **Fixed sleeps lose races with Wine's input processing** under load. The
+  gate waits until the control secret is *seen* captured before running the
+  real test.
 
 Remote access ([ADR 0010](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0010-remote-access-and-the-lock-screen.md))
 funnels both console-shadow and pre-authenticated RDP through the same bridge,

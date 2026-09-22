@@ -29,7 +29,11 @@ XU="" ; XL=""
 
 # shellcheck disable=SC2317  # invoked via trap
 cleanup() {
-    pkill -9 -f 'sg-keylog-adversary|notepad.exe' 2>/dev/null || true
+    # Scoped to the test prefix. `pkill -f` on a program name would kill every
+    # matching process on the machine -- a user's real Notepad, or the shell
+    # that launched this gate if its command line mentions those names (which
+    # is how this gate once killed its own caller and "printed nothing").
+    WINEPREFIX="$SG_PREFIX" "$SG_WINE_DIR/bin/wineserver" -k 2>/dev/null || true
     [ -n "$XU" ] && kill "$XU" 2>/dev/null
     [ -n "$XL" ] && kill "$XL" 2>/dev/null
     [ -n "${_nu:-}" ] && rm -f "/tmp/.X${_nu}-lock" 2>/dev/null
@@ -49,7 +53,11 @@ for t in Xvfb xdotool; do command -v "$t" >/dev/null 2>&1 || { echo "SKIP: $t no
 # Distinct-character analysis: the leak of interest is the *set* of characters,
 # since GetAsyncKeyState loses order and repeats. A secret is "present" if any
 # character unique to it (not in the control secret) shows up.
-captured() { grep -iE 'HOOK|ASYNC|KBSTATE' "$1" 2>/dev/null | grep -oiE ' [a-z0-9]$' | tr -d ' \n' | tr 'A-Z' 'a-z'; }
+# The adversary is a Windows program writing in text mode, so its lines end in
+# \r\n; strip the \r or the end-of-line anchor below never matches and every
+# capture reads as empty -- which looked exactly like "the adversary caught
+# nothing".
+captured() { tr -d '\r' < "$1" 2>/dev/null | grep -iE 'HOOK|ASYNC|KBSTATE' | grep -oiE ' [a-z0-9]$' | tr -d ' \n' | tr 'A-Z' 'a-z'; }
 
 USER_SECRET=teethcontrol7
 LOCK_SECRET=lockphrase49          # unique chars vs control: p,h,a,4,9 ... choose distinct
@@ -84,17 +92,30 @@ WID=$(timeout 15 env DISPLAY="$DL_USER" xdotool search --name Notepad 2>/dev/nul
 [ -n "$WID" ] && timeout 15 env DISPLAY="$DL_USER" xdotool windowactivate "$WID" 2>/dev/null
 sleep 1
 
-# Control: the adversary must catch what is typed on its own display, or a clean
-# isolation result means only that the setup is broken.
-timeout 15 env DISPLAY="$DL_USER" xdotool type --delay 70 "$USER_SECRET"; sleep 2
-# The real test: type into the lock display.
-timeout 15 env DISPLAY="$DL_LOCK" xdotool type --delay 70 "$LOCK_SECRET"; sleep 2
-
+# Control first, and wait for it: the adversary must be *seen* catching what is
+# typed on its own display before the real test runs. Wine only updates key
+# state when one of its threads pumps the X events, which under load takes
+# longer than any fixed sleep -- a fixed sleep here once turned a working
+# adversary into a "setup broken" failure.
+timeout 15 env DISPLAY="$DL_USER" xdotool type --delay 70 "$USER_SECRET"
+_w=0
+until case "$(captured "$LOG")" in *teethcontrol7*) true ;; *) false ;; esac; do
+    _w=$((_w + 1))
+    if [ "$_w" -ge 40 ]; then break; fi
+    sleep 0.5
+done
 cap=$(captured "$LOG")
 case "$cap" in
-    *teethcontrol*|*teeth*) pass "adversary captures its own display (the gate has teeth)" ;;
-    *) fail "adversary caught nothing on its own display -- setup broken, result meaningless: [$cap]" ;;
+    *teethcontrol7*) pass "adversary captures its own display (the gate has teeth)" ;;
+    *) fail "adversary caught nothing on its own display -- setup broken, result meaningless: [$cap]"
+       echo; echo "RESULT: FAIL"; exit 1 ;;
 esac
+
+# The real test: type into the lock display, then give any leak the same
+# generous window the control needed before looking.
+timeout 15 env DISPLAY="$DL_LOCK" xdotool type --delay 70 "$LOCK_SECRET"
+sleep 10
+cap=$(captured "$LOG")
 # unique lock chars: p,a,s,4,9  (none in teethcontrol7)
 _leak=""
 for c in p a s 4 9; do case "$cap" in *"$c"*) _leak="$_leak$c";; esac; done
