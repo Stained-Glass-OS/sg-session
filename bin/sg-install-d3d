@@ -1,0 +1,72 @@
+#!/bin/sh
+# Install the Direct3D translation layers into the system prefix.
+#
+# DXVK (D3D8/9/10/11) and VKD3D-Proton (D3D12) ship **PE** DLLs, which is the
+# shape new WoW64 needs: they are copied into the prefix like any Windows DLL
+# and selected with a DLL override. Debian's dxvk packages ship `.dll.so` ELF
+# builtins for an old-WoW64 Wine instead, which is why they are not used here.
+# See docs/packages.md in sg-image and ADR 0005.
+#
+# Idempotent and version-stamped: re-running is cheap, and bumping the payload
+# reinstalls.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+[ -d "$SG_D3D_DIR" ] || { sg_log "no D3D payload at $SG_D3D_DIR -- keeping Wine's own D3D"; exit 0; }
+[ -d "$SG_PREFIX/drive_c/windows/system32" ] || sg_die "prefix not initialized at $SG_PREFIX"
+
+# The stamp carries the payload's version, so a rebuilt image reinstalls
+# without needing the prefix thrown away.
+VERSION=$(cat "$SG_D3D_DIR/VERSION" 2>/dev/null || echo unknown)
+STAMP="$SG_PREFIX/.sg-d3d-installed"
+if [ "$(cat "$STAMP" 2>/dev/null || true)" = "$VERSION" ]; then
+    sg_log "D3D layers already installed ($VERSION)"
+    exit 0
+fi
+
+SYS32="$SG_PREFIX/drive_c/windows/system32"
+SYSWOW="$SG_PREFIX/drive_c/windows/syswow64"
+
+overrides=""
+install_tree() {
+    src=$1 dest=$2 arch=$3
+    [ -d "$src" ] || return 0
+    [ -d "$dest" ] || return 0
+    for dll in "$src"/*.dll; do
+        [ -e "$dll" ] || continue
+        name=$(basename "$dll" .dll)
+        cp -f "$dll" "$dest/$(basename "$dll")"
+        case " $overrides " in *" $name "*) ;; *) overrides="$overrides $name" ;; esac
+    done
+    sg_log "installed $arch DLLs from $(basename "$(dirname "$src")")/$(basename "$src")"
+}
+
+# 64-bit goes to system32 and 32-bit to syswow64 -- the Windows layout, which
+# is the opposite of what the directory names suggest.
+for pkg in "$SG_D3D_DIR"/*/; do
+    [ -d "$pkg" ] || continue
+    install_tree "${pkg}x64" "$SYS32"   64-bit
+    # DXVK calls it x32 and VKD3D-Proton calls it x86; both mean i386.
+    install_tree "${pkg}x32" "$SYSWOW"  32-bit
+    install_tree "${pkg}x86" "$SYSWOW"  32-bit
+done
+
+[ -n "$overrides" ] || { sg_log "no DLLs found under $SG_D3D_DIR"; exit 0; }
+
+# Machine-wide, not per-user: these are a property of the installation, and
+# HKLM is writable here because sg-prefix-init runs as the prefix owner, whom
+# wine-sg maps to SYSTEM. A per-user override would leave every other user on
+# Wine's own D3D.
+for name in $overrides; do
+    wine reg add 'HKLM\Software\Wine\DllOverrides' /v "$name" /t REG_SZ /d native /f >/dev/null 2>&1 \
+        || sg_log "WARNING: could not set override for $name"
+done
+wineserver -w
+
+sg_log "D3D overrides set to native:$overrides"
+printf '%s\n' "$VERSION" > "$STAMP"
+sg_log "D3D layers installed ($VERSION)"

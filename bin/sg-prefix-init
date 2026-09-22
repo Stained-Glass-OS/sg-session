@@ -64,6 +64,15 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
     wineserver -w
 fi
 
+# Direct3D translation layers, if the image staged them. Deliberately before
+# the ownership fixup below, so the DLLs it copies in are chowned with the rest
+# of the prefix rather than staying root-owned inside a prefix nobody else owns.
+if command -v sg-install-d3d >/dev/null 2>&1; then
+    sg-install-d3d || sg_log "WARNING: D3D install failed; continuing without it"
+elif [ -x "${SG_BIN:-/usr/bin}/sg-install-d3d" ]; then
+    "${SG_BIN:-/usr/bin}/sg-install-d3d" || sg_log "WARNING: D3D install failed; continuing without it"
+fi
+
 # The prefix is machine state, not user state.
 # MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the
 # hives are separated per user and HKLM is administrator-writable, but the

@@ -49,6 +49,11 @@ SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 # distribution Wine still works. Note that a distribution Wine cannot run
 # 32-bit Windows binaries without i386 multiarch.
 SG_WINE_DIR="${SG_WINE_DIR-/opt/wine-sg}"
+# Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
+# as PE DLLs. Absent on a machine that did not install them, which is a
+# supported configuration: the prefix simply keeps Wine's own D3D.
+SG_D3D_DIR="${SG_D3D_DIR:-/opt/sg-d3d}"
+
 
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.

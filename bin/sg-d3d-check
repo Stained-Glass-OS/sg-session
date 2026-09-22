@@ -1,0 +1,122 @@
+#!/bin/sh
+# Is Direct3D actually translated to Vulkan in this prefix?
+#
+# What this proves: the DXVK and VKD3D-Proton DLLs are installed, are the right
+# architecture for the directory they sit in, are selected by a DLL override,
+# and have a Vulkan driver underneath them to talk to.
+#
+# What it does NOT prove: that a game renders correctly. That needs real
+# applications on real hardware, and this gate deliberately does not claim it.
+# It is here to catch the failures that are cheap to catch -- a missing payload,
+# a 32-bit DLL in system32, an override that never got written, no Vulkan ICD.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+RC=0
+pass() { echo "PASS  $*"; }
+info() { echo "info  $*"; }
+fail() { echo "FAIL  $*"; RC=1; }
+
+SYS32="$SG_PREFIX/drive_c/windows/system32"
+SYSWOW="$SG_PREFIX/drive_c/windows/syswow64"
+
+# Read the PE machine field directly: file(1) is not in the image, and this is
+# the same trick sg-session-check uses.
+pe_machine() {
+    _off=$(od -An -tu4 -j60 -N4 "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$_off" ] || return 1
+    od -An -tx2 -j$((_off + 4)) -N2 "$1" 2>/dev/null | tr -d ' '
+}
+
+# D3D12 comes from VKD3D-Proton, the rest from DXVK. d3d8 is optional: DXVK
+# ships it, but a build without it is not a failure.
+REQUIRED_64="d3d12 d3d12core d3d11 d3d10core d3d9 dxgi"
+REQUIRED_32="$REQUIRED_64"
+
+check_arch() {
+    _dir=$1 _want=$2 _label=$3 _names=$4
+    for _n in $_names; do
+        _f="$_dir/$_n.dll"
+        if [ ! -f "$_f" ]; then
+            fail "$_label: $_n.dll is missing"
+            continue
+        fi
+        _m=$(pe_machine "$_f" || echo "")
+        case "$_m" in
+            "$_want") pass "$_label: $_n.dll is $_label ($_m)" ;;
+            "")       fail "$_label: $_n.dll is not a PE file" ;;
+            *)        fail "$_label: $_n.dll has machine $_m, expected $_want" ;;
+        esac
+    done
+}
+
+if [ ! -d "$SG_D3D_DIR" ]; then
+    info "no D3D payload at $SG_D3D_DIR -- nothing to check"
+    echo; echo "RESULT: SKIP"
+    exit 77
+fi
+info "payload version: $(cat "$SG_D3D_DIR/VERSION" 2>/dev/null || echo unknown)"
+
+# 8664 = x86-64, 014c = i386. 64-bit belongs in system32 and 32-bit in
+# syswow64, which is the Windows layout and not the intuitive one.
+check_arch "$SYS32"  8664 64-bit "$REQUIRED_64"
+check_arch "$SYSWOW" 014c 32-bit "$REQUIRED_32"
+
+# The DLLs are inert without the override: Wine would load its own builtins and
+# the installation would look complete while doing nothing.
+ov=$(wine reg query 'HKLM\Software\Wine\DllOverrides' 2>/dev/null || true)
+for n in $REQUIRED_64; do
+    if printf '%s' "$ov" | grep -qi "[[:space:]]${n}[[:space:]]"; then
+        pass "override set: $n"
+    else
+        fail "no DllOverrides entry for $n -- Wine will use its own builtin"
+    fi
+done
+
+# Something has to implement Vulkan underneath, or every one of these DLLs
+# fails at device creation. lavapipe counts: it is software, and slow, but it
+# is a real ICD and proves the stack is wired up.
+if command -v vulkaninfo >/dev/null 2>&1; then
+    if vulkaninfo --summary >/dev/null 2>&1; then
+        pass "Vulkan is available: $(vulkaninfo --summary 2>/dev/null | grep -i deviceName | head -1 | sed 's/.*= *//')"
+    else
+        fail "vulkaninfo found no working Vulkan device"
+    fi
+else
+    info "vulkaninfo not installed -- cannot confirm a Vulkan driver"
+fi
+
+# The real test: create a device on each API and see which implementation
+# answers. Everything above is necessary and not sufficient -- Wine falls back
+# to its own builtins silently, and an installation that is doing nothing looks
+# exactly like one that works.
+PROBE_DIR="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+probe_one() {
+    _arch=$1 _exe="$PROBE_DIR/d3d-probe$1.exe"
+    if [ ! -f "$_exe" ]; then
+        info "${_arch}-bit probe not built -- cannot confirm a device is created"
+        return 0
+    fi
+    _out=$(wine "$_exe" 2>/dev/null || true)
+    if printf '%s' "$_out" | grep -q 'D3D11: OK'; then
+        pass "${_arch}-bit D3D11 device created: $(printf '%s' "$_out" | grep 'D3D11:' | head -1)"
+    else
+        fail "${_arch}-bit D3D11 device creation failed: $(printf '%s' "$_out" | grep 'D3D11:' | head -1)"
+    fi
+    if printf '%s' "$_out" | grep -q 'D3D12: OK'; then
+        pass "${_arch}-bit D3D12 device created"
+    else
+        fail "${_arch}-bit D3D12 device creation failed: $(printf '%s' "$_out" | grep 'D3D12:' | head -1)"
+    fi
+    info "$(printf '%s' "$_out" | grep -i '^adapter:' | head -1)"
+}
+probe_one 64
+probe_one 32
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

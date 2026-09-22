@@ -15,7 +15,8 @@ TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
 BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
-               bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start
+               bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
+               bin/sg-install-d3d bin/sg-d3d-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -26,6 +27,14 @@ all:
 install:
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
+	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
+	@# the package must still build on a machine without mingw, and the gate
+	@# reports "not built" rather than failing.
+	@if [ -f build/d3d-probe64.exe ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/d3d-probe64.exe build/d3d-probe32.exe \
+	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service $(UNITDIR)
@@ -57,9 +66,30 @@ test-session:
 test-multiuser:
 	@SG_LIB=$(CURDIR)/lib sudo -E env PATH="$$PATH" $(CURDIR)/bin/sg-multiuser-check
 
-deb:
+# The probe is built first so the .deb carries it: the image has no
+# cross-compiler, and a gate that cannot run the probe proves much less.
+deb: d3d-probe
 	dpkg-buildpackage -us -uc -b
 
 clean:
 	rm -rf debian/sg-session debian/.debhelper debian/files debian/*.substvars debian/debhelper-build-stamp
 	rm -rf test/tmp
+	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
+
+# --- the D3D probe ---------------------------------------------------------
+#
+# A real device-creation test, built as a Windows PE for both architectures.
+# Checking that the DXVK and VKD3D-Proton DLLs are present proves very little:
+# Wine falls back to its own builtins silently, and the installation looks
+# identical either way. Creating a device says which implementation answered.
+MINGW64 := x86_64-w64-mingw32-gcc
+MINGW32 := i686-w64-mingw32-gcc
+D3D_LIBS := -ld3d11 -ld3d12 -ldxgi -luuid
+
+.PHONY: d3d-probe
+d3d-probe:
+	@command -v $(MINGW64) >/dev/null 2>&1 || { echo "SKIP: $(MINGW64) not installed"; exit 0; }
+	@mkdir -p build
+	$(MINGW64) -O2 -o build/d3d-probe64.exe test/d3d-probe.c $(D3D_LIBS)
+	$(MINGW32) -O2 -o build/d3d-probe32.exe test/d3d-probe.c $(D3D_LIBS)
+	@echo "built: build/d3d-probe64.exe build/d3d-probe32.exe"

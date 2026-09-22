@@ -141,6 +141,30 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
 - **`SG_*` variables must be exported** — the session crosses a process boundary
   from `sg-session-start` into `sg-run-explorer` under cage.
 
+## Direct3D
+
+`sg-install-d3d` copies DXVK and VKD3D-Proton into the prefix when the image
+staged them at `SG_D3D_DIR` (`/opt/sg-d3d`), and `sg-d3d-check` is the gate.
+Absent payload is a supported configuration: the prefix keeps Wine's own D3D
+and the gate skips.
+
+**64-bit DLLs go to `system32` and 32-bit to `syswow64`.** That is the Windows
+layout and the opposite of what the names suggest. DXVK calls its 32-bit
+directory `x32` and VKD3D-Proton calls it `x86`; both mean i386.
+
+**Overrides go in HKLM, not HKCU.** Upstream Wine reads `DllOverrides` from
+HKCU only, which in a shared prefix means per user — an administrator would
+have to write into every existing hive and every future one. `wine-sg` patch
+0009 adds HKLM as a machine-wide default. Without that patch the DLLs are
+installed and inert, and **nothing reports an error**: Wine just loads its own
+builtins.
+
+**The gate creates a real device.** `test/d3d-probe.c` is built as a Windows PE
+for both architectures (`make d3d-probe`, needs mingw) and shipped in the .deb,
+because the image has no cross-compiler. File and registry checks cannot
+distinguish a working installation from an inert one; `D3D11: OK` and
+`D3D12: OK` can.
+
 ## The S2 gate
 
 `make test-multiuser` (root) runs `bin/sg-multiuser-check`, which encodes the
