@@ -19,10 +19,19 @@ SG_DESKTOP_H="${SG_DESKTOP_H:-800}"
 # (winewayland). See docs/decisions/0003 in the stained-glass repo.
 SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 
+# Which Wine to use. The image ships wine-sg, built with
+# --enable-archs=i386,x86_64, under /opt/wine-sg -- that is what lets a pure
+# amd64 machine run 32-bit Windows applications. See ADR 0005.
+#
+# Empty means "whatever is on PATH", which is how a developer box with only a
+# distribution Wine still works. Note that a distribution Wine cannot run
+# 32-bit Windows binaries without i386 multiarch.
+SG_WINE_DIR="${SG_WINE_DIR-/opt/wine-sg}"
+
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
 export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER
-export SG_DESKTOP_W SG_DESKTOP_H SG_DISPLAY_PATH
+export SG_DESKTOP_W SG_DESKTOP_H SG_DISPLAY_PATH SG_WINE_DIR
 
 sg_log() { echo "[sg-session] $*" >&2; }
 sg_die() { echo "[sg-session] FATAL: $*" >&2; exit 1; }
@@ -30,10 +39,19 @@ sg_die() { echo "[sg-session] FATAL: $*" >&2; exit 1; }
 # Wine, always pointed at the system prefix. Every caller goes through this so
 # there is exactly one place that decides which prefix is "the" prefix.
 sg_wine_env() {
+    # Put our Wine ahead of any distribution one. Every caller goes through
+    # here, so there is exactly one place that decides which Wine is "the" Wine.
+    if [ -n "${SG_WINE_DIR:-}" ] && [ -x "$SG_WINE_DIR/bin/wine" ]; then
+        case ":$PATH:" in
+            *":$SG_WINE_DIR/bin:"*) ;;
+            *) PATH="$SG_WINE_DIR/bin:$PATH"; export PATH ;;
+        esac
+    fi
+
     WINEPREFIX="$SG_PREFIX"
     export WINEPREFIX
-    # Phase 0 is a 64-bit prefix. 32-bit apps need i386 multiarch in the image;
-    # see ADR 0002 for why new-WoW64 is not available from packaged Wine.
+    # A win64 prefix. With wine-sg that still runs 32-bit Windows applications,
+    # via new WoW64 and a populated syswow64 -- see ADR 0005.
     WINEARCH="${WINEARCH:-win64}"
     export WINEARCH
     # Keep Wine's own chatter out of the boot path unless someone asks for it.

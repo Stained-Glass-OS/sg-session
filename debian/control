@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 Package: sg-session
 Architecture: all
 Depends: ${misc:Depends},
-         wine,
+         wine-sg | wine,
          cage,
          xwayland,
          x11-utils,

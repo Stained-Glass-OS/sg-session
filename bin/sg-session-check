@@ -86,6 +86,16 @@ fi
 
 window_list() { xwininfo -root -children 2>/dev/null; }
 
+# Read a PE file's machine type without needing file(1), which a minimal image
+# does not ship. A PE has a 4-byte little-endian offset to its PE header at
+# 0x3c; that header is "PE\0\0" followed by a 2-byte machine type.
+# 0x014c is i386, 0x8664 is x86-64.
+pe_machine() {
+    _off=$(od -An -tu4 -j60 -N4 "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$_off" ] || return 1
+    od -An -tx2 -j "$((_off + 4))" -N2 "$1" 2>/dev/null | tr -d ' \n'
+}
+
 # Windows drawn inside the Wine desktop are children of the desktop's X window,
 # not top-level X windows. Enumerating the root only shows the desktop itself,
 # so anything that looks for an app has to look one level down.
@@ -149,6 +159,13 @@ else
     info "desktop children were:"; desktop_children | sed 's/^/      /' | head -20
 fi
 
+# Clear any app left over from a previous run. Doing this at the start rather
+# than the end keeps the check idempotent *and* leaves the last app on screen,
+# so the boot gate's screenshot catches a live window instead of one being torn
+# down. Without it, a leftover Notepad from an earlier run would satisfy the
+# checks below and the gate would pass without launching anything.
+pkill -f 'notepad.exe' >/dev/null 2>&1 || true
+
 # --- 4. a Win32 app launches and shows up in the desktop ------------------
 # notepad is the canary: a stock Win32 app with a titled top-level window.
 # It must appear as a child of the desktop, not as its own X toplevel -- an app
@@ -181,9 +198,49 @@ else
     fail "notepad.exe process is not running"
 fi
 
-# Leave the session as we found it, so the gate can be run twice.
 pkill -f 'notepad.exe' >/dev/null 2>&1 || true
 kill "$NOTEPAD_SHELL_PID" >/dev/null 2>&1 || true
+
+# --- 5. a 32-bit Windows app runs in the shell ----------------------------
+# The point of shipping wine-sg rather than a distribution Wine is that this
+# machine runs 32-bit Windows applications without i386 multiarch. Proving the
+# Wine build can do it is wine-sg's job; proving it works *in a real session*,
+# rendered inside the shell, is this gate's.
+#
+# Skipped rather than failed when there is no syswow64, so the gate still runs
+# meaningfully against a distribution Wine on a developer box.
+WOW_NOTEPAD="$SG_PREFIX/drive_c/windows/syswow64/notepad.exe"
+if [ ! -f "$WOW_NOTEPAD" ]; then
+    info "SKIP 32-bit check: no syswow64 in the prefix (not a new-WoW64 Wine)"
+else
+    WOW_MACHINE=$(pe_machine "$WOW_NOTEPAD")
+    case "$WOW_MACHINE" in
+        014c) pass "syswow64/notepad.exe is a 32-bit PE (machine 0x$WOW_MACHINE, i386)" ;;
+        8664) fail "syswow64/notepad.exe is x86-64 (machine 0x$WOW_MACHINE) -- syswow64 should hold 32-bit binaries" ;;
+        "")   fail "could not read a PE header from syswow64/notepad.exe" ;;
+        *)    fail "syswow64/notepad.exe has unexpected machine type 0x$WOW_MACHINE" ;;
+    esac
+
+    info "launching the 32-bit notepad.exe"
+    wine 'C:\windows\syswow64\notepad.exe' >"$SG_LOG_DIR/notepad32.out" 2>&1 &
+
+    waited=0
+    while ! desktop_children | grep -q 'Notepad'; do
+        [ "$waited" -ge "$TIMEOUT" ] && break
+        sleep 2
+        waited=$((waited + 2))
+    done
+    if desktop_children | grep -q 'Notepad'; then
+        pass "32-bit app runs in the shell: $(desktop_children | grep 'Notepad' | sed 's/^ *//' | head -1)"
+    else
+        fail "the 32-bit notepad did not appear inside the desktop after ${TIMEOUT}s"
+        info "output:"; sed 's/^/      /' "$SG_LOG_DIR/notepad32.out" 2>/dev/null | head -20
+    fi
+
+    # Deliberately left running: the boot gate screenshots immediately after
+    # this returns, and the whole point of the screenshot is to show a real
+    # application in the shell.
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then
