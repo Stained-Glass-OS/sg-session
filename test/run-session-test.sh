@@ -37,6 +37,30 @@ cleanup() {
     exit "$rc"
 }
 
+# Stale Wine processes from an earlier run are the single most misleading
+# thing that can happen here. A persistent wineserver left over from a
+# previous session keeps serving the old prefix, so a freshly built one is
+# never used; and `wineserver -w`, which sg-prefix-init calls, waits for a
+# server that is never going to exit. Both present as a hang with no error,
+# and both have cost real debugging time.
+#
+# Only processes holding *this* prefix are killed, identified by their own
+# environment rather than by name, so a developer's unrelated Wine session is
+# left alone. Anything else still running is reported, because it is the first
+# thing to suspect if this run then behaves strangely.
+reap_stale_wine() {
+    _pfx=$1 _killed=0
+    for _p in $(pgrep -u "$(id -u)" -x 'wineserver|wine|wineboot.exe|explorer.exe|services.exe|winedevice.exe' 2>/dev/null); do
+        _env=$(tr '\0' '\n' < "/proc/$_p/environ" 2>/dev/null | sed -n 's/^WINEPREFIX=//p')
+        [ "$_env" = "$_pfx" ] || continue
+        kill -9 "$_p" 2>/dev/null && _killed=$((_killed + 1))
+    done
+    [ "$_killed" -gt 0 ] && echo "== reaped $_killed stale Wine process(es) holding $_pfx"
+    _other=$(pgrep -u "$(id -u)" -x wineserver 2>/dev/null | wc -l)
+    [ "$_other" -gt 0 ] && echo "== note: $_other other wineserver(s) still running for this user"
+    return 0
+}
+
 echo "== staging sg-session into $STAGE"
 rm -rf "$TMP"
 mkdir -p "$STAGE"
@@ -69,6 +93,8 @@ export WLR_BACKENDS WLR_LIBINPUT_NO_DEVICES WLR_RENDERER
 for tool in cage Xwayland wine xwininfo; do
     command -v "$tool" >/dev/null 2>&1 || { echo "SKIP: $tool not installed"; exit 77; }
 done
+
+reap_stale_wine "$SG_PREFIX"
 
 echo "== initializing prefix (this takes a minute on first run)"
 "$SG_BIN/sg-prefix-init"

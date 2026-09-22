@@ -141,6 +141,33 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
 - **`SG_*` variables must be exported** — the session crosses a process boundary
   from `sg-session-start` into `sg-run-explorer` under cage.
 
+## The default user profile
+
+`sg-prefix-init` copies the freshly initialised hive over `userdef.reg`, making
+it a real Default User profile.
+
+**Why a second user was short-changed.** `wineboot` applies `wine.inf`'s HKCU
+sections to whoever runs it, then stamps `.update-timestamp` in the *prefix*.
+The prefix is shared and the hives are not, so every later user's wineboot sees
+an up-to-date prefix and skips the per-user install entirely. They were not
+seeded badly — they were skipped by design. Before this, the first user had 52
+keys and everyone after had 16, and the missing ones were Shell Folders, User
+Shell Folders, Internet Settings and the rest of the profile.
+
+Windows fills Default User once at install time; Wine has the same slot
+(`\Registry\User\.Default`, stored as `userdef.reg`) and never fills it. Since
+`wine-sg` patch 0006 seeds each new hive from that file, filling the template
+fixes every future user at the source rather than repairing each copy.
+
+The copy is safe because all the hive files are the same format — server saves
+of a user branch — and it is taken immediately after `wineboot --init`, before
+anyone has personalised anything. Volatile keys are never written to disk, so
+nothing user-specific comes with it. It must stay **after** the `wineserver -w`
+that follows `wineboot`, or the hive on disk is incomplete.
+
+Check it with `grep -c '^\[' userdef.reg`: 52-ish means a real profile, 16
+means the stub.
+
 ## Direct3D
 
 `sg-install-d3d` copies DXVK and VKD3D-Proton into the prefix when the image

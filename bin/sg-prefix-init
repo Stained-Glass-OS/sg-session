@@ -43,6 +43,35 @@ fi
 wineboot --init
 wineserver -w
 
+# --- make userdef.reg a real Default User profile -------------------------
+# wineboot applies wine.inf's HKCU sections to whoever ran it, then stamps
+# .update-timestamp in the *prefix*. The prefix is shared and the hives are
+# not, so every later user's wineboot sees an up-to-date prefix and skips the
+# per-user install entirely -- they are not seeded badly, they are skipped by
+# design.
+#
+# Windows solves this with a Default User profile that the installer populates
+# once. Wine has the same slot, \Registry\User\.Default, stored as
+# userdef.reg, but nothing ever fills it beyond a stub. wine-sg patch 0006
+# seeds each new user's hive from it, so making it a real template fixes every
+# future user at the source instead of repairing each copy.
+#
+# The hive files are the same format -- all of them are server saves of a user
+# branch -- so the template is simply this user's freshly initialised hive,
+# taken now, before anyone has personalised anything. Volatile keys are never
+# written to disk, so nothing user-specific comes along.
+if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
+    _uid=$(id -u)
+    _hive="$SG_PREFIX/user-$_uid.reg"
+    [ -f "$_hive" ] || _hive="$SG_PREFIX/user.reg"
+    if [ -f "$_hive" ] && [ -s "$_hive" ]; then
+        cp -f "$_hive" "$SG_PREFIX/userdef.reg"
+        sg_log "default user profile seeded from $(basename "$_hive") ($(wc -c < "$_hive") bytes)"
+    else
+        sg_log "WARNING: no hive to seed the default user profile from"
+    fi
+fi
+
 # --- protect the policy branch -------------------------------------------
 # Creating HKLM\Software\Policies here, as the prefix's owner, is what makes it
 # administrator-owned. wine-sg gives a new key a descriptor from the creating

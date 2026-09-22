@@ -24,7 +24,11 @@ LIBS         = lib/sg-common.sh lib/sg-run-explorer
 all:
 	@echo "nothing to build; this package is scripts. try 'make test' or 'make deb'."
 
-install:
+# Depends on d3d-probe because dpkg-buildpackage runs `dh clean` first: a
+# probe built by the deb target is deleted again before install runs. The
+# image has no cross-compiler, so if the .deb does not carry the probe then
+# nothing in the guest can create a D3D device and the gate proves much less.
+install: d3d-probe
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
@@ -66,9 +70,7 @@ test-session:
 test-multiuser:
 	@SG_LIB=$(CURDIR)/lib sudo -E env PATH="$$PATH" $(CURDIR)/bin/sg-multiuser-check
 
-# The probe is built first so the .deb carries it: the image has no
-# cross-compiler, and a gate that cannot run the probe proves much less.
-deb: d3d-probe
+deb:
 	dpkg-buildpackage -us -uc -b
 
 clean:

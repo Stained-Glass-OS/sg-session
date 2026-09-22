@@ -95,17 +95,45 @@ fi
 # to its own builtins silently, and an installation that is doing nothing looks
 # exactly like one that works.
 PROBE_DIR="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+
+# Creating a device needs the session's display. DXVK asks Vulkan for the WSI
+# surface extensions, which winevulkan maps onto the X display, so without one
+# instance creation fails and the probe dies on a null dereference inside
+# DXVK's error path -- which looks like a broken graphics stack rather than a
+# missing DISPLAY. The session publishes what it is using in session.env; the
+# session gate reads the same file.
+if [ -f "$SG_STATE/session.env" ]; then
+    # shellcheck source=/dev/null
+    . "$SG_STATE/session.env"
+    export DISPLAY XDG_RUNTIME_DIR WAYLAND_DISPLAY WINEPREFIX
+    info "using the session display: ${DISPLAY:-none}"
+else
+    info "no session.env -- device creation needs a running session, skipping the probe"
+    PROBE_DIR=/nonexistent
+fi
 probe_one() {
     _arch=$1 _exe="$PROBE_DIR/d3d-probe$1.exe"
     if [ ! -f "$_exe" ]; then
-        info "${_arch}-bit probe not built -- cannot confirm a device is created"
+        info "${_arch}-bit probe unavailable here -- cannot confirm a device is created"
         return 0
     fi
-    _out=$(wine "$_exe" 2>/dev/null || true)
+    # stderr is kept: when the probe fails to produce any output at all, the
+    # reason is in there, and a gate that reports "device creation failed:"
+    # with nothing after the colon cannot be diagnosed from its own log.
+    _out=$(wine "$_exe" 2>&1 || true)
+    # No "arch:" line means the probe never ran -- a missing loader, a broken
+    # prefix, an exec failure. That is a different fault from a device that
+    # could not be created, and saying so saves a boot.
+    if ! printf '%s' "$_out" | grep -q '^arch:'; then
+        fail "${_arch}-bit probe produced no output; it did not run"
+        printf '%s\n' "$_out" | grep -viE '^\s*$' | head -4 | sed 's/^/      /'
+        return 0
+    fi
     if printf '%s' "$_out" | grep -q 'D3D11: OK'; then
         pass "${_arch}-bit D3D11 device created: $(printf '%s' "$_out" | grep 'D3D11:' | head -1)"
     else
         fail "${_arch}-bit D3D11 device creation failed: $(printf '%s' "$_out" | grep 'D3D11:' | head -1)"
+        printf '%s\n' "$_out" | grep -iE 'err:|wine:|cannot|No such' | head -3 | sed 's/^/      /'
     fi
     if printf '%s' "$_out" | grep -q 'D3D12: OK'; then
         pass "${_arch}-bit D3D12 device created"
