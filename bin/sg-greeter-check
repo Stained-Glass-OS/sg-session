@@ -1,0 +1,81 @@
+#!/bin/sh
+# The greeter gate.
+#
+# Drives sg-greet-bridge against a stub that speaks greetd's actual wire
+# format. The bridge sits in an authentication path, and the failures worth
+# catching are in that format -- a length prefix in the wrong endianness, a
+# password that ends the JSON string early, replies read in the wrong order.
+# A test that mocks above the protocol catches none of them.
+#
+# It does not test the UI. Whether the login screen draws is a separate
+# question, answered by sg-greeter-visual-check against a real display.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+BRIDGE="$LIBEXEC/sg-greet-bridge"
+STUB="$LIBEXEC/greetd-stub"
+FAKE="$LIBEXEC/test-greeter.sh"
+WORK=$(mktemp -d)
+SOCK="$WORK/greetd.sock"
+RC=0
+
+# shellcheck disable=SC2317  # invoked via trap
+cleanup() { rm -rf "$WORK"; }
+trap cleanup EXIT INT TERM
+
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*"; RC=1; }
+
+for f in "$BRIDGE" "$STUB" "$FAKE"; do
+    [ -x "$f" ] || { echo "SKIP: $f not built"; exit 77; }
+done
+
+run_case() {
+    _name=$1 _user=$2 _pw=$3 _expect=$4
+    rm -f "$SOCK" "$WORK/result" "$WORK/stub.out"
+    "$STUB" "$SOCK" PASS >"$WORK/stub.out" 2>/dev/null &
+    _stub=$!
+    _w=0
+    while [ ! -S "$SOCK" ] && [ "$_w" -lt 50 ]; do sleep 0.1; _w=$((_w + 1)); done
+    SG_TEST_USER="$_user" SG_TEST_PW="$_pw" SG_TEST_RESULT="$WORK/result" \
+        GREETD_SOCK="$SOCK" timeout 30 "$BRIDGE" /usr/bin/sg-session-start "$FAKE" \
+        >/dev/null 2>&1 || true
+    kill "$_stub" 2>/dev/null || true
+    wait "$_stub" 2>/dev/null || true
+    if grep -q "$_expect" "$WORK/result" 2>/dev/null; then
+        pass "$_name"
+    else
+        fail "$_name: expected $_expect, greeter saw: $(tr '\n' '|' < "$WORK/result" 2>/dev/null)"
+    fi
+}
+
+run_case "a correct password authenticates"        sguser PASS     SUCCESS
+run_case "a wrong password is refused"             sguser WRONGPW  FAILURE
+run_case "quotes in a password cannot break the JSON" sguser 'a"b\c' FAILURE
+
+# What runs after a successful login is the bridge's argument, never something
+# the greeter asked for. A greeter that has been tampered with must not be able
+# to choose what executes.
+rm -f "$SOCK" "$WORK/stub2.out" "$WORK/result"
+"$STUB" "$SOCK" PASS >"$WORK/stub2.out" 2>/dev/null &
+S=$!
+w=0
+while [ ! -S "$SOCK" ] && [ "$w" -lt 50 ]; do sleep 0.1; w=$((w + 1)); done
+SG_TEST_USER=sguser SG_TEST_PW=PASS SG_TEST_RESULT="$WORK/result" \
+    GREETD_SOCK="$SOCK" timeout 30 "$BRIDGE" /usr/bin/sg-session-start "$FAKE" \
+    >/dev/null 2>&1 || true
+kill "$S" 2>/dev/null || true
+wait "$S" 2>/dev/null || true
+if grep -q 'sg-session-start' "$WORK/stub2.out" 2>/dev/null; then
+    pass "the session starts with the configured command, not one the greeter chose"
+else
+    fail "start_session did not carry the configured command"
+fi
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

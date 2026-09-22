@@ -168,6 +168,43 @@ that follows `wineboot`, or the hive on disk is incomplete.
 Check it with `grep -c '^\[' userdef.reg`: 52-ish means a real profile, 16
 means the stub.
 
+## The login screen
+
+`sg-greeter` is a **Windows program**, deliberately. Remote-support tools —
+RMM, RDP, ScreenConnect and friends — are Windows programs that attach to the
+console session and expect a Windows login screen there. A Linux greeter is
+invisible to every one of them, and a fleet machine that cannot be reached when
+logged out is not supportable. See
+[ADR 0008](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0008-wine-side-login-and-lock.md).
+
+**It decides nothing.** `sg-greet-bridge` hands what it collects to greetd, and
+PAM stays the only authority, so account expiry, lockout and later domain auth
+keep working untouched.
+
+**The transport is a pair of inherited pipes**, not a socket. Wine has no
+`AF_UNIX` (`socket()` returns `WSAEAFNOSUPPORT` — tested, not assumed), and a
+loopback port would be reachable by every local user and need a shared secret
+to close that hole again. The bridge creates the pipes and forks the greeter,
+so nothing else can connect to it. It has no listening socket at all.
+
+**`make test-greeter` is the gate.** It drives the bridge against a stub that
+speaks greetd's real wire format, because the failures worth catching live
+there: a length prefix in the wrong endianness, a password that ends the JSON
+string early, replies read out of order. Mocking above the protocol catches
+none of them. It checks that a wrong password is refused and that **the session
+starts with the bridge's configured command, never one the greeter asked for** —
+a tampered greeter must not be able to choose what executes.
+
+Things that caught me out:
+
+- **A transparent static never erases what it drew.** Returning `NULL_BRUSH`
+  from `WM_CTLCOLORSTATIC` and then changing a control's font leaves the old
+  text underneath the new one — two titles in two sizes, which reads as a font
+  bug and is a painting one. Fonts are set once, at creation.
+- **The greeter must never block on its pipe.** It polls with
+  `PeekNamedPipe` from a timer; a login screen that stops repainting while PAM
+  thinks is indistinguishable from a hung machine.
+
 ## Direct3D
 
 `sg-install-d3d` copies DXVK and VKD3D-Proton into the prefix when the image
