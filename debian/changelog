@@ -1,3 +1,17 @@
+sg-session (0.1.0-2) unstable; urgency=medium
+
+  * Multi-user: supervised shell (AutoRestartShell), per-user session.env and
+    logs, session checks scoped per user, machine graphics driver in HKLM.
+  * Login-time Windows profile service (sg-profile-create); Default User
+    template names the profile relative to %USERPROFILE%.
+  * Per-user process agent (sg-procagent) for cross-process operations.
+  * Elevation broker (sg-brokerd/sg-elevate), sg-admins group and sudoers.
+  * Machine Group Policy: apply /etc/stained-glass/policy.d (.reg and
+    registry.pol via sg-polimport) at boot; protect the policy branches.
+  * Gates: token, procagent, elevate, policy.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Wed, 23 Sep 2026 15:00:10 -0700
+
 sg-session (0.1.0-1) unstable; urgency=medium
 
   * Initial release: Phase 0 session glue.
