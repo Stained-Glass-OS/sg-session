@@ -82,6 +82,30 @@ sg_session_env() {
     fi
 }
 
+# Protect the machine registry branches (multi-user debt / S2 clause 3). Run
+# against the *machine* wineserver, every boot, as the SYSTEM account: creating
+# these keys as the prefix owner gives them the HKLM descriptor (administrators
+# write, everyone else reads -- wine-sg 0002/0024), and an ordinary user is
+# then refused a write beneath them. It must run against the machine server,
+# not a transient one, because security descriptors live in the running server
+# and are not saved to system.reg; a boot-time re-stamp is what makes the
+# protection survive the machine server reloading the hive.
+sg_protect_machine_registry() {
+    [ "${SG_SYSTEM_PREFIX:-1}" = "1" ] || return 0
+    # Administrator-owned policy branches: users read, admins write.
+    for _k in 'HKLM\Software\Policies' \
+              'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies'; do
+        wine reg add "$_k" /f >/dev/null 2>&1 || sg_log "WARNING: could not protect $_k"
+    done
+    # Per-session display-config containers: wine-sg gives keys under these a
+    # DACL interactive users can write, but only if the container exists for
+    # them to create under (a non-admin cannot create it beneath Control).
+    for _k in 'HKLM\System\CurrentControlSet\Control\Video' \
+              'HKLM\System\CurrentControlSet\Control\GraphicsDrivers'; do
+        wine reg add "$_k" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $_k"
+    done
+}
+
 sg_graphics_driver() {
     case "${SG_DISPLAY_PATH:-x11}" in
         wayland) echo wayland ;;

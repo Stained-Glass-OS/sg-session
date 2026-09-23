@@ -137,42 +137,10 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
     fi
 fi
 
-# --- protect the policy branch -------------------------------------------
-# Creating HKLM\Software\Policies here, as the prefix's owner, is what makes it
-# administrator-owned. wine-sg gives a new key a descriptor from the creating
-# process's token, so a key made by an administrator gets the HKLM arrangement
-# — administrators write, everyone else reads — and a later attempt by an
-# ordinary user to write beneath it is refused.
-#
-# This is deliberately policy rather than Wine behaviour: which branches a
-# machine protects is the operating system's business, the same way Windows
-# ships those ACLs in its image rather than inventing them in the kernel.
-if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
-    sg_log "creating protected policy branches"
-    for key in \
-        'HKLM\Software\Policies' \
-        'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies'
-    do
-        wine reg add "$key" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $key"
-    done
-
-    # Pre-create the display-config containers as the prefix owner (an
-    # administrator). wine-sg gives keys under Control\Video and
-    # Control\GraphicsDrivers a DACL that interactive users can write -- these
-    # hold per-session display state every user's Wine populates and every app
-    # reads -- but only if the *container* exists for them to create under, and
-    # a non-admin cannot create it beneath the admin-owned Control key. Making
-    # them here, once, is what lets a non-owner session come up with working
-    # applications rather than a shell no app can launch into.
-    sg_log "creating writable display-config branches"
-    for key in \
-        'HKLM\System\CurrentControlSet\Control\Video' \
-        'HKLM\System\CurrentControlSet\Control\GraphicsDrivers'
-    do
-        wine reg add "$key" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $key"
-    done
-    wineserver -w
-fi
+# The machine registry branches (policy + display config) are protected on the
+# *machine* wineserver at boot by sg-services-start, not here: descriptors live
+# in the running server and are not persisted, so protecting them in this
+# transient prefix-build server would not survive (multi-user debt / S2).
 
 # Direct3D layers and bundled applications, if the image staged them.
 # Deliberately before the ownership fixup below, so what they copy in is chowned

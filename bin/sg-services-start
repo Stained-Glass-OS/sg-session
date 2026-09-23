@@ -22,6 +22,11 @@ export HOME XDG_RUNTIME_DIR
 SG_WINSTATION='__wineservice_winstation\Default'
 export SG_WINSTATION
 
+# Protect the machine registry branches on the running machine server, before
+# any user logs in. See sg_protect_machine_registry.
+sg_log "protecting machine registry branches"
+sg_protect_machine_registry
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this
