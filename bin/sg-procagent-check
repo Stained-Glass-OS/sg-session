@@ -28,8 +28,10 @@ probe="$SG_LIBEXEC/sg-procmem-probe.exe"
 if [ ! -f "$probe" ]; then echo "SKIP: sg-procmem-probe.exe not built"; exit 77; fi
 if [ ! -x "$SG_LIBEXEC/sg-procagent" ]; then echo "SKIP: sg-procagent not built"; exit 77; fi
 
-_probe_w=$(winepath -w "$probe" 2>/dev/null)
-run_probe() { cd /tmp && timeout 40 wine "$_probe_w" 2>/dev/null | clean; }
+echo "checking cross-process memory for $(id -un)..."
+_probe_w=$(timeout 15 winepath -w "$probe" 2>/dev/null)
+[ -n "$_probe_w" ] || { echo "SKIP: winepath/wineserver not responding"; exit 77; }
+run_probe() { ( cd /tmp 2>/dev/null || true; timeout 25 wine "$_probe_w" 2>/dev/null ) | clean; }
 
 # Make sure no stale agent is running for us, then take a clean measurement.
 pkill -u "$(id -u)" -f "[s]g-procagent" 2>/dev/null || true

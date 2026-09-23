@@ -19,7 +19,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
-               bin/sg-token-check bin/sg-procagent-check bin/sg-greeter-check
+               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -57,7 +57,8 @@ install: d3d-probe greeter token-probe procagent
 	fi
 	@# The per-user process agent (ADR 0014). sg-session-start launches it.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
-	install -m 0755 build/sg-procagent $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate \
+	    $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-procmem-probe.exe ]; then \
 	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
@@ -68,7 +69,8 @@ install: d3d-probe greeter token-probe procagent
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -d $(DESTDIR)/etc/pam.d
-	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote $(DESTDIR)/etc/pam.d/
+	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote \
+	    config/pam/stained-glass-elevate $(DESTDIR)/etc/pam.d/
 	@# The profile service (sg-profile-create), run at login by pam_exec;
 	@# the deb's postinst registers it with pam-auth-update.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
@@ -81,7 +83,8 @@ install: d3d-probe greeter token-probe procagent
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
-	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service \
+	install -m 0644 systemd/sg-brokerd.service \
+	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
 	    systemd/sg-update-prepare.timer $(UNITDIR)
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
@@ -192,6 +195,8 @@ greeter:
 procagent:
 	@mkdir -p build
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-procagent procagent/sg-procagent.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-brokerd broker/sg-brokerd.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-elevate broker/sg-elevate.c
 	@# The cross-process probe for sg-procagent-check (Windows PE, optional).
 	@if command -v $(MINGW64) >/dev/null 2>&1; then \
 	    $(MINGW64) -O2 -o build/sg-procmem-probe.exe test/sg-procmem-probe.c && \

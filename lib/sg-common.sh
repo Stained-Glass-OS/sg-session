@@ -27,6 +27,13 @@ SG_SYSTEM_USER="${SG_SYSTEM_USER:-sgsystem}"
 # access policy, expressed with ordinary Unix tools.
 SG_WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
 
+# Administrators (ADR 0012). Membership of this local group is what makes a
+# human an administrator: they may elevate a program to run as the SYSTEM
+# account (through the broker) and, on the Unix side, use sudo. It is
+# deliberately one group for both, so "is an administrator" has a single
+# answer. Domain groups map onto it later (P2).
+SG_ADMIN_GROUP="${SG_ADMIN_GROUP:-sg-admins}"
+
 # Whether to mark the prefix as shared between Unix users (wine-sg's
 # .sg-system-prefix). Requires a Wine with patches/sg applied; on a stock Wine
 # the marker is simply ignored.

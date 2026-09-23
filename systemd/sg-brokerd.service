@@ -1,0 +1,21 @@
+[Unit]
+Description=Stained Glass OS elevation broker (Run as administrator)
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# The broker starts programs as the SYSTEM account after consent on the secure
+# surface. It needs the compositor's seat for that surface, and the prefix.
+After=sg-prefix-init.service
+Wants=sg-prefix-init.service
+
+[Service]
+Type=simple
+Environment=SG_BROKER_FOREGROUND=1
+# Root: it authenticates administrators through PAM and launches the elevated
+# program as the SYSTEM account. Like sg-lockd, it forks a small root monitor
+# for PAM and the main process drops to the SYSTEM account itself.
+RuntimeDirectory=stained-glass-broker
+RuntimeDirectoryMode=0755
+ExecStart=/usr/libexec/stained-glass/sg-brokerd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

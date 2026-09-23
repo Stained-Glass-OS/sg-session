@@ -12,6 +12,7 @@ override_dh_auto_test:
 override_dh_auto_build:
 
 override_dh_installsystemd:
+	dh_installsystemd --name=sg-brokerd
 	dh_installsystemd --name=sg-prefix-init
 	dh_installsystemd --name=sg-wineserver
 	dh_installsystemd --name=sg-lockd

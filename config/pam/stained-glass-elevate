@@ -1,0 +1,7 @@
+# PAM policy for elevation credential prompts (ADR 0012). When a standard user
+# asks to run a program as administrator, the broker asks for an
+# administrator's password and checks it here -- the same stacks as a console
+# login, so elevation faces the same password rules and lockout. Authorisation
+# (that the account is actually an administrator) is the broker's, not PAM's.
+@include common-auth
+@include common-account

@@ -5,6 +5,7 @@ SG_ROOT=/var/lib/stained-glass
 SG_USER=sguser
 SG_SYSTEM_USER=sgsystem
 SG_WINE_GROUP=sgwine
+SG_ADMIN_GROUP=sg-admins
 
 case "$1" in
     configure)
@@ -22,6 +23,19 @@ case "$1" in
         # adding someone here is how you give them a Windows session.
         if ! getent group "$SG_WINE_GROUP" >/dev/null; then
             addgroup --system "$SG_WINE_GROUP"
+        fi
+
+        # Administrators (ADR 0012): members may elevate to the SYSTEM account
+        # and use sudo. A single group is the whole definition of "admin".
+        if ! getent group "$SG_ADMIN_GROUP" >/dev/null; then
+            addgroup --system "$SG_ADMIN_GROUP"
+        fi
+        # Grant that group sudo, without weakening PAM: the sudoers drop-in
+        # names the group, and sudo still authenticates the human normally
+        # (that is how "sudo su" reaches root as themselves -- ADR 0012 D).
+        if [ -d /etc/sudoers.d ]; then
+            printf '%%%s ALL=(ALL:ALL) ALL\n' "$SG_ADMIN_GROUP" > /etc/sudoers.d/sg-admins
+            chmod 0440 /etc/sudoers.d/sg-admins
         fi
 
         # The account that is SYSTEM: owns the prefix, runs the machine-level
