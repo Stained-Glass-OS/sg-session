@@ -82,6 +82,11 @@ SG_D3D_DIR="${SG_D3D_DIR:-/opt/sg-d3d}"
 # colours here. Absent is fine -- nothing is imported.
 SG_DEFAULTS_DIR="${SG_DEFAULTS_DIR:-/usr/share/stained-glass/defaults.d}"
 
+# Windows applications the image bundles (PowerShell 7, CPython), staged as
+# upstream Windows builds. sg-install-apps links them into the prefix. Absent
+# is fine -- nothing is installed.
+SG_APPS_DIR="${SG_APPS_DIR:-/opt/sg-apps}"
+
 
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
@@ -89,8 +94,11 @@ export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER
 export SG_DESKTOP_W SG_DESKTOP_H SG_DISPLAY_PATH SG_WINE_DIR
 export SG_WINE_GROUP SG_SYSTEM_PREFIX SG_SYSTEM_USER
 
-sg_log() { echo "[sg-session] $*" >&2; }
-sg_die() { echo "[sg-session] FATAL: $*" >&2; exit 1; }
+# printf, not echo: dash's echo interprets backslash escapes, and these lines
+# carry Windows paths -- "PythonCore\3.14" logged with echo prints \3 as an
+# octal control character.
+sg_log() { printf '[sg-session] %s\n' "$*" >&2; }
+sg_die() { printf '[sg-session] FATAL: %s\n' "$*" >&2; exit 1; }
 
 # Wine, always pointed at the system prefix. Every caller goes through this so
 # there is exactly one place that decides which prefix is "the" prefix.
@@ -113,7 +121,18 @@ sg_wine_env() {
     # Keep Wine's own chatter out of the boot path unless someone asks for it.
     WINEDEBUG="${WINEDEBUG:--all}"
     export WINEDEBUG
-    # Never let Wine pop the Mono/Gecko installer dialogs in an unattended boot.
-    WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
-    export WINEDLLOVERRIDES
+    # Deliberately NOT disabling mscoree/mshtml here. This used to, to stop
+    # Wine popping its Mono and Gecko installer dialogs, but everything inherits
+    # this environment -- the desktop, every program a user starts from it, and
+    # the machine's Windows services. With mscoree disabled Wine cannot load a
+    # .NET assembly, so PowerShell 7 and every other .NET program failed
+    # ("Could not load file or assembly System.Runtime.dll"). The override
+    # belongs only on the unattended prefix builds and updates: sg_wine_unattended.
+}
+
+# Run one command with Wine's Mono and Gecko installers suppressed, for the
+# unattended prefix build and update paths where a dialog would wait for a
+# click that never comes.
+sg_wine_unattended() {
+    WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}mscoree,mshtml=" "$@"
 }

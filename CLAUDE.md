@@ -38,6 +38,8 @@ separately.
 | `lib/sg-common.sh` | shared paths and the Wine environment, in one place |
 | `lib/sg-run-explorer` | runs inside the compositor; starts explorer |
 | `config/greetd-config.toml` | autologin placeholder for `sg-greeter` |
+| `bin/sg-install-apps` | links PowerShell 7 and Python into the prefix (see below) |
+| `bin/sg-apps-check` | **the bundled-apps gate** |
 | `bin/sg-wineserver` | **the machine-level wineserver**: the Windows system itself |
 | `bin/sg-services-start` | starts the SCM inside it, as SYSTEM |
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
@@ -334,6 +336,44 @@ Things that caught me out:
 - **The greeter must never block on its pipe.** It polls with
   `PeekNamedPipe` from a timer; a login screen that stops repainting while PAM
   thinks is indistinguishable from a hung machine.
+
+## Bundled Windows applications: PowerShell 7 and Python
+
+`sg-install-apps` installs what the image stages under `SG_APPS_DIR`
+(`/opt/sg-apps`) -- upstream PowerShell 7 and CPython Windows builds -- into
+`C:\Program Files\PowerShell\7` and `C:\Program Files\Python3xx`, adds them to
+the machine PATH, registers Python under PEP 514
+(`HKLM\Software\Python\PythonCore\3.xx`) and writes all-users Start-menu
+shortcuts (via Wine's `cscript` and `lib/sg-mklnk.js`; Wine has no command-line
+`.lnk` writer). `sg-apps-check` is the gate: both found by bare name through
+cmd's PATH lookup, versions, exit codes, pip, the registration, and shortcuts
+that point at the right program.
+
+- **Real copies, marked `.sg-bundled`**, replaced wholesale when the payload's
+  `VERSION` changes. A directory without the marker is someone else's and is
+  left alone.
+- **pwsh needs a console.** With no console and its output redirected, its
+  ConsoleHost throws a NullReferenceException on Wine; the gate runs it under
+  `script(1)`. Launched from the desktop it has a console window and is fine.
+  Worth a Wine fix before PowerShell runs unattended (login scripts, RMM).
+
+## Never disable mscoree/mshtml for more than one command
+
+`sg_wine_env` used to export `WINEDLLOVERRIDES=mscoree,mshtml=` to stop Wine's
+Mono and Gecko installer prompts. Everything inherits that environment -- the
+desktop, every program started from it, the machine's Windows services -- and
+with mscoree disabled Wine cannot load a .NET assembly: PowerShell 7 died with
+"Could not load file or assembly System.Runtime.dll", and so would any .NET
+service or application. The override now lives only in `sg_wine_unattended`,
+used for `wineboot --init`; on later boots `sg-prefix-init` starts one Wine
+command under it, so an update after a Wine upgrade happens there rather than
+inside a user's desktop.
+
+**Log Windows paths with printf, not echo.** dash's `echo` interprets
+backslash escapes: `...PythonCore\3.14` printed as an octal control
+character, and `...PowerShell\7\...` lost its `\7`. That second one sent a
+diagnosis down a false trail (a "missing path component" that was never
+there). `sg_log` and the new gates use `printf '%s\n'`.
 
 ## Direct3D
 

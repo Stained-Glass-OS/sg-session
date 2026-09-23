@@ -1,0 +1,116 @@
+#!/bin/sh
+# Do the bundled Windows applications actually run, the way a user reaches them?
+#
+# What this proves: PowerShell 7 and CPython are installed in the prefix, are
+# found through the machine PATH rather than by absolute path, start, report
+# their versions and propagate exit codes; Python has a working stdlib (SSL,
+# sqlite) and pip, and is registered under PEP 514; both have Start-menu
+# shortcuts for sg-start to list.
+#
+# What it does NOT prove: that any particular script or package works. It is
+# here to catch the cheap failures -- a missing payload, a broken link, a PATH
+# that was never written, an interpreter that cannot start.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+RC=0
+# printf, not echo: dash's echo reads "\7" in "...PowerShell\7" as an escape.
+pass() { printf 'PASS  %s\n' "$*"; }
+info() { printf 'info  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+
+if [ ! -d "$SG_APPS_DIR" ]; then
+    info "no bundled applications at $SG_APPS_DIR -- nothing to check"
+    echo; echo "RESULT: SKIP"
+    exit 77
+fi
+
+# Wine's output carries \r and, run under a terminal, escape sequences.
+clean() { tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b\][^\a]*\a//g'; }
+
+PROGRAMS="$SG_PREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs"
+
+# A shortcut must exist and point at the right program. A .lnk stores its
+# target's local path as a plain string, so grep can read it.
+check_shortcut() {
+    _lnk="$PROGRAMS/$1.lnk"
+    if [ ! -f "$_lnk" ]; then
+        fail "no '$1' shortcut in the Start menu"
+    elif grep -qaF "$2" "$_lnk"; then
+        pass "Start menu '$1' -> $2"
+    else
+        fail "Start menu '$1' does not point at $2"
+    fi
+}
+
+# --- Python -----------------------------------------------------------------
+if [ -f "$SG_APPS_DIR/python/python.exe" ]; then
+    PYVER=$(cat "$SG_APPS_DIR/python/SG_VERSION" 2>/dev/null || echo "")
+    PYTAG=$(echo "$PYVER" | cut -d. -f1-2)
+
+    # By bare name through cmd, so the machine PATH is what finds it.
+    out=$(wine cmd /c python --version 2>/dev/null | clean || true)
+    case "$out" in
+        "Python $PYVER"*) pass "python on PATH: $out" ;;
+        *)                fail "python on PATH: expected 'Python $PYVER', got '$out'" ;;
+    esac
+
+    # Status and output captured separately: a pipeline's status is its last
+    # command's, and POSIX sh has no pipefail to say otherwise.
+    raw=$(wine cmd /c python -c "import ssl, sqlite3, json, sys; print('ok', ssl.OPENSSL_VERSION, 'sqlite', sqlite3.sqlite_version); sys.exit(7)" 2>/dev/null) && rc=0 || rc=$?
+    out=$(printf '%s\n' "$raw" | clean)
+    case "$out" in
+        ok\ OpenSSL*) pass "python stdlib: $out" ;;
+        *)            fail "python stdlib: got '$out'" ;;
+    esac
+    if [ "$rc" = 7 ]; then pass "python exit code propagates (7)"
+    else fail "python exit code: expected 7, got $rc"; fi
+
+    out=$(wine cmd /c python -m pip --version 2>/dev/null | clean || true)
+    case "$out" in
+        pip\ *) pass "pip: $(printf '%s\n' "$out" | cut -d' ' -f1-2)" ;;
+        *)      fail "pip: got '$out'" ;;
+    esac
+
+    if wine reg query "HKLM\\Software\\Python\\PythonCore\\$PYTAG\\InstallPath" /v ExecutablePath >/dev/null 2>&1; then
+        pass "Python $PYTAG is registered (PEP 514)"
+    else
+        fail "Python $PYTAG is not registered under HKLM\\Software\\Python\\PythonCore"
+    fi
+
+    check_shortcut "Python $PYTAG" "C:\\Program Files\\Python$(echo "$PYTAG" | tr -d .)\\python.exe"
+else
+    info "no Python in the payload"
+fi
+
+# --- PowerShell ---------------------------------------------------------------
+if [ -f "$SG_APPS_DIR/powershell/pwsh.exe" ]; then
+    # Under a pseudo-terminal: with no console and its output redirected,
+    # pwsh's ConsoleHost fails on Wine (a NullReferenceException in
+    # ConsoleHost.Start). A person always runs it with one -- a console window
+    # or a terminal -- so that is what is tested. `script` is in bsdutils,
+    # which is Essential.
+    #
+    # Through cmd, which does the PATH lookup the way a user's prompt does.
+    raw=$(script -qec "wine cmd /c pwsh -NoLogo -NoProfile -NonInteractive -Command '\$PSVersionTable.PSVersion.ToString(); \$PSHOME; exit 7'" /dev/null 2>/dev/null) && rc=0 || rc=$?
+    out=$(printf '%s\n' "$raw" | clean | sed '/^$/d')
+    ver=$(printf '%s\n' "$out" | sed -n '1p')
+    case "$ver" in
+        7.*) pass "pwsh on PATH: PowerShell $ver, PSHOME $(printf '%s\n' "$out" | sed -n '2p')" ;;
+        *)   fail "pwsh on PATH: got '$(printf '%s\n' "$out" | tr '\n' ' ')'" ;;
+    esac
+    if [ "$rc" = 7 ]; then pass "pwsh exit code propagates (7)"
+    else fail "pwsh exit code: expected 7, got $rc"; fi
+
+    check_shortcut "PowerShell 7" "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+else
+    info "no PowerShell in the payload"
+fi
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

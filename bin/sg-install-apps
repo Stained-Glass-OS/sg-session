@@ -1,0 +1,124 @@
+#!/bin/sh
+# Install the bundled Windows applications into the system prefix: PowerShell 7
+# and CPython, staged by the image under SG_APPS_DIR (/opt/sg-apps) as upstream
+# Windows builds (see docs/packages.md in sg-image).
+#
+# Each is copied into C:\Program Files as real files. A symlink to the payload
+# was tried first and is not reliable: PowerShell (.NET) was sometimes started
+# with its image path resolved to ...\PowerShell\pwsh.exe -- the "7" gone --
+# and then looked for its runtime in the wrong directory, depending on the
+# wineserver's state. Real files are also what a Windows installer leaves. They
+# keep the payload's modes (0755/0644), so once sg-prefix-init chowns the
+# prefix to the machine account, users can run them but not change them -- as
+# Program Files is to non-administrators. pip falls back to a per-user install
+# when the system site-packages is not writable, as on Windows.
+#
+# Then what Windows' own installers would do: add them to the machine PATH,
+# register Python under PEP 514 so launchers and IDEs find it, and put
+# shortcuts in the all-users Start menu, which sg-start lists.
+#
+# Idempotent and version-stamped: re-running is cheap, and a new payload
+# reinstalls. Absent payload is a supported configuration.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+[ -d "$SG_APPS_DIR" ] || { sg_log "no bundled applications at $SG_APPS_DIR"; exit 0; }
+[ -d "$SG_PREFIX/drive_c/windows/system32" ] || sg_die "prefix not initialized at $SG_PREFIX"
+
+VERSION=$(cat "$SG_APPS_DIR/VERSION" 2>/dev/null || echo unknown)
+STAMP="$SG_PREFIX/.sg-apps-installed"
+if [ "$(cat "$STAMP" 2>/dev/null || true)" = "$VERSION" ]; then
+    sg_log "bundled applications already installed ($VERSION)"
+    exit 0
+fi
+
+PF="$SG_PREFIX/drive_c/Program Files"
+PROGRAMS='C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
+mkdir -p "$PF" "$SG_PREFIX/drive_c/ProgramData/Microsoft/Windows/Start Menu/Programs"
+
+# Copy payload directory $1 to C:\Program Files\$2 ($3: the Windows spelling,
+# for the log). A directory there that we did not put there (no marker) is
+# left alone. One we did is replaced wholesale, so an upgraded payload leaves
+# no stale files from the old one behind.
+MARKER=.sg-bundled
+install_app() {
+    src=$1 name=$2 shown=$3
+    dest="$PF/$name"
+    mkdir -p "$(dirname "$dest")"
+    if [ -e "$dest" ] && [ ! -L "$dest" ] && [ ! -f "$dest/$MARKER" ]; then
+        sg_log "WARNING: C:\\Program Files\\$shown exists and is not ours; leaving it"
+        return 1
+    fi
+    rm -rf "$dest"
+    cp -a "$src" "$dest"
+    chmod -R u+w,go-w "$dest"   # the owner is SYSTEM; users only read and run
+    printf '%s\n' "$VERSION" > "$dest/$MARKER"
+    sg_log "installed C:\\Program Files\\$shown"
+}
+
+shortcut() {
+    wine cscript //nologo "$(winepath -w "$SG_LIB/sg-mklnk.js")" "$PROGRAMS\\$1.lnk" "$2" "$3" \
+        >/dev/null 2>&1 || sg_log "WARNING: could not create the '$1' shortcut"
+}
+
+path_dirs=""
+
+if [ -f "$SG_APPS_DIR/powershell/pwsh.exe" ]; then
+    install_app "$SG_APPS_DIR/powershell" 'PowerShell/7' 'PowerShell\7' || true
+    path_dirs="$path_dirs;C:\\Program Files\\PowerShell\\7"
+    shortcut 'PowerShell 7' 'C:\Program Files\PowerShell\7\pwsh.exe' 'PowerShell 7'
+fi
+
+if [ -f "$SG_APPS_DIR/python/python.exe" ]; then
+    PYVER=$(cat "$SG_APPS_DIR/python/SG_VERSION" 2>/dev/null || echo 3)   # e.g. 3.14.7
+    PYTAG=$(echo "$PYVER" | cut -d. -f1-2)                             # 3.14
+    PYDIR="Python$(echo "$PYTAG" | tr -d .)"                           # Python314
+    install_app "$SG_APPS_DIR/python" "$PYDIR" "$PYDIR" || true
+    path_dirs="$path_dirs;C:\\Program Files\\$PYDIR;C:\\Program Files\\$PYDIR\\Scripts"
+    shortcut "Python $PYTAG" "C:\\Program Files\\$PYDIR\\python.exe" "Python $PYVER"
+
+    # PEP 514: how launchers, IDEs and installers find a Python on Windows.
+    k="HKLM\\Software\\Python\\PythonCore\\$PYTAG"
+    reg_ok=1
+    wine reg add "$k" /v DisplayName /d "Python $PYVER (64-bit)" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k" /v SupportUrl /d "https://www.python.org/" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k" /v Version /d "$PYVER" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k" /v SysVersion /d "$PYTAG" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k" /v SysArchitecture /d 64bit /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k\\InstallPath" /ve /d "C:\\Program Files\\$PYDIR\\" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k\\InstallPath" /v ExecutablePath /d "C:\\Program Files\\$PYDIR\\python.exe" /f >/dev/null 2>&1 || reg_ok=0
+    wine reg add "$k\\InstallPath" /v WindowedExecutablePath /d "C:\\Program Files\\$PYDIR\\pythonw.exe" /f >/dev/null 2>&1 || reg_ok=0
+    if [ "$reg_ok" = 1 ]; then sg_log "registered Python $PYVER under $k"
+    else sg_log "WARNING: Python registration under $k is incomplete"; fi
+fi
+
+# Machine PATH, which every user's environment is built from. Read, extend
+# with what is not there yet, write back as REG_EXPAND_SZ so %SystemRoot% in
+# the existing value keeps expanding.
+if [ -n "$path_dirs" ]; then
+    envkey='HKLM\System\CurrentControlSet\Control\Session Manager\Environment'
+    cur=$(wine reg query "$envkey" /v PATH 2>/dev/null | tr -d '\r' \
+          | sed -n 's/^ *PATH *REG_[A-Z_]* *//p')
+    new=$cur
+    old_ifs=$IFS; IFS=';'
+    for d in $path_dirs; do
+        [ -n "$d" ] || continue
+        case ";$new;" in *";$d;"*) ;; *) new="$new;$d" ;; esac
+    done
+    IFS=$old_ifs
+    if [ "$new" != "$cur" ]; then
+        if wine reg add "$envkey" /v PATH /t REG_EXPAND_SZ /d "$new" /f >/dev/null 2>&1; then
+            sg_log "machine PATH now includes the bundled applications"
+        else
+            sg_log "WARNING: could not update the machine PATH"
+        fi
+    fi
+fi
+
+wineserver -w
+printf '%s\n' "$VERSION" > "$STAMP"
+sg_log "bundled applications installed ($VERSION)"

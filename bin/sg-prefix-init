@@ -13,8 +13,27 @@ sg_wine_env
 
 STAMP="$SG_PREFIX/.sg-initialized"
 
+# Run the installers for staged payloads. Each is stamp-guarded, so on an
+# up-to-date prefix this costs a few file reads; on a newer payload it installs.
+run_installers() {
+    for _inst in sg-install-d3d sg-install-apps; do
+        if command -v "$_inst" >/dev/null 2>&1; then
+            "$_inst" || sg_log "WARNING: $_inst failed; continuing without it"
+        elif [ -x "${SG_BIN:-/usr/bin}/$_inst" ]; then
+            "${SG_BIN:-/usr/bin}/$_inst" || sg_log "WARNING: $_inst failed; continuing without it"
+        fi
+    done
+}
+
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
+    # If Wine was upgraded, the prefix is stale and Wine updates it inside
+    # whatever process starts it first. Start one here -- at boot, as the
+    # machine account, with the Mono/Gecko prompts suppressed -- rather than
+    # leave that update to a user's desktop or a Windows service.
+    sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
+    wineserver -w
+    run_installers
     exit 0
 fi
 
@@ -40,7 +59,7 @@ fi
 # wineboot --init builds the prefix. It forks a wineserver that lingers for a
 # few seconds after; wineserver -w waits for it so the build step cannot race
 # against a half-written registry.
-wineboot --init
+sg_wine_unattended wineboot --init
 wineserver -w
 
 # --- registry defaults contributed by other packages ----------------------
@@ -126,14 +145,11 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
     wineserver -w
 fi
 
-# Direct3D translation layers, if the image staged them. Deliberately before
-# the ownership fixup below, so the DLLs it copies in are chowned with the rest
-# of the prefix rather than staying root-owned inside a prefix nobody else owns.
-if command -v sg-install-d3d >/dev/null 2>&1; then
-    sg-install-d3d || sg_log "WARNING: D3D install failed; continuing without it"
-elif [ -x "${SG_BIN:-/usr/bin}/sg-install-d3d" ]; then
-    "${SG_BIN:-/usr/bin}/sg-install-d3d" || sg_log "WARNING: D3D install failed; continuing without it"
-fi
+# Direct3D layers and bundled applications, if the image staged them.
+# Deliberately before the ownership fixup below, so what they copy in is chowned
+# with the rest of the prefix rather than staying root-owned inside a prefix
+# nobody else owns.
+run_installers
 
 # The prefix is machine state, not user state.
 # MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the

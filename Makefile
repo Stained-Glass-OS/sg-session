@@ -17,6 +17,7 @@ UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
+               bin/sg-install-apps bin/sg-apps-check \
                bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
@@ -60,6 +61,7 @@ install: d3d-probe greeter
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -m 0755 $(LIBS) $(LIBDIR)
+	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	install -m 0644 systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service $(UNITDIR)
