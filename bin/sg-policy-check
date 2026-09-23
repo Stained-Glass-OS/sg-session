@@ -1,0 +1,86 @@
+#!/bin/sh
+# Machine Group Policy: an administrator's policy binds every user, a user
+# cannot override it, and both Windows programs and the shell honour it
+# (ADR 0012 / "apply policies"). Runs as root, acting as the SYSTEM account and
+# as the session user.
+#
+#   1. SYSTEM sets a machine policy (NoClose) in HKLM.
+#   2. a program (SHRestricted) run by the ordinary user sees it -- HKLM
+#      precedence (wine-sg 0025).
+#   3. the user setting the opposite in their own HKCU does NOT override it.
+#   4. the user cannot write the HKLM policy branch (protection; clause 3).
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+SG_LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+
+[ "$(id -u)" = 0 ] || { echo "run as root: it acts as $SG_USER and $SG_SYSTEM_USER"; exit 2; }
+probe="$SG_LIBEXEC/sg-policy-probe.exe"
+[ -f "$probe" ] || { echo "SKIP: sg-policy-probe.exe not built"; exit 77; }
+
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+
+REST_NOCLOSE=2
+KEY='HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+UKEY='HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+_pw=$(runuser -u "$SG_SYSTEM_USER" -- env WINEPREFIX="$SG_PREFIX" sh -c "cd /tmp; $(command -v winepath >/dev/null && echo winepath || echo true) -w '$probe' 2>/dev/null")
+
+# helper: run the probe as $1, print SHRestricted(NoClose)
+probe_as() {
+    _o=$(mktemp); chmod 666 "$_o"
+    runuser -u "$1" -- env WINEPREFIX="$SG_PREFIX" WINEDEBUG=-all PATH="/opt/wine-sg/bin:$PATH" \
+        sh -c "cd /tmp; wine '$_pw' $REST_NOCLOSE >'$_o' 2>/dev/null </dev/null"
+    tr -d '\r' < "$_o" | sed '/^$/d' | tail -1; rm -f "$_o"
+}
+reg_as() {  # user  reg-args...   -> exit status only, output discarded
+    _u=$1; shift; _o=$(mktemp); chmod 666 "$_o"
+    runuser -u "$_u" -- env WINEPREFIX="$SG_PREFIX" WINEDEBUG=-all PATH="/opt/wine-sg/bin:$PATH" \
+        sh -c "cd /tmp; wine reg \"\$@\" >'$_o' 2>&1 </dev/null" sh "$@"; _rc=$?
+    rm -f "$_o"; return "$_rc"
+}
+
+# 0. clean slate
+reg_as "$SG_SYSTEM_USER" delete "$KEY" /v NoClose /f >/dev/null 2>&1 || true
+runuser -u "$SG_USER" -- env WINEPREFIX="$SG_PREFIX" PATH="/opt/wine-sg/bin:$PATH" \
+    sh -c "cd /tmp; wine reg delete '$UKEY' /v NoClose /f >/dev/null 2>&1 </dev/null" || true
+
+# 1. SYSTEM sets the machine policy.
+if reg_as "$SG_SYSTEM_USER" add "$KEY" /v NoClose /t REG_DWORD /d 1 /f; then
+    pass "$SG_SYSTEM_USER set the machine policy NoClose=1"
+else
+    fail "$SG_SYSTEM_USER could not set the machine policy"
+fi
+
+# 2. the ordinary user's program honours it.
+v=$(probe_as "$SG_USER")
+if [ "$v" = 1 ]; then pass "a program run by $SG_USER honours the machine policy (SHRestricted=1)"
+else fail "$SG_USER's program did not honour the policy (SHRestricted=$v)"; fi
+
+# 3. the user cannot override it in their own HKCU.
+runuser -u "$SG_USER" -- env WINEPREFIX="$SG_PREFIX" PATH="/opt/wine-sg/bin:$PATH" \
+    sh -c "cd /tmp; wine reg add '$UKEY' /v NoClose /t REG_DWORD /d 0 /f >/dev/null 2>&1 </dev/null" || true
+v=$(probe_as "$SG_USER")
+if [ "$v" = 1 ]; then pass "the machine policy overrides the user's own HKCU (still 1)"
+else fail "the user overrode the machine policy via HKCU (SHRestricted=$v)"; fi
+
+# 4. the user cannot write the machine policy branch.
+if reg_as "$SG_USER" add "$KEY" /v NoClose /t REG_DWORD /d 0 /f; then
+    v=$(runuser -u "$SG_SYSTEM_USER" -- env WINEPREFIX="$SG_PREFIX" PATH="/opt/wine-sg/bin:$PATH" \
+        sh -c "cd /tmp; wine reg query '$KEY' /v NoClose 2>/dev/null </dev/null" | tr -d '\r' | grep -c '0x0')
+    if [ "$v" = 0 ]; then pass "the user's write to the machine policy branch had no effect"
+    else fail "$SG_USER changed the machine policy"; fi
+else
+    pass "the user is refused writing the machine policy branch"
+fi
+
+# cleanup
+reg_as "$SG_SYSTEM_USER" delete "$KEY" /v NoClose /f >/dev/null 2>&1 || true
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

@@ -19,7 +19,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
-               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-greeter-check
+               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -68,6 +68,15 @@ install: d3d-probe greeter token-probe procagent
 	    install -m 0755 build/sg-token-probe.exe build/sg-token-probe-admin.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@if [ -f build/sg-policy-probe.exe ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/sg-policy-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	@# Machine policy drop-in directory (Group Policy). Ships the README and a
+	@# disabled example; an administrator adds .reg files here.
+	install -d $(DESTDIR)/etc/stained-glass/policy.d
+	install -m 0644 config/policy.d/README config/policy.d/10-example.reg.example \
+	    $(DESTDIR)/etc/stained-glass/policy.d/
 	install -d $(DESTDIR)/etc/pam.d
 	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote \
 	    config/pam/stained-glass-elevate $(DESTDIR)/etc/pam.d/
@@ -159,7 +168,8 @@ token-probe:
 	    x86_64-w64-mingw32-windres test/sg-token-probe-admin.rc -O coff -o build/sg-token-probe-admin.res && \
 	    $(MINGW64) -O2 -o build/sg-token-probe-admin.exe test/sg-token-probe.c \
 	        build/sg-token-probe-admin.res -ladvapi32 && \
-	    echo "built: build/sg-token-probe.exe build/sg-token-probe-admin.exe"; \
+	    $(MINGW64) -O2 -o build/sg-policy-probe.exe test/sg-policy-probe.c -lshell32 && \
+	    echo "built: build/sg-token-probe.exe build/sg-token-probe-admin.exe build/sg-policy-probe.exe"; \
 	fi
 
 # --- the greeter -----------------------------------------------------------

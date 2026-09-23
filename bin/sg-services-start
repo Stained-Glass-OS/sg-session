@@ -27,6 +27,11 @@ export SG_WINSTATION
 sg_log "protecting machine registry branches"
 sg_protect_machine_registry
 
+# Machine Group Policy, applied after the branches are protected so it lands in
+# administrator-owned keys.
+sg_log "applying machine policy"
+sg_apply_policy
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this

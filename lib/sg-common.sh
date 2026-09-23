@@ -82,6 +82,26 @@ sg_session_env() {
     fi
 }
 
+# Apply machine Group Policy (ADR-less: policy is data, not a decision). An
+# administrator drops .reg files under SG_POLICY_DIR; at boot, as the SYSTEM
+# account, they are imported into the machine registry. Because they land in
+# HKLM (administrator-owned, wine-sg 0024) and shell32's SHRestricted reads
+# HKLM first (wine-sg 0025), the policy binds every user and no user can
+# override it. Idempotent: importing the same policy twice is harmless.
+SG_POLICY_DIR="${SG_POLICY_DIR:-/etc/stained-glass/policy.d}"
+sg_apply_policy() {
+    [ "${SG_SYSTEM_PREFIX:-1}" = "1" ] || return 0
+    [ -d "$SG_POLICY_DIR" ] || return 0
+    for _p in "$SG_POLICY_DIR"/*.reg; do
+        [ -f "$_p" ] || continue
+        if wine reg import "$(winepath -w "$_p" 2>/dev/null)" >/dev/null 2>&1; then
+            sg_log "applied policy: $(basename "$_p")"
+        else
+            sg_log "WARNING: could not apply policy $(basename "$_p")"
+        fi
+    done
+}
+
 # Protect the machine registry branches (multi-user debt / S2 clause 3). Run
 # against the *machine* wineserver, every boot, as the SYSTEM account: creating
 # these keys as the prefix owner gives them the HKLM descriptor (administrators

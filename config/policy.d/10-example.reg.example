@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; Example machine policy: forbid shutting down and signing out from the shell.
+; Copy to 10-example.reg (drop the .example) to activate. sg-start dims and
+; ignores the power and sign-out buttons; any Windows program that honours
+; NoClose does the same.
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer]
+"NoClose"=dword:00000001
+"StartMenuLogOff"=dword:00000001

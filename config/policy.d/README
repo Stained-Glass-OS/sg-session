@@ -1,0 +1,19 @@
+Machine Group Policy for Stained Glass OS.
+
+Drop .reg files here (root-owned). At boot, sg-services-start imports them into
+the machine registry as the SYSTEM account, so they land in the
+administrator-owned HKLM policy branches and bind every user -- a user cannot
+override them (wine-sg 0024/0025).
+
+Policies go under:
+  HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\...   (shell/Explorer)
+  HKLM\Software\Policies\...                                    (application/OS)
+
+Example -- forbid shutdown and sign-out from the shell (see 10-example.reg,
+shipped disabled as .reg.example):
+
+  Windows Registry Editor Version 5.00
+
+  [HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer]
+  "NoClose"=dword:00000001
+  "StartMenuLogOff"=dword:00000001
