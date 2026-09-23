@@ -6,11 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A new push to the same branch supersedes a run still in progress: each run
-# can spend ~40 minutes building wine-sg, and only the newest result matters.
+# One run at a time per branch; a newer push waits, and replaces any run still
+# waiting behind it. Not cancel-in-progress: that killed a run 20 minutes into
+# its ~35-minute wine-sg build, before the build could be cached, so the next run
+# had to redo all of it. Letting the running one finish caches Wine for every
+# run after it.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   gate:
