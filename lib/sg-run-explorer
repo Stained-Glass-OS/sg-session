@@ -67,19 +67,39 @@ unset SG_WINSTATION
 
 sg_log "explorer starting: driver=$SG_DRIVER desktop=shell,$GEOM display=${DISPLAY:-none}"
 
-# Write the driver choice into the prefix registry rather than relying on an
-# environment variable, so anything launched later in the session agrees.
-wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /t REG_SZ /d "$SG_DRIVER" /f >/dev/null 2>&1 || true
-
-# Make the virtual desktop the default for every process in this prefix.
+# These writes decide which desktop every later process joins, so they must
+# actually land -- and that turns out to be the whole game. On a shared system
+# prefix the wineserver may not be reachable yet when we run: the first `wine`
+# then fails, and the desktop still comes up because `explorer /desktop=shell`
+# below starts the server itself. The result is a working shell whose
+# HKCU\...\Explorer\Desktop was never written, so `wine notepad` reads no
+# desktop, lands on an empty "Default", finds no graphics driver there, and
+# dies with "no driver could be loaded" -- while the shell looks fine. It cost
+# a day to see, because the desktop working hides that the writes did not.
 #
-# This is what makes the shell a shell. Without it, `wine notepad` opens its own
-# X toplevel outside the desktop -- and under a fullscreen compositor like cage
-# that toplevel covers the desktop entirely, taskbar included. With it, apps
-# render inside the desktop window as child windows and appear in the taskbar,
-# which is the behaviour Phase 0 is actually aiming at.
-wine reg add 'HKCU\Software\Wine\Explorer' /v Desktop /t REG_SZ /d shell /f >/dev/null 2>&1 || true
-wine reg add 'HKCU\Software\Wine\Explorer\Desktops' /v shell /t REG_SZ /d "$GEOM" /f >/dev/null 2>&1 || true
+# So wait for the server to answer, then write, then confirm. A desktop we
+# cannot associate apps with is not a usable session, so this is fatal, not
+# best-effort.
+reg_set() {
+    _key=$1 _val=$2 _data=$3 _i=0
+    while [ "$_i" -lt "${SG_REG_TIMEOUT:-30}" ]; do
+        if wine reg add "$_key" /v "$_val" /t REG_SZ /d "$_data" /f >/dev/null 2>&1 &&
+           wine reg query "$_key" /v "$_val" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+        _i=$((_i + 1))
+    done
+    sg_die "could not set $_key\\$_val after ${SG_REG_TIMEOUT:-30}s: the wineserver never became writable"
+}
+
+# Driver choice, so anything launched later agrees rather than guessing.
+reg_set 'HKCU\Software\Wine\Drivers'  Graphics "$SG_DRIVER"
+# The virtual desktop as the default for every process in this prefix: without
+# it an app opens its own toplevel outside the desktop, which under a
+# fullscreen compositor covers the desktop and taskbar entirely.
+reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
+reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 
 # The shell: a single virtual-desktop window named "shell" at the output size.
 exec wine explorer "/desktop=shell,$GEOM"
