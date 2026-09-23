@@ -27,7 +27,7 @@ pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
 
 SOCK=/run/sg-elevate-check.sock
-WHO=/run/sg-elevate-who
+WHO=/tmp/sg-elevate-who
 LOG=/run/sg-elevate-check.log
 
 # The lab's session user must be an administrator for this to mean anything.
@@ -40,11 +40,11 @@ start_broker() {   # $1 = yes|no  (consent decision in test mode)
     rm -f "$SOCK" "$LOG"; sleep 1
     SG_BROKER_TEST=1 SG_BROKER_TEST_CONSENT="$1" SG_BROKER_SOCK="$SOCK" \
         SG_BROKERD_LOG="$LOG" SG_SYSTEM_USER="$SG_SYSTEM_USER" SG_ADMIN_GROUP="$SG_ADMIN_GROUP" \
-        "$SG_LIBEXEC/sg-brokerd"
+        "$SG_LIBEXEC/sg-brokerd" >/dev/null 2>&1 </dev/null
     for _ in 1 2 3 4 5; do [ -S "$SOCK" ] && break; sleep 1; done
 }
 elevate_as_user() {   # runs sg-elevate as $SG_USER
-    rm -f "$WHO"
+    rm -f "$WHO"; : > "$WHO"; chmod 0666 "$WHO"
     runuser -u "$SG_USER" -- env SG_BROKER_SOCK="$SOCK" \
         "$SG_LIBEXEC/sg-elevate" -- /bin/sh -c "id -un > $WHO 2>/dev/null" >/dev/null 2>&1
 }

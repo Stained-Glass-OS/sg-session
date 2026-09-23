@@ -31,7 +31,13 @@ if [ ! -x "$SG_LIBEXEC/sg-procagent" ]; then echo "SKIP: sg-procagent not built"
 echo "checking cross-process memory for $(id -un)..."
 _probe_w=$(timeout 15 winepath -w "$probe" 2>/dev/null)
 [ -n "$_probe_w" ] || { echo "SKIP: winepath/wineserver not responding"; exit 77; }
-run_probe() { ( cd /tmp 2>/dev/null || true; timeout 25 wine "$_probe_w" 2>/dev/null ) | clean; }
+# wine leaves child processes (winedevice, services) holding the stdout pipe,
+# so a $(wine ... | clean) never returns. Write to a file and read it back.
+run_probe() {
+    _o=$(mktemp)
+    ( cd /tmp 2>/dev/null || true; timeout 25 wine "$_probe_w" >"$_o" 2>/dev/null </dev/null )
+    clean < "$_o"; rm -f "$_o"
+}
 
 # Make sure no stale agent is running for us, then take a clean measurement.
 pkill -u "$(id -u)" -f "[s]g-procagent" 2>/dev/null || true
@@ -47,7 +53,7 @@ else
 fi
 
 # 2. With the agent, it must succeed.
-"$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" &
+"$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" >/dev/null 2>&1 </dev/null &
 _agent=$!
 for _ in 1 2 3 4 5; do [ -S "$SG_PREFIX/.sg-procagent.$(id -u)" ] && break; sleep 1; done
 out=$(run_probe)
