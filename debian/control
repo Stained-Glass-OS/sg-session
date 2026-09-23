@@ -11,6 +11,7 @@ Rules-Requires-Root: no
 Package: sg-session
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends},
+Recommends: sg-shell,
          wine-sg | wine,
          sg-compositor | cage,
          xwayland,

@@ -101,5 +101,15 @@ reg_set 'HKCU\Software\Wine\Drivers'  Graphics "$SG_DRIVER"
 reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
 reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 
+# The Start menu, if sg-shell is installed. It runs alongside the shell as a
+# persistent listener; explorer's Start button toggles it (wine-sg patch 0012).
+# Backgrounded and best-effort: a session without it still has Wine's built-in
+# Start menu, so this must never block the shell coming up.
+_sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
+if [ -f "$_sgstart" ]; then
+    sg_log "starting the Start menu (sg-start)"
+    wine "$_sgstart" >>"${SG_LOG_DIR:-/tmp}/sg-start.log" 2>&1 &
+fi
+
 # The shell: a single virtual-desktop window named "shell" at the output size.
 exec wine explorer "/desktop=shell,$GEOM"
