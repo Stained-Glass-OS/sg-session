@@ -112,11 +112,16 @@ D3D_LIBS := -ld3d11 -ld3d12 -ldxgi -luuid
 
 .PHONY: d3d-probe
 d3d-probe:
-	@command -v $(MINGW64) >/dev/null 2>&1 || { echo "SKIP: $(MINGW64) not installed"; exit 0; }
-	@mkdir -p build
-	$(MINGW64) -O2 -o build/d3d-probe64.exe test/d3d-probe.c $(D3D_LIBS)
-	$(MINGW32) -O2 -o build/d3d-probe32.exe test/d3d-probe.c $(D3D_LIBS)
-	@echo "built: build/d3d-probe64.exe build/d3d-probe32.exe"
+	@# One shell for the whole recipe: each recipe line runs in its own shell,
+	@# so an `exit 0` on its own line would skip nothing.
+	@if ! command -v $(MINGW64) >/dev/null 2>&1; then \
+	    echo "SKIP: $(MINGW64) not installed"; \
+	else \
+	    mkdir -p build && \
+	    $(MINGW64) -O2 -o build/d3d-probe64.exe test/d3d-probe.c $(D3D_LIBS) && \
+	    $(MINGW32) -O2 -o build/d3d-probe32.exe test/d3d-probe.c $(D3D_LIBS) && \
+	    echo "built: build/d3d-probe64.exe build/d3d-probe32.exe"; \
+	fi
 
 # --- the greeter -----------------------------------------------------------
 #

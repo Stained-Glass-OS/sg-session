@@ -31,6 +31,11 @@ jobs:
             make shellcheck cage xwayland x11-utils procps \
             wine wine64 ca-certificates adduser \
             debhelper build-essential devscripts
+          # Everything debian/control says the build needs (mingw for the
+          # Windows-side greeter and probes, PAM headers for the native
+          # helpers). Read from the package rather than listed here, so the
+          # two cannot drift apart again -- they did, and CI went red.
+          apt-get build-dep -y ./
 
       - name: Lint
         run: make lint
@@ -66,6 +71,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             make debhelper build-essential devscripts shellcheck ca-certificates
+          apt-get build-dep -y ./
 
       - name: Build package
         run: dpkg-buildpackage -us -uc -b
