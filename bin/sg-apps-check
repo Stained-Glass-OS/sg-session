@@ -1,5 +1,6 @@
 #!/bin/sh
-# Do the bundled Windows applications actually run, the way a user reaches them?
+# Do the bundled Windows applications and runtimes actually run, the way a user
+# reaches them?
 #
 # What this proves: PowerShell 7 and CPython are installed in the prefix, are
 # found through the machine PATH rather than by absolute path, start, report
@@ -109,6 +110,57 @@ if [ -f "$SG_APPS_DIR/powershell/pwsh.exe" ]; then
     check_shortcut "PowerShell 7" "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
 else
     info "no PowerShell in the payload"
+fi
+
+# --- Wine Mono (.NET Framework) and Wine Gecko ------------------------------
+# Only when the image staged them (sg_addon_staged): then sg-prefix-init lets
+# wineboot install them, and they must be there.
+if sg_addon_staged mono; then
+    # A real round trip: .NET Framework's own C# compiler -- itself a .NET
+    # program -- builds a program, and the program runs on the Framework
+    # runtime through mscoree. Wine Mono puts csc.exe where Windows has it.
+    _t=$(mktemp -d)
+    cat > "$_t/hello.cs" <<'EOF'
+using System;
+class Hello {
+    static int Main() {
+        Console.WriteLine(".NET Framework " + Environment.Version);
+        return 7;
+    }
+}
+EOF
+    wine 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo \
+        "/out:$(winepath -w "$_t/hello.exe")" "$(winepath -w "$_t/hello.cs")" >/dev/null 2>&1 || true
+    if [ -f "$_t/hello.exe" ]; then
+        pass ".NET Framework compiler (csc) built a program"
+        raw=$(wine "$_t/hello.exe" 2>/dev/null) && rc=0 || rc=$?
+        out=$(printf '%s\n' "$raw" | clean)
+        case "$out" in
+            ".NET Framework 4."*) pass "it runs on the Framework runtime: $out" ;;
+            *)                    fail ".NET Framework program printed '$out'" ;;
+        esac
+        if [ "$rc" = 7 ]; then pass ".NET Framework exit code propagates (7)"
+        else fail ".NET Framework exit code: expected 7, got $rc"; fi
+    else
+        fail ".NET Framework compiler (csc) did not build a program -- is Wine Mono installed?"
+    fi
+    rm -rf "$_t"
+else
+    info "Wine Mono not staged -- .NET Framework not checked"
+fi
+
+if sg_addon_staged gecko; then
+    # Presence only. The HTML engine loads under a display, but a functional
+    # check through the script host fails in Wine's JScript ActiveXObject
+    # layer rather than in Gecko, so this claims installation and no more.
+    _g_ok=1
+    for _arch in system32 syswow64; do
+        [ -n "$(find "$SG_PREFIX/drive_c/windows/$_arch/gecko" -maxdepth 3 -name wine_gecko 2>/dev/null)" ] || _g_ok=0
+    done
+    if [ "$_g_ok" = 1 ]; then pass "Wine Gecko (HTML engine) installed, 64- and 32-bit"
+    else fail "Wine Gecko is staged but not installed in both system32 and syswow64"; fi
+else
+    info "Wine Gecko not staged -- HTML engine not checked"
 fi
 
 echo

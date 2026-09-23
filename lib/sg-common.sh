@@ -130,9 +130,24 @@ sg_wine_env() {
     # belongs only on the unattended prefix builds and updates: sg_wine_unattended.
 }
 
-# Run one command with Wine's Mono and Gecko installers suppressed, for the
-# unattended prefix build and update paths where a dialog would wait for a
-# click that never comes.
+# Run one command for the unattended prefix build and update paths. Wine
+# installs Mono (.NET Framework) and Gecko (the HTML engine) silently when their
+# MSIs are on disk (/usr/share/wine or wine-sg's own share/wine), and otherwise
+# pops a download dialog that would wait forever for a click. So suppress each
+# only when it is not staged: suppressing a staged one would skip installing it.
+sg_addon_staged() {
+    for _d in "${SG_WINE_DIR:-/opt/wine-sg}/share/wine/$1" "/usr/share/wine/$1"; do
+        for _f in "$_d"/*.msi; do [ -f "$_f" ] && return 0; done
+    done
+    return 1
+}
 sg_wine_unattended() {
-    WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}mscoree,mshtml=" "$@"
+    _off=""
+    sg_addon_staged mono  || _off="mscoree"
+    sg_addon_staged gecko || _off="${_off:+$_off,}mshtml"
+    if [ -n "$_off" ]; then
+        WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}$_off=" "$@"
+    else
+        "$@"
+    fi
 }
