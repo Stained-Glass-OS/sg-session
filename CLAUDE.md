@@ -197,6 +197,28 @@ user owns can be steered with a symlink. A user cannot do this themselves:
 PowerShell falls into ConstrainedLanguage mode (it probes `%TEMP%` for
 AppLocker).
 
+## The per-user process agent (sg-procagent)
+
+`sg-procagent` (native C, `procagent/`) runs **as each session user**, launched
+by `sg-session-start`. The machine-level wineserver runs as SYSTEM and the
+kernel refuses it `ptrace`/`tgkill`/`sched_setaffinity` on an ordinary user's
+processes, so the server **delegates** those to this agent (wine-sg patch
+0021, ADR 0014): cross-process `ReadProcessMemory`/`WriteProcessMemory`,
+`DebugActiveProcess` (PEB write), async-APC thread signals, thread affinity.
+The agent performs them on its own user's processes, where the kernel allows
+it — it gains **no** privilege.
+
+- It binds `<prefix>/.sg-procagent.<uid>` (0660, group = the prefix group, so
+  the SYSTEM-account server can reach it and nothing wider) and serves the
+  wireserver's requests. The wire protocol must match `server/ptrace.c` in
+  wine-sg (see that repo's CLAUDE.md); if you change one, change both.
+- It touches only its own uid's processes (kernel-enforced), so a compromised
+  server gains nothing by asking it to.
+- Gate: `sg-procagent-check` runs `sg-procmem-probe.exe` and is mutant-proven —
+  cross-process memory succeeds with the agent, is refused without it. In the
+  image, `make procagent-test`. The gate starts and stops its own agent because
+  it runs outside a graphical session.
+
 ## Token gate
 
 `sg-token-check` (root, in the image: `make token-test` in sg-image) runs
