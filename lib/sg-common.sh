@@ -65,7 +65,11 @@ export SG_COMPOSITOR
 # a later user removing an earlier user's stale socket, and the compositor
 # refuses to start without its sockets. sg-lockd trusts a directory only if
 # its name matches the compositor's peer uid.
-SG_SEAT_DIR="${SG_SEAT_DIR:-/run/stained-glass/seat0}"
+# Deliberately NOT under /run/stained-glass: that is sg-wineserver.service's
+# RuntimeDirectory, which systemd deletes whenever the service stops -- taking
+# the lock sockets with it and leaving the next session unlockable. Its own
+# runtime path is independent of any service's lifecycle.
+SG_SEAT_DIR="${SG_SEAT_DIR:-/run/stained-glass-seat/seat0}"
 
 # Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
 # as PE DLLs. Absent on a machine that did not install them, which is a

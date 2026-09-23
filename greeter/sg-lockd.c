@@ -328,7 +328,7 @@ int main( void )
     /* A fixed control socket (the gate), or a seat directory to scan. */
     g_control = getenv( "SG_LOCK_CONTROL" );
     g_seat_dir = getenv( "SG_SEAT_DIR" );
-    if (!g_seat_dir) g_seat_dir = "/run/stained-glass/seat0";
+    if (!g_seat_dir) g_seat_dir = "/run/stained-glass-seat/seat0";
     g_ui_cmd = getenv( "SG_LOCK_UI" );
     if (!g_ui_cmd) g_ui_cmd = "/usr/lib/stained-glass/sg-lock-ui";
     if (!helper) helper = "/usr/libexec/stained-glass/sg-rdp-pamcheck";

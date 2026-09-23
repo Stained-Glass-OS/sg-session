@@ -12,6 +12,7 @@ Type=exec
 # Wine that draws the lock screen, runs as the machine account (sgsystem).
 ExecStart=/usr/libexec/stained-glass/sg-lockd
 Environment=SG_LOCKD_LOG=/var/log/stained-glass/lockd.log
+Environment=SG_SEAT_DIR=/run/stained-glass-seat/seat0
 Restart=always
 RestartSec=1
 # If this service is down the machine does not unlock -- the compositor shows

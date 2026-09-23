@@ -90,6 +90,22 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
     do
         wine reg add "$key" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $key"
     done
+
+    # Pre-create the display-config containers as the prefix owner (an
+    # administrator). wine-sg gives keys under Control\Video and
+    # Control\GraphicsDrivers a DACL that interactive users can write -- these
+    # hold per-session display state every user's Wine populates and every app
+    # reads -- but only if the *container* exists for them to create under, and
+    # a non-admin cannot create it beneath the admin-owned Control key. Making
+    # them here, once, is what lets a non-owner session come up with working
+    # applications rather than a shell no app can launch into.
+    sg_log "creating writable display-config branches"
+    for key in \
+        'HKLM\System\CurrentControlSet\Control\Video' \
+        'HKLM\System\CurrentControlSet\Control\GraphicsDrivers'
+    do
+        wine reg add "$key" /f >/dev/null 2>&1 || sg_log "WARNING: could not create $key"
+    done
     wineserver -w
 fi
 
