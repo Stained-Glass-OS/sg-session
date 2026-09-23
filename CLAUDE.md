@@ -129,14 +129,13 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
 - **Session 0 must not have a shell.** `sg-wineserver` and `sg-services-start`
   set `SG_WINSTATION=__wineservice_winstation\Default`; `sg-run-explorer`
   unsets it, because the interactive shell belongs on `WinSta0`. See wine-sg
-  patch 0007. **Do not detect a leak by command line.** Wine's explorer parses
-  `/desktop=name,WxH` *in place* and zeroes `=shell,WxH` out of its own command
-  line once the desktop exists (`programs/explorer/desktop.c manage_desktop`),
-  so the legitimate session shell shows in `/proc/cmdline` as a bare
-  `explorer.exe /desktop` too — a `pgrep` for `/desktop=shell` is a race that
-  flaked the boot gate. `sg-session-check` now proves the shell durably by its
-  `shell - Wine Desktop` window and guards the leak by ownership: no
-  `explorer.exe` may run as `$SG_SYSTEM_USER`.
+  patch 0007. **Do not detect the shell or a leak by command line.** On the
+  image, the process owning the healthy "shell" desktop has been seen with the
+  command line `explorer.exe /desktop` and no `/desktop=shell,WxH` process
+  alive; under stock Wine both are present. Why is not yet established — but a
+  `pgrep` for `/desktop=shell` flaked the boot gate. `sg-session-check` proves
+  the shell by its `shell - Wine Desktop` window and guards the leak by
+  ownership: no `explorer.exe` may run as `$SG_SYSTEM_USER`.
 - **`\\` in a POSIX single-quoted string is two backslashes.** Writing
   `'...\\Default'` produced a desktop named `\Default`, which cannot be
   created, and Wine answered by starting an explorer that did the same thing

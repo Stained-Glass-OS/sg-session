@@ -50,16 +50,16 @@ else
     fail "wineserver is not running"
 fi
 
-# explorer must be up as the session's shell. It is tempting to match the
-# command line `explorer.exe /desktop=shell,WxH`, but that form is transient:
-# Wine parses the `/desktop=name,WxH` option *in place* and zeroes the
-# `=shell,WxH` bytes out of its own command line once the desktop is created
-# (programs/explorer/desktop.c manage_desktop). The durable shell process then
-# shows as a bare `explorer.exe /desktop`, so matching the launcher form is a
-# race -- it only passes if the check catches explorer before the rewrite, and
-# that race is what made this gate flake. So assert explorer is running here;
-# that it is *our* named "shell" desktop is proven durably by its window in
-# section 2, and that no shell leaked into session 0 is guarded just below.
+# explorer must be up as the session's shell. Do not identify it by the
+# command line `explorer.exe /desktop=shell,WxH`: that process is not reliably
+# there. On the image it has been seen gone entirely, with the "shell" desktop
+# owned by a process whose command line reads just `explorer.exe /desktop`;
+# under stock Wine both processes are present. Why they differ is not yet
+# established. Matching the command line made this gate pass or fail depending
+# on which of those states it caught. So assert explorer is running here; that
+# it is *our* named "shell" desktop is proven by its window in section 2, and
+# that no shell leaked into session 0 is guarded just below -- neither depends
+# on a command line.
 waited=0
 while ! pgrep -f 'explorer\.exe' >/dev/null 2>&1; do
     [ "$waited" -ge "$TIMEOUT" ] && break

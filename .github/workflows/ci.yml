@@ -27,15 +27,55 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
+          # libwine, not wine/wine64: it brings the shared libraries Wine's Unix
+          # side needs without putting a stock `wine` on PATH that the gate
+          # could silently fall back to.
           apt-get install -y --no-install-recommends \
             make shellcheck cage xwayland x11-utils procps \
-            wine wine64 ca-certificates adduser \
+            libwine libsane1 ca-certificates adduser \
             debhelper build-essential devscripts
           # Everything debian/control says the build needs (mingw for the
           # Windows-side greeter and probes, PAM headers for the native
           # helpers). Read from the package rather than listed here, so the
           # two cannot drift apart again -- they did, and CI went red.
           apt-get build-dep -y ./
+
+      # The gate must run on the Wine the image ships: wine-sg, under
+      # /opt/wine-sg. Stock Debian Wine lacks the patches the session now relies
+      # on (seeded user hives, user-writable display config, session 0), and
+      # against it the taskbar comes up 1024 wide in a 1280 desktop -- a failure
+      # of the Wine under test, not of this repo. wine-sg is built here rather
+      # than downloaded, and the installed tree is cached on exactly what
+      # determines it, so the ~35-minute build only reruns when wine-sg's
+      # version, patch series or build script changes.
+      - name: Check out wine-sg
+        uses: actions/checkout@v4
+        with:
+          repository: Stained-Glass-OS/wine-sg
+          path: _deps/wine-sg
+
+      - name: Cache wine-sg
+        id: wine-sg-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/wine-sg
+          key: wine-sg-opt-${{ runner.os }}-${{ hashFiles('_deps/wine-sg/wine-version', '_deps/wine-sg/patches/**', '_deps/wine-sg/build.sh') }}
+
+      - name: Build wine-sg (cache miss only)
+        if: steps.wine-sg-cache.outputs.cache-hit != 'true'
+        run: |
+          apt-get install -y --no-install-recommends \
+            curl xz-utils patch file mingw-w64-tools
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+          apt-get update
+          apt-get build-dep -y --no-install-recommends wine
+          apt-get install -y --no-install-recommends libsane-dev
+          make -C _deps/wine-sg install
+
+      - name: Confirm the gate will use wine-sg
+        run: |
+          test -x /opt/wine-sg/bin/wine || { echo "wine-sg missing from /opt/wine-sg"; exit 1; }
+          /opt/wine-sg/bin/wine --version
 
       - name: Lint
         run: make lint
