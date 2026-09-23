@@ -50,18 +50,41 @@ else
     fail "wineserver is not running"
 fi
 
-# explorer must be the one we asked for: the virtual-desktop shell, not the
-# bare autostart instance wineboot leaves behind.
+# explorer must be up as the session's shell. It is tempting to match the
+# command line `explorer.exe /desktop=shell,WxH`, but that form is transient:
+# Wine parses the `/desktop=name,WxH` option *in place* and zeroes the
+# `=shell,WxH` bytes out of its own command line once the desktop is created
+# (programs/explorer/desktop.c manage_desktop). The durable shell process then
+# shows as a bare `explorer.exe /desktop`, so matching the launcher form is a
+# race -- it only passes if the check catches explorer before the rewrite, and
+# that race is what made this gate flake. So assert explorer is running here;
+# that it is *our* named "shell" desktop is proven durably by its window in
+# section 2, and that no shell leaked into session 0 is guarded just below.
 waited=0
-while ! pgrep -f 'explorer.exe .*/desktop=shell' >/dev/null 2>&1; do
+while ! pgrep -f 'explorer\.exe' >/dev/null 2>&1; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if pgrep -f 'explorer.exe .*/desktop=shell' >/dev/null 2>&1; then
-    pass "explorer.exe is running as the shell desktop"
+if pgrep -f 'explorer\.exe' >/dev/null 2>&1; then
+    pass "explorer.exe is running"
 else
-    fail "explorer.exe is not running as the shell desktop"
+    fail "explorer.exe is not running"
+fi
+
+# The interactive shell belongs on WinSta0 as the session user, never in the
+# service session (session 0). wine-sg patch 0007 refuses a shell there; this
+# guards that it held. A leaked shell would run under the account that hosts the
+# machine wineserver ($SG_SYSTEM_USER), so check ownership -- durable where the
+# command line is not. Skipped when that account is us or absent, as on the
+# single-user dev gate, where there is no separate service session to leak into.
+_sysuser="${SG_SYSTEM_USER:-sgsystem}"
+if id "$_sysuser" >/dev/null 2>&1 && [ "$_sysuser" != "$(id -un)" ]; then
+    if pgrep -u "$_sysuser" -f 'explorer\.exe' >/dev/null 2>&1; then
+        fail "an explorer shell is running as $_sysuser -- a shell leaked into session 0"
+    else
+        pass "no interactive shell leaked into the service session"
+    fi
 fi
 
 # The session must have published a usable display. Treat an empty one as an
@@ -103,20 +126,20 @@ pe_machine() {
 # "shell - Wine Desktop" in Debian's build and "shell - Wine desktop" in
 # Ubuntu's. Matching one spelling passes on one distribution and fails on the
 # other, which is how CI found this.
-desktop_id() { window_list | grep -i 'wine desktop' | awk '{print $1}' | head -1; }
+desktop_id() { window_list | grep -i 'shell - wine desktop' | awk '{print $1}' | head -1; }
 desktop_children() {
     id=$(desktop_id)
     [ -n "$id" ] && xwininfo -id "$id" -children 2>/dev/null
 }
 
 waited=0
-while ! window_list | grep -qi 'wine desktop'; do
+while ! window_list | grep -qi 'shell - wine desktop'; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if window_list | grep -qi 'wine desktop'; then
-    DESKTOP_LINE=$(window_list | grep -i 'wine desktop' | sed 's/^ *//' | head -1)
+if window_list | grep -qi 'shell - wine desktop'; then
+    DESKTOP_LINE=$(window_list | grep -i 'shell - wine desktop' | sed 's/^ *//' | head -1)
     pass "desktop window exists: $DESKTOP_LINE"
 else
     fail "no Wine desktop window on $DISPLAY"
