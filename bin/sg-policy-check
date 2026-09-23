@@ -78,6 +78,25 @@ else
     pass "the user is refused writing the machine policy branch"
 fi
 
+# 5. a Group Policy registry.pol, applied through sg-polimport, is honoured too.
+_pol="${SG_SHARE:-/usr/share/stained-glass}/machine.pol"
+[ -f "$_pol" ] || _pol="$SG_LIBEXEC/machine.pol"
+if [ -x "$SG_LIBEXEC/sg-polimport" ] && [ -f "$_pol" ]; then
+    reg_as "$SG_SYSTEM_USER" delete "$KEY" /v NoClose /f >/dev/null 2>&1 || true
+    _reg=$(mktemp --suffix=.reg); chmod 644 "$_reg"
+    "$SG_LIBEXEC/sg-polimport" "$_pol" > "$_reg" 2>/dev/null
+    _rw=$(runuser -u "$SG_SYSTEM_USER" -- env WINEPREFIX="$SG_PREFIX" PATH="/opt/wine-sg/bin:$PATH" \
+        sh -c "cd /tmp; winepath -w '$_reg' 2>/dev/null")
+    runuser -u "$SG_SYSTEM_USER" -- env WINEPREFIX="$SG_PREFIX" PATH="/opt/wine-sg/bin:$PATH" \
+        sh -c "cd /tmp; wine reg import '$_rw' >/dev/null 2>&1 </dev/null" || true
+    rm -f "$_reg"
+    v=$(probe_as "$SG_USER")
+    if [ "$v" = 1 ]; then pass "a registry.pol applied via sg-polimport is honoured (SHRestricted=1)"
+    else fail "the registry.pol policy was not honoured (SHRestricted=$v)"; fi
+else
+    printf 'info  sg-polimport or the fixture is missing; skipping the .pol clause\n'
+fi
+
 # cleanup
 reg_as "$SG_SYSTEM_USER" delete "$KEY" /v NoClose /f >/dev/null 2>&1 || true
 

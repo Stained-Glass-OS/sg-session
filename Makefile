@@ -55,6 +55,10 @@ install: d3d-probe greeter token-probe procagent
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@if [ -f build/sg-polimport ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/sg-polimport $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
 	@# The per-user process agent (ADR 0014). sg-session-start launches it.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
 	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate \
@@ -92,6 +96,8 @@ install: d3d-probe greeter token-probe procagent
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
+	@# The registry.pol fixture for sg-policy-check's .pol clause.
+	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
@@ -105,6 +111,7 @@ lint:
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
+	@sh test/polimport-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create || exit 1; \
 		echo "shellcheck OK"; \
@@ -192,6 +199,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polimport greeter/sg-polimport.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
 	@# The gate looks for its fixtures beside the bridge, because in the image

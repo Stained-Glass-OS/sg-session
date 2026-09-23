@@ -92,13 +92,29 @@ SG_POLICY_DIR="${SG_POLICY_DIR:-/etc/stained-glass/policy.d}"
 sg_apply_policy() {
     [ "${SG_SYSTEM_PREFIX:-1}" = "1" ] || return 0
     [ -d "$SG_POLICY_DIR" ] || return 0
-    for _p in "$SG_POLICY_DIR"/*.reg; do
+    _pi="${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-polimport"
+    for _p in "$SG_POLICY_DIR"/*.reg "$SG_POLICY_DIR"/*.pol; do
         [ -f "$_p" ] || continue
-        if wine reg import "$(winepath -w "$_p" 2>/dev/null)" >/dev/null 2>&1; then
-            sg_log "applied policy: $(basename "$_p")"
-        else
-            sg_log "WARNING: could not apply policy $(basename "$_p")"
-        fi
+        case "$_p" in
+        *.pol)
+            # A Group Policy registry.pol (from the Group Policy editor, or a
+            # domain): convert it to a .reg under HKLM and import that.
+            if [ ! -x "$_pi" ]; then sg_log "WARNING: sg-polimport missing, skipping $(basename "$_p")"; continue; fi
+            _reg=$(mktemp --suffix=.reg)
+            if "$_pi" "$_p" > "$_reg" 2>/dev/null && \
+               wine reg import "$(winepath -w "$_reg" 2>/dev/null)" >/dev/null 2>&1; then
+                sg_log "applied policy: $(basename "$_p")"
+            else
+                sg_log "WARNING: could not apply policy $(basename "$_p")"
+            fi
+            rm -f "$_reg" ;;
+        *.reg)
+            if wine reg import "$(winepath -w "$_p" 2>/dev/null)" >/dev/null 2>&1; then
+                sg_log "applied policy: $(basename "$_p")"
+            else
+                sg_log "WARNING: could not apply policy $(basename "$_p")"
+            fi ;;
+        esac
     done
 }
 
