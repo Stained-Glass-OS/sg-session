@@ -22,7 +22,7 @@ int main(int argc, char **argv)
         memset(buf, 0, 16);
         printf("%lu %p\n", GetCurrentProcessId(), buf);
         fflush(stdout);
-        Sleep(12000);
+        Sleep(4000);
         return 0;
     }
 

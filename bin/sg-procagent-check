@@ -29,13 +29,13 @@ if [ ! -f "$probe" ]; then echo "SKIP: sg-procmem-probe.exe not built"; exit 77;
 if [ ! -x "$SG_LIBEXEC/sg-procagent" ]; then echo "SKIP: sg-procagent not built"; exit 77; fi
 
 echo "checking cross-process memory for $(id -un)..."
-_probe_w=$(timeout 15 winepath -w "$probe" 2>/dev/null)
+_probe_w=$(timeout -s KILL 20 winepath -w "$probe" 2>/dev/null)
 [ -n "$_probe_w" ] || { echo "SKIP: winepath/wineserver not responding"; exit 77; }
 # wine leaves child processes (winedevice, services) holding the stdout pipe,
 # so a $(wine ... | clean) never returns. Write to a file and read it back.
 run_probe() {
     _o=$(mktemp)
-    ( cd /tmp 2>/dev/null || true; timeout 25 wine "$_probe_w" >"$_o" 2>/dev/null </dev/null )
+    ( cd /tmp 2>/dev/null || true; timeout -s KILL 25 wine "$_probe_w" >"$_o" 2>/dev/null </dev/null )
     clean < "$_o"; rm -f "$_o"
 }
 
