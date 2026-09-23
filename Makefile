@@ -19,7 +19,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
-               bin/sg-token-check bin/sg-greeter-check
+               bin/sg-token-check bin/sg-procagent-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -31,7 +31,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter token-probe
+install: d3d-probe greeter token-probe procagent
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
@@ -54,6 +54,12 @@ install: d3d-probe greeter token-probe
 	@if [ -f build/sg-lockd ]; then \
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	@# The per-user process agent (ADR 0014). sg-session-start launches it.
+	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
+	install -m 0755 build/sg-procagent $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@if [ -f build/sg-procmem-probe.exe ]; then \
+	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# The token probe, for sg-token-check (debt D17). Optional like d3d-probe.
 	@if [ -f build/sg-token-probe.exe ]; then \
@@ -178,6 +184,19 @@ greeter:
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
 	@echo "built: the greeter, its bridge and the protocol stub"
+
+# --- the per-user process agent (ADR 0014, debt D16/D19) -------------------
+# Native: it delegates ptrace/signal/affinity for the wineserver on the user's
+# own processes. Always buildable (no cross-compiler needed).
+.PHONY: procagent
+procagent:
+	@mkdir -p build
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-procagent procagent/sg-procagent.c
+	@# The cross-process probe for sg-procagent-check (Windows PE, optional).
+	@if command -v $(MINGW64) >/dev/null 2>&1; then \
+	    $(MINGW64) -O2 -o build/sg-procmem-probe.exe test/sg-procmem-probe.c && \
+	    echo "built: build/sg-procagent build/sg-procmem-probe.exe"; \
+	else echo "built: build/sg-procagent (SKIP probe: no mingw)"; fi
 
 .PHONY: test-greeter
 test-greeter: greeter

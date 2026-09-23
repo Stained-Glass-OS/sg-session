@@ -28,6 +28,20 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
     chmod 700 "$XDG_RUNTIME_DIR"
 fi
 
+# The per-user process agent (ADR 0014, debt D16/D19): the machine-level
+# wineserver runs as SYSTEM and cannot ptrace/signal this user's processes, so
+# it delegates those to this agent, which runs as the user. Started before the
+# shell so cross-process operations (debuggers, ReadProcessMemory, async APCs,
+# thread affinity) work from the first program. It removes its own socket on
+# exit; greetd tears down the session's process group, so it stops with us.
+SG_LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+if [ -x "$SG_LIBEXEC/sg-procagent" ]; then
+    "$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" &
+    sg_log "started sg-procagent (pid $!) for $(id -un)"
+else
+    sg_log "note: sg-procagent not present; cross-process operations limited"
+fi
+
 sg_log "starting session: display path=$SG_DISPLAY_PATH geometry=$GEOM"
 
 case "$SG_DISPLAY_PATH" in

@@ -1,0 +1,62 @@
+#!/bin/sh
+# Can one of a user's Windows programs read and write another's memory -- the
+# way ReadProcessMemory/WriteProcessMemory, debuggers and crash handlers need?
+#
+# Multi-user debt D16/D19 (ADR 0014). The machine-level wineserver runs as the
+# SYSTEM account and the kernel refuses it ptrace on an ordinary user's
+# processes, so the server delegates those operations to sg-procagent, which
+# runs as the user. This proves the round trip works with the agent, and --
+# the mutant -- fails without it, so the check cannot pass vacuously.
+#
+# Runs as the session user (the agent only ever touches its own user's
+# processes). sg-session-start launches the agent in a real session; this gate
+# starts and stops its own, since it runs outside one.
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+SG_LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+clean() { tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'; }
+
+probe="$SG_LIBEXEC/sg-procmem-probe.exe"
+if [ ! -f "$probe" ]; then echo "SKIP: sg-procmem-probe.exe not built"; exit 77; fi
+if [ ! -x "$SG_LIBEXEC/sg-procagent" ]; then echo "SKIP: sg-procagent not built"; exit 77; fi
+
+_probe_w=$(winepath -w "$probe" 2>/dev/null)
+run_probe() { cd /tmp && timeout 40 wine "$_probe_w" 2>/dev/null | clean; }
+
+# Make sure no stale agent is running for us, then take a clean measurement.
+pkill -u "$(id -u)" -f "[s]g-procagent" 2>/dev/null || true
+rm -f "$SG_PREFIX/.sg-procagent.$(id -u)" 2>/dev/null || true
+sleep 1
+
+# 1. Without the agent, the cross-process access must be refused.
+out=$(run_probe)
+if printf '%s' "$out" | grep -q "PROCMEM OK"; then
+    fail "cross-process memory worked with no agent -- the gate proves nothing"
+else
+    pass "without sg-procagent, cross-process memory is refused ($(printf '%s' "$out" | head -1))"
+fi
+
+# 2. With the agent, it must succeed.
+"$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" &
+_agent=$!
+for _ in 1 2 3 4 5; do [ -S "$SG_PREFIX/.sg-procagent.$(id -u)" ] && break; sleep 1; done
+out=$(run_probe)
+if printf '%s' "$out" | grep -q "PROCMEM OK"; then
+    pass "with sg-procagent, a program reads and writes another's memory"
+else
+    fail "cross-process memory failed with the agent running: $(printf '%s' "$out" | head -1)"
+fi
+kill "$_agent" 2>/dev/null || true
+rm -f "$SG_PREFIX/.sg-procagent.$(id -u)" 2>/dev/null || true
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"
