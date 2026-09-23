@@ -76,6 +76,12 @@ SG_SEAT_DIR="${SG_SEAT_DIR:-/run/stained-glass-seat/seat0}"
 # supported configuration: the prefix simply keeps Wine's own D3D.
 SG_D3D_DIR="${SG_D3D_DIR:-/opt/sg-d3d}"
 
+# Registry defaults other packages contribute to every new prefix: *.reg files,
+# imported in name order by sg-prefix-init before it takes the Default User
+# profile, so their HKCU values reach every user. sg-shell ships the window
+# colours here. Absent is fine -- nothing is imported.
+SG_DEFAULTS_DIR="${SG_DEFAULTS_DIR:-/usr/share/stained-glass/defaults.d}"
+
 
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.

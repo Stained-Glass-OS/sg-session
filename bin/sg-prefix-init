@@ -43,6 +43,23 @@ fi
 wineboot --init
 wineserver -w
 
+# --- registry defaults contributed by other packages ----------------------
+# Imported here, before the Default User profile is taken below, so the HKCU
+# values in them become every user's defaults rather than only this account's.
+# reg.exe is given a Windows path: handed a Unix one, it resolves it as a DOS
+# path on C: and fails.
+if [ -d "$SG_DEFAULTS_DIR" ]; then
+    for _reg in "$SG_DEFAULTS_DIR"/*.reg; do
+        [ -f "$_reg" ] || continue
+        if wine reg import "$(winepath -w "$_reg")" >/dev/null 2>&1; then
+            sg_log "imported defaults: $(basename "$_reg")"
+        else
+            sg_log "WARNING: could not import defaults from $_reg"
+        fi
+    done
+    wineserver -w
+fi
+
 # --- make userdef.reg a real Default User profile -------------------------
 # wineboot applies wine.inf's HKCU sections to whoever ran it, then stamps
 # .update-timestamp in the *prefix*. The prefix is shared and the hives are
