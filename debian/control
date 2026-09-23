@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 
 Package: sg-session
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends},
+Depends: ${misc:Depends}, ${shlibs:Depends}, libpam-runtime,
 Recommends: sg-shell,
          wine-sg | wine,
          sg-compositor | cage,

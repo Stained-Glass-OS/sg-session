@@ -1,0 +1,69 @@
+#!/bin/sh
+# Can an ordinary user's Windows program make itself an administrator?
+#
+# Multi-user debt D17, found 2026-09-23: in a prefix shared between Unix users,
+# the machine-level wineserver minted tokens for anyone who asked. A standard
+# user's program with a requireAdministrator manifest started with SYSTEM's
+# token, and NtCreateToken, the linked token and Wine's
+# ProcessWineGrantAdminToken each handed one out too -- all of HKLM, the SCM
+# and every object SYSTEM may touch, from an ordinary account. wine-sg 0019
+# closes all four.
+#
+# Runs sg-token-probe (plain, and with a requireAdministrator manifest) as the
+# ordinary user, where every attempt must be DENIED, and as the SYSTEM account,
+# where the same attempts must be GRANTED -- proof the probe can tell. Run as
+# root, on a machine with the machine-level wineserver (the image does).
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+SG_LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+
+[ "$(id -u)" = 0 ] || { echo "run as root: it acts as $SG_USER and $SG_SYSTEM_USER"; exit 2; }
+if ! getent passwd "$SG_USER" >/dev/null || ! getent passwd "$SG_SYSTEM_USER" >/dev/null; then
+    echo "SKIP: needs both $SG_USER and $SG_SYSTEM_USER"; exit 77
+fi
+if [ ! -f "$SG_LIBEXEC/sg-token-probe.exe" ]; then
+    echo "SKIP: sg-token-probe.exe not built (no mingw at package build)"; exit 77
+fi
+
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+
+# probe USER EXE -> the probe's lines. Output to a file, not a pipe: Wine may
+# leave a background process holding a pipe open long after the probe exits.
+probe() {
+    _out=$(mktemp)
+    # The probe runs as another user and writes its output here, so the file
+    # must be writable by that user, not just readable.
+    chmod 0666 "$_out"
+    runuser -u "$1" -- sh -c ". '$SG_LIB/sg-common.sh'; sg_wine_env; cd /; wine \"\$1\" >\"\$2\" 2>/dev/null </dev/null" \
+        sh "$SG_LIBEXEC/$2" "$_out" || true
+    tr -d '\r' < "$_out"
+    rm -f "$_out"
+}
+
+for exe in sg-token-probe.exe sg-token-probe-admin.exe; do
+    out=$(probe "$SG_USER" "$exe")
+    n=$(printf '%s\n' "$out" | grep -c '^DENIED' || true)
+    if [ "$n" -ge 4 ] && ! printf '%s\n' "$out" | grep -q '^GRANTED'; then
+        pass "$SG_USER, $exe: all $n attempts denied"
+    else
+        fail "$SG_USER, $exe: an ordinary user obtained an administrator's token:"
+        printf '%s\n' "$out" | sed 's/^/      /'
+    fi
+done
+
+out=$(probe "$SG_SYSTEM_USER" sg-token-probe.exe)
+if printf '%s\n' "$out" | grep -q '^GRANTED.*own token'; then
+    pass "$SG_SYSTEM_USER is SYSTEM: the probe sees an administrator's token when there is one"
+else
+    fail "the probe did not see SYSTEM's administrator token -- it cannot be trusted to see one:"
+    printf '%s\n' "$out" | sed 's/^/      /'
+fi
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit "$RC"

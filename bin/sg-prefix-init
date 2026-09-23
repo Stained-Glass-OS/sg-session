@@ -101,8 +101,24 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
     _hive="$SG_PREFIX/user-$_uid.reg"
     [ -f "$_hive" ] || _hive="$SG_PREFIX/user.reg"
     if [ -f "$_hive" ] && [ -s "$_hive" ]; then
-        cp -f "$_hive" "$SG_PREFIX/userdef.reg"
-        sg_log "default user profile seeded from $(basename "$_hive") ($(wc -c < "$_hive") bytes)"
+        # Wine writes this account's own profile path into the hive as
+        # absolute strings; copied as is, every new user would get TEMP, TMP
+        # and the cached Shell Folders of SYSTEM's profile -- which, now that
+        # users' file access runs with their own rights (ADR 0013), they
+        # cannot even write (multi-user debt D15). So the template names the
+        # profile as %USERPROFILE%, which Wine expands from the user's own
+        # name, drops the Shell Folders cache (shell32 rebuilds it from the
+        # %USERPROFILE%-relative User Shell Folders) and the per-session
+        # Volatile Environment (wineboot writes it at each session's start).
+        _me=$(id -un)
+        sed -e '/^\[Volatile Environment\]/,/^$/d' \
+            -e '/^\[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Folders\]/,/^$/d' \
+            -e "s/=\"C:\\\\\\\\users\\\\\\\\$_me\([\\\\\"]\)/=str(2):\"%USERPROFILE%\\1/g" \
+            -e "s/:\"C:\\\\\\\\users\\\\\\\\$_me\([\\\\\"]\)/:\"%USERPROFILE%\\1/g" \
+            "$_hive" > "$SG_PREFIX/userdef.reg.new"
+        mv -f "$SG_PREFIX/userdef.reg.new" "$SG_PREFIX/userdef.reg"
+        _left=$(grep -ci "users\\\\\\\\$_me\\b" "$SG_PREFIX/userdef.reg" || true)
+        sg_log "default user profile seeded from $(basename "$_hive") ($(wc -c < "$SG_PREFIX/userdef.reg") bytes, $_left paths into $_me's profile left)"
     else
         sg_log "WARNING: no hive to seed the default user profile from"
     fi

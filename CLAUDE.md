@@ -176,6 +176,35 @@ that follows `wineboot`, or the hive on disk is incomplete.
 Check it with `grep -c '^\[' userdef.reg`: 52-ish means a real profile, 16
 means the stub.
 
+**The template must name no one's profile** (debt D15). Wine writes the
+owner's -- SYSTEM's -- profile path into the hive as absolute strings, so a
+plain copy gave every user SYSTEM's TEMP and Shell Folders, which since ADR
+0013 they cannot even write. `sg-prefix-init` therefore rewrites
+`C:\users\<owner>` to `%USERPROFILE%` (REG_EXPAND_SZ) and drops the cached
+Shell Folders and Volatile Environment. That relies on wine-sg 0018, which
+defines `USERPROFILE` before `HKCU\Environment` is expanded. (Also: the
+"Volatile keys are never written to disk" above is not true of Volatile
+Environment, which is why it is dropped explicitly.)
+
+**The profile directory comes from `sg-profile-create`** -- Windows' profile
+service. `pam_exec` runs it as root at every session open (registered through
+`pam-auth-update`, `config/pam-configs/stained-glass-profile`, so greetd, ssh
+and anything else using `common-session` get it). It creates
+`C:\users\<name>` owned by the user, 0700, for members of `sgwine`, then the
+standard folders -- **as the user, with `runuser`**: root walking a tree the
+user owns can be steered with a symlink. A user cannot do this themselves:
+`C:\users` is SYSTEM's. Without it, `%TEMP%` does not exist, csc fails, and
+PowerShell falls into ConstrainedLanguage mode (it probes `%TEMP%` for
+AppLocker).
+
+## Token gate
+
+`sg-token-check` (root, in the image: `make token-test` in sg-image) runs
+`sg-token-probe.exe` and its `requireAdministrator` twin as the ordinary user
+and as SYSTEM: every attempt to obtain an administrator's token must be denied
+to the user (debt D17, wine-sg 0019) and granted to SYSTEM, which proves the
+probe can tell.
+
 ## Lock-screen isolation (the security gate)
 
 `sg-keylog-adversary` is a keylogger, and `sg-lock-security-check` is the gate

@@ -72,6 +72,10 @@ case "$1" in
         fi
         adduser sggreet "$SG_WINE_GROUP" >/dev/null 2>&1 || true
         getent group render >/dev/null && adduser sggreet render >/dev/null 2>&1 || true
+
+        # The Windows profile service: pam_exec runs sg-profile-create as each
+        # session opens (/usr/share/pam-configs/stained-glass-profile).
+        pam-auth-update --package
         ;;
 esac
 

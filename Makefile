@@ -19,7 +19,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
-               bin/sg-greeter-check
+               bin/sg-token-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -31,7 +31,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter
+install: d3d-probe greeter token-probe
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
@@ -55,8 +55,19 @@ install: d3d-probe greeter
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The token probe, for sg-token-check (debt D17). Optional like d3d-probe.
+	@if [ -f build/sg-token-probe.exe ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/sg-token-probe.exe build/sg-token-probe-admin.exe \
+	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
 	install -d $(DESTDIR)/etc/pam.d
 	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote $(DESTDIR)/etc/pam.d/
+	@# The profile service (sg-profile-create), run at login by pam_exec;
+	@# the deb's postinst registers it with pam-auth-update.
+	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
+	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@if [ -f build/sg-greeter64.exe ]; then \
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -73,10 +84,10 @@ install: d3d-probe greeter
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS); do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) || exit 1; \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create || exit 1; \
 		echo "shellcheck OK"; \
 	else \
 		echo "shellcheck not installed; skipping (advisory)"; \
@@ -125,6 +136,20 @@ d3d-probe:
 	    $(MINGW64) -O2 -o build/d3d-probe64.exe test/d3d-probe.c $(D3D_LIBS) && \
 	    $(MINGW32) -O2 -o build/d3d-probe32.exe test/d3d-probe.c $(D3D_LIBS) && \
 	    echo "built: build/d3d-probe64.exe build/d3d-probe32.exe"; \
+	fi
+
+# The token probe (debt D17): plain, and with a requireAdministrator manifest.
+.PHONY: token-probe
+token-probe:
+	@if ! command -v $(MINGW64) >/dev/null 2>&1; then \
+	    echo "SKIP: $(MINGW64) not installed"; \
+	else \
+	    mkdir -p build && \
+	    $(MINGW64) -O2 -o build/sg-token-probe.exe test/sg-token-probe.c -ladvapi32 && \
+	    x86_64-w64-mingw32-windres test/sg-token-probe-admin.rc -O coff -o build/sg-token-probe-admin.res && \
+	    $(MINGW64) -O2 -o build/sg-token-probe-admin.exe test/sg-token-probe.c \
+	        build/sg-token-probe-admin.res -ladvapi32 && \
+	    echo "built: build/sg-token-probe.exe build/sg-token-probe-admin.exe"; \
 	fi
 
 # --- the greeter -----------------------------------------------------------

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Unregister the profile hook before its script is removed, or every
+        # login would run a pam_exec that no longer exists.
+        pam-auth-update --package --remove stained-glass-profile
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

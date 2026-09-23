@@ -48,6 +48,29 @@ check_shortcut() {
     fi
 }
 
+# --- The user's own profile (debt D15) ---------------------------------------
+# Every program a user runs writes to %TEMP%. It must be inside the user's own
+# profile and writable by the user -- not the SYSTEM account's, which every
+# user inherited from the Default User template before D15.
+_me=$(id -un)
+out=$(wine cmd /c 'echo %USERPROFILE%^|%TEMP%' 2>/dev/null | clean || true)
+case "$out" in
+    "C:\\users\\$_me|C:\\users\\$_me\\AppData\\Local\\Temp")
+        pass "profile and TEMP are the user's own: $out" ;;
+    *)  fail "profile|TEMP: expected C:\\users\\$_me|C:\\users\\$_me\\AppData\\Local\\Temp, got '$out'" ;;
+esac
+# %TEMP% is expanded first and the literal path used unquoted: cmd resolves an
+# environment variable in a redirection target against the current drive, and
+# (in Wine) fails a redirect to a *quoted* target -- neither has anything to do
+# with whether TEMP is writable. The path has no spaces (a Unix user name).
+_tmp=$(wine cmd /c 'echo %TEMP%' 2>/dev/null | clean || true)
+wine cmd /c "echo probe> $_tmp\\sg-apps-probe.txt" >/dev/null 2>&1 || true
+out=$(wine cmd /c "if exist $_tmp\\sg-apps-probe.txt (del $_tmp\\sg-apps-probe.txt & echo written)" 2>/dev/null | clean || true)
+case "$out" in
+    *written*) pass "a program can write the user's TEMP" ;;
+    *)         fail "a program cannot write the user's TEMP ($_tmp): '$out'" ;;
+esac
+
 # --- Python -----------------------------------------------------------------
 if [ -f "$SG_APPS_DIR/python/python.exe" ]; then
     PYVER=$(cat "$SG_APPS_DIR/python/SG_VERSION" 2>/dev/null || echo "")
@@ -106,6 +129,16 @@ if [ -f "$SG_APPS_DIR/powershell/pwsh.exe" ]; then
     esac
     if [ "$rc" = 7 ]; then pass "pwsh exit code propagates (7)"
     else fail "pwsh exit code: expected 7, got $rc"; fi
+
+    # The user's Windows identity has a name (debt D12): .NET's
+    # WindowsIdentity turns the token's SID into COMPUTER\user.
+    raw=$(script -qec "wine cmd /c pwsh -NoLogo -NoProfile -NonInteractive -Command '[Security.Principal.WindowsIdentity]::GetCurrent().Name'" /dev/null 2>/dev/null || true)
+    out=$(printf '%s\n' "$raw" | clean | sed '/^$/d' | tail -n 1)
+    _lc=$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')
+    case "$_lc" in
+        *\\"$_me") pass "the user's Windows identity is named: $out" ;;
+        *)          fail "the user's Windows identity: expected ...\\$_me, got '$out'" ;;
+    esac
 
     check_shortcut "PowerShell 7" "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
 else

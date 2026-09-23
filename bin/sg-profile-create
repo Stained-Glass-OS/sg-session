@@ -1,0 +1,62 @@
+#!/bin/sh
+# Create a user's Windows profile, C:\users\<name>, owned by that user.
+#
+# Run by pam_exec as root when a session opens (registered through
+# pam-auth-update: /usr/share/pam-configs/stained-glass-profile). This is the
+# job Windows' profile service does as SYSTEM at first logon, and it cannot be
+# done by the user: C:\users belongs to the SYSTEM account, and since ADR 0013
+# a user's Windows programs create files with that user's own Unix rights --
+# so without this, a new user's programs cannot write their own profile, TEMP
+# included (multi-user debt D15).
+#
+# Only for members of the Windows-side group ($SG_WINE_GROUP); never for the
+# SYSTEM account or root. A profile the SYSTEM account made before ADR 0013 --
+# when every user's files were created with its rights -- is handed over to
+# its user. Always exits 0: a login must not fail over this.
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+[ "${PAM_TYPE:-open_session}" = open_session ] || exit 0
+user="${PAM_USER:-${1:-}}"
+case "$user" in ""|.*|*/*) exit 0 ;; esac
+[ "$user" = "$SG_SYSTEM_USER" ] && exit 0
+uid=$(id -u "$user" 2>/dev/null) || exit 0
+[ "$uid" = 0 ] && exit 0
+id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx "$SG_WINE_GROUP" || exit 0
+
+users="$SG_PREFIX/drive_c/users"
+# Every component above the profile must be the SYSTEM account's, or whoever
+# controls it could point this root-run hook somewhere else.
+[ -d "$users" ] && [ ! -L "$users" ] || exit 0
+[ "$(stat -c %U "$users")" = "$SG_SYSTEM_USER" ] || exit 0
+
+profile="$users/$user"
+[ -L "$profile" ] && exit 0
+if [ ! -e "$profile" ]; then
+    # 0700 from the start, so it is never open to anyone else
+    mkdir -m 0700 "$profile" 2>/dev/null && chown "$user:" "$profile" &&
+        sg_log "created the Windows profile for $user"
+elif [ -d "$profile" ] && [ "$(stat -c %U "$profile")" = "$SG_SYSTEM_USER" ]; then
+    # -P: never follow a symbolic link inside it
+    chown -R -P "$user:" "$profile" && chmod 0700 "$profile" &&
+        sg_log "handed the Windows profile of $user, made by $SG_SYSTEM_USER, to $user"
+fi
+[ -d "$profile" ] && [ "$(stat -c %U "$profile")" = "$user" ] || exit 0
+
+# The folders Windows' Default profile brings. Nothing creates TEMP on demand,
+# and programs fail without it -- csc, and PowerShell, which drops to
+# ConstrainedLanguage when it cannot write its policy probe there. The rest
+# shell32 would create on first use, but a profile should look like one.
+#
+# Created *as the user*: the profile is theirs now, and root walking a tree the
+# user controls could be sent anywhere with a symbolic link.
+# shellcheck disable=SC2016 # $1 is the inner shell's, deliberately
+runuser -u "$user" -- sh -c 'umask 077; cd "$1" && exec mkdir -p \
+    AppData/Local/Temp AppData/LocalLow AppData/Roaming \
+    Desktop Documents Downloads Music Pictures Videos Favorites Links \
+    Contacts Searches "Saved Games"' sg-profile-create "$profile" 2>/dev/null ||
+    sg_log "WARNING: could not create the standard folders in $user's profile"
+exit 0
