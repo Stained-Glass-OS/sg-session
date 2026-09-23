@@ -95,6 +95,7 @@ install: d3d-probe greeter token-probe procagent
 lint:
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
+	@sh test/shell-supervisor-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create || exit 1; \
 		echo "shellcheck OK"; \

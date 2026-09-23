@@ -10,11 +10,7 @@ sg_wine_env
 
 GEOM="${1:-${SG_DESKTOP_W}x${SG_DESKTOP_H}}"
 
-case "${SG_DISPLAY_PATH:-x11}" in
-    x11)     SG_DRIVER=x11 ;;
-    wayland) SG_DRIVER=wayland ;;
-    *)       SG_DRIVER=x11 ;;
-esac
+SG_DRIVER=$(sg_graphics_driver)
 
 # Find the X display, waiting for it if necessary.
 #
@@ -51,7 +47,7 @@ fi
 # Publish where the session lives, so a check running over ssh can attach to it
 # without having to guess. Without this the gate cannot find the display.
 mkdir -p "$SG_STATE"
-cat > "$SG_STATE/session.env" <<ENV
+cat > "$(sg_session_env)" <<ENV
 DISPLAY=${DISPLAY:-}
 WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}
@@ -93,8 +89,8 @@ reg_set() {
     sg_die "could not set $_key\\$_val after ${SG_REG_TIMEOUT:-30}s: the wineserver never became writable"
 }
 
-# Driver choice, so anything launched later agrees rather than guessing.
-reg_set 'HKCU\Software\Wine\Drivers'  Graphics "$SG_DRIVER"
+# The graphics driver is machine-wide, in HKLM, set by sg-prefix-init as SYSTEM
+# (multi-user debt D4); a user's session no longer writes its own copy.
 # The virtual desktop as the default for every process in this prefix: without
 # it an app opens its own toplevel outside the desktop, which under a
 # fullscreen compositor covers the desktop and taskbar entirely.
@@ -108,8 +104,24 @@ reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
 if [ -f "$_sgstart" ]; then
     sg_log "starting the Start menu (sg-start)"
-    wine "$_sgstart" >>"${SG_LOG_DIR:-/tmp}/sg-start.log" 2>&1 &
+    # Its output goes where the session's does -- the journal, as this user
+    # (sg-session-start runs the compositor under systemd-cat), which a user
+    # can read for themselves and not for anyone else. It used to append to a
+    # file in the shared log directory, readable by every user (debt D11).
+    wine "$_sgstart" &
 fi
 
 # The shell: a single virtual-desktop window named "shell" at the output size.
-exec wine explorer "/desktop=shell,$GEOM"
+#
+# Supervised, not exec'd (multi-user debt D7). This script is the compositor's
+# only client, so while it lives the session lives. On Windows the shell is a
+# process that can die and be restarted without ending the session
+# (AutoRestartShell); here too:
+#   - explorer exits 0 when the session is ending -- sign-out goes through
+#     wineboot --end-session, which closes the desktop window, and the desktop
+#     posts WM_QUIT and exits cleanly -- so a clean exit ends the session;
+#   - a crash, a kill or taskkill exits non-zero, and the shell is restarted.
+# A shell that keeps dying is not restarted forever: more than
+# SG_SHELL_MAX_RESTARTS abnormal exits inside SG_SHELL_RESTART_WINDOW seconds
+# ends the session, with a log line saying why.
+sg_supervise_shell "$GEOM"

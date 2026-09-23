@@ -25,6 +25,18 @@ run_installers() {
     done
 }
 
+# Machine-wide Wine settings, in HKLM, written as the SYSTEM account: which
+# graphics driver this machine's display path needs (multi-user debt D4). Every
+# boot, so a changed display path or an upgraded prefix picks it up.
+set_machine_settings() {
+    if wine reg add 'HKLM\Software\Wine\Drivers' /v Graphics /t REG_SZ \
+            /d "$(sg_graphics_driver)" /f >/dev/null 2>&1; then
+        sg_log "machine graphics driver: $(sg_graphics_driver)"
+    else
+        sg_log "WARNING: could not set HKLM\\Software\\Wine\\Drivers\\Graphics"
+    fi
+}
+
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
@@ -33,6 +45,7 @@ if [ -e "$STAMP" ]; then
     # leave that update to a user's desktop or a Windows service.
     sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
     wineserver -w
+    set_machine_settings
     run_installers
     exit 0
 fi
@@ -165,6 +178,7 @@ fi
 # Deliberately before the ownership fixup below, so what they copy in is chowned
 # with the rest of the prefix rather than staying root-owned inside a prefix
 # nobody else owns.
+set_machine_settings
 run_installers
 
 # The prefix is machine state, not user state.

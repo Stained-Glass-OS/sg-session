@@ -34,6 +34,61 @@ SG_WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
 # answer. Domain groups map onto it later (P2).
 SG_ADMIN_GROUP="${SG_ADMIN_GROUP:-sg-admins}"
 
+# The Wine graphics driver the display path needs. A machine-level fact
+# (multi-user debt D4): sg-prefix-init writes it to HKLM, as SYSTEM, and every
+# user's explorer reads it from there (wine-sg patch 0023).
+# Run the shell and keep it running (multi-user debt D7): restart it when it
+# dies abnormally, end the session when it exits cleanly (sign-out), and give
+# up if it keeps dying. See sg-run-explorer.  Usage: sg_supervise_shell WxH
+sg_supervise_shell() {
+    _geom=$1   # saved: the crash accounting below reuses the positional parameters
+    _max=${SG_SHELL_MAX_RESTARTS:-5}
+    _window=${SG_SHELL_RESTART_WINDOW:-60}
+    _crashes=""
+    while :; do
+        _rc=0
+        wine explorer "/desktop=shell,$_geom" || _rc=$?
+        if [ "$_rc" -eq 0 ]; then
+            sg_log "shell exited cleanly: ending the session"
+            return 0
+        fi
+        _now=$(date +%s)
+        _recent=""
+        for _t in $_crashes; do
+            [ $((_now - _t)) -lt "$_window" ] && _recent="$_recent $_t"
+        done
+        _crashes="$_recent $_now"
+        # shellcheck disable=SC2086 # split the list of timestamps, deliberately
+        set -- $_crashes
+        if [ "$#" -gt "$_max" ]; then
+            sg_log "shell exited abnormally $# times in ${_window}s (last rc=$_rc): giving up, ending the session"
+            return "$_rc"
+        fi
+        sg_log "shell exited abnormally (rc=$_rc): restarting it ($# in ${_window}s)"
+        sleep 1
+    done
+}
+
+# Where this user's live session publishes its display (multi-user debt D9).
+# Per user: /run/user/<uid> is the user's own 0700 runtime directory, so a second
+# concurrent session neither overwrites nor reads another's. Where there is none
+# (a CI runner), a per-uid file in the state directory.
+sg_session_env() {
+    _rt="/run/user/$(id -u)"
+    if [ -d "$_rt" ] && [ -w "$_rt" ]; then
+        echo "$_rt/sg-session.env"
+    else
+        echo "$SG_STATE/session-$(id -u).env"
+    fi
+}
+
+sg_graphics_driver() {
+    case "${SG_DISPLAY_PATH:-x11}" in
+        wayland) echo wayland ;;
+        *)       echo x11 ;;
+    esac
+}
+
 # Whether to mark the prefix as shared between Unix users (wine-sg's
 # .sg-system-prefix). Requires a Wine with patches/sg applied; on a stock Wine
 # the marker is simply ignored.

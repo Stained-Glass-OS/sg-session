@@ -202,11 +202,11 @@ if sg_addon_staged gecko; then
     # The session publishes its display a little after login; wait for it, as
     # sg-session-check does, rather than race it and skip.
     _w=0
-    while [ ! -f "$SG_STATE/session.env" ] && [ "$_w" -lt "${SG_CHECK_TIMEOUT:-60}" ]; do
+    while [ ! -f "$(sg_session_env)" ] && [ "$_w" -lt "${SG_CHECK_TIMEOUT:-60}" ]; do
         sleep 2; _w=$((_w + 2))
     done
     # shellcheck source=/dev/null  # written by sg-run-explorer at session start
-    [ -f "$SG_STATE/session.env" ] && . "$SG_STATE/session.env" 2>/dev/null
+    [ -f "$(sg_session_env)" ] && . "$(sg_session_env)" 2>/dev/null
     if [ -n "${DISPLAY:-}" ]; then
         export DISPLAY
         _t=$(mktemp -d); chmod 755 "$_t"

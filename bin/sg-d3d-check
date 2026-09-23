@@ -102,9 +102,9 @@ PROBE_DIR="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 # DXVK's error path -- which looks like a broken graphics stack rather than a
 # missing DISPLAY. The session publishes what it is using in session.env; the
 # session gate reads the same file.
-if [ -f "$SG_STATE/session.env" ]; then
+if [ -f "$(sg_session_env)" ]; then
     # shellcheck source=/dev/null
-    . "$SG_STATE/session.env"
+    . "$(sg_session_env)"
     export DISPLAY XDG_RUNTIME_DIR WAYLAND_DISPLAY WINEPREFIX
     info "using the session display: ${DISPLAY:-none}"
 else

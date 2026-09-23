@@ -8,7 +8,11 @@ Documentation=https://github.com/Stained-Glass-OS/stained-glass
 Before=greetd.service
 After=local-fs.target systemd-tmpfiles-setup.service
 Requires=systemd-tmpfiles-setup.service
-ConditionPathExists=!/var/lib/stained-glass/prefix/.sg-initialized
+# Runs every boot, not only the first: sg-prefix-init builds the prefix when it
+# is missing and otherwise brings it up to date -- a Wine upgrade's prefix
+# update and newly packaged applications (run_installers) happen here, at boot,
+# as the SYSTEM account, rather than inside the first user's session. It used to
+# be conditioned on the stamp, so that path never ran after the first boot.
 
 [Service]
 Type=oneshot

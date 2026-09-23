@@ -23,13 +23,13 @@ info() { echo "info  $*"; }
 
 # --- wait for the session to publish itself -------------------------------
 waited=0
-while [ ! -f "$SG_STATE/session.env" ]; do
-    [ "$waited" -ge "$TIMEOUT" ] && { echo "FAIL  session never started (no $SG_STATE/session.env after ${TIMEOUT}s)"; exit 2; }
+while [ ! -f "$(sg_session_env)" ]; do
+    [ "$waited" -ge "$TIMEOUT" ] && { echo "FAIL  session never started (no $(sg_session_env) after ${TIMEOUT}s)"; exit 2; }
     sleep 2
     waited=$((waited + 2))
 done
 # shellcheck source=/dev/null  # written by sg-run-explorer at session start
-. "$SG_STATE/session.env"
+. "$(sg_session_env)"
 export DISPLAY XDG_RUNTIME_DIR WAYLAND_DISPLAY WINEPREFIX
 info "session.env found after ${waited}s (display=${DISPLAY:-none} path=${SG_DISPLAY_PATH:-?})"
 
@@ -39,12 +39,20 @@ sg_wine_env
 # wineserver is the kernel of the Wine personality. If it is not running,
 # nothing else below means anything.
 waited=0
-while ! pgrep -x wineserver >/dev/null 2>&1 && ! pgrep -f 'wineserver' >/dev/null 2>&1; do
+# Multi-user debt D10: match only processes that belong to this check.
+# explorer and notepad must be *this user's*; the wineserver is the machine's,
+# run by the SYSTEM account (the image) -- or this user's own where there is no
+# machine-level server (a developer box or CI). Never another user's.
+_me=$(id -u)
+_srv_owners="$_me"
+getent passwd "${SG_SYSTEM_USER:-sgsystem}" >/dev/null 2>&1 && \
+    _srv_owners="$_me,$(id -u "${SG_SYSTEM_USER:-sgsystem}")"
+while ! pgrep -u "$_srv_owners" -x wineserver >/dev/null 2>&1; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if pgrep -f wineserver >/dev/null 2>&1; then
+if pgrep -u "$_srv_owners" -x wineserver >/dev/null 2>&1; then
     pass "wineserver is running"
 else
     fail "wineserver is not running"
@@ -61,12 +69,12 @@ fi
 # that no shell leaked into session 0 is guarded just below -- neither depends
 # on a command line.
 waited=0
-while ! pgrep -f 'explorer\.exe' >/dev/null 2>&1; do
+while ! pgrep -u "$_me" -f 'explorer\.exe' >/dev/null 2>&1; do
     [ "$waited" -ge "$TIMEOUT" ] && break
     sleep 2
     waited=$((waited + 2))
 done
-if pgrep -f 'explorer\.exe' >/dev/null 2>&1; then
+if pgrep -u "$_me" -f 'explorer\.exe' >/dev/null 2>&1; then
     pass "explorer.exe is running"
 else
     fail "explorer.exe is not running"
@@ -195,7 +203,10 @@ pkill -f 'notepad.exe' >/dev/null 2>&1 || true
 # outside the desktop is an app that is not in the taskbar, and under a
 # fullscreen compositor it covers the shell entirely.
 info "launching notepad.exe"
-wine notepad >"$SG_LOG_DIR/notepad.out" 2>&1 &
+# Private to this user (debt D11): not the shared log directory.
+_np_out=$(mktemp); _np32_out=$(mktemp)
+trap 'rm -f "$_np_out" "$_np32_out"' EXIT
+wine notepad >"$_np_out" 2>&1 &
 NOTEPAD_SHELL_PID=$!
 
 waited=0
@@ -211,11 +222,11 @@ else
     if window_list | grep -q 'Notepad'; then
         fail "  (it opened as its own X toplevel -- the virtual desktop is not the prefix default)"
     fi
-    info "notepad output:"; sed 's/^/      /' "$SG_LOG_DIR/notepad.out" 2>/dev/null | head -20
+    info "notepad output:"; sed 's/^/      /' "$_np_out" 2>/dev/null | head -20
     info "desktop children were:"; desktop_children | sed 's/^/      /' | head -20
 fi
 
-if pgrep -f 'notepad.exe' >/dev/null 2>&1; then
+if pgrep -u "$_me" -f 'notepad.exe' >/dev/null 2>&1; then
     pass "notepad.exe process is alive"
 else
     fail "notepad.exe process is not running"
@@ -245,7 +256,7 @@ else
     esac
 
     info "launching the 32-bit notepad.exe"
-    wine 'C:\windows\syswow64\notepad.exe' >"$SG_LOG_DIR/notepad32.out" 2>&1 &
+    wine 'C:\windows\syswow64\notepad.exe' >"$_np32_out" 2>&1 &
 
     waited=0
     while ! desktop_children | grep -q 'Notepad'; do
@@ -257,7 +268,7 @@ else
         pass "32-bit app runs in the shell: $(desktop_children | grep 'Notepad' | sed 's/^ *//' | head -1)"
     else
         fail "the 32-bit notepad did not appear inside the desktop after ${TIMEOUT}s"
-        info "output:"; sed 's/^/      /' "$SG_LOG_DIR/notepad32.out" 2>/dev/null | head -20
+        info "output:"; sed 's/^/      /' "$_np32_out" 2>/dev/null | head -20
     fi
 
     # Deliberately left running: the boot gate screenshots immediately after
