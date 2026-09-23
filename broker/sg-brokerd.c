@@ -186,7 +186,17 @@ static void launch(char **argv, char **envp, const char *cwd, const char *system
     }
     setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
     setenv("SG_IN_BROKER", "1", 1);   /* the elevated program must not re-broker */
-    for (; *envp; envp++) putenv(*envp);
+    /* Only a fixed set of environment variables from the requester are honoured.
+     * The requester is not trusted: a hostile client could otherwise send
+     * LD_PRELOAD, PATH or WINEDLLOVERRIDES and run its own code as the SYSTEM
+     * account. Everything else is dropped. */
+    for (; *envp; envp++) {
+        static const char *ok[] = { "DISPLAY=", "WAYLAND_DISPLAY=", "XAUTHORITY=",
+                                    "WINEPREFIX=", "XDG_RUNTIME_DIR=", NULL };
+        int i;
+        for (i = 0; ok[i]; i++)
+            if (!strncmp(*envp, ok[i], strlen(ok[i]))) { putenv(*envp); break; }
+    }
     if (cwd && cwd[0] && chdir(cwd) != 0) { if (chdir("/") != 0) {} }
     execvp(argv[0], argv);
     _exit(127);
