@@ -38,7 +38,7 @@ separately.
 | `lib/sg-common.sh` | shared paths and the Wine environment, in one place |
 | `lib/sg-run-explorer` | runs inside the compositor; starts explorer |
 | `config/greetd-config.toml` | autologin placeholder for `sg-greeter` |
-| `bin/sg-install-apps` | links PowerShell 7 and Python into the prefix (see below) |
+| `bin/sg-install-apps` | installs PowerShell 7 and Python into the prefix (see below) |
 | `bin/sg-apps-check` | **the bundled-apps gate** |
 | `bin/sg-wineserver` | **the machine-level wineserver**: the Windows system itself |
 | `bin/sg-services-start` | starts the SCM inside it, as SYSTEM |

@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to the same branch supersedes a run still in progress: each run
+# can spend ~40 minutes building wine-sg, and only the newest result matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   gate:
     name: lint + session gate
@@ -54,9 +60,12 @@ jobs:
           repository: Stained-Glass-OS/wine-sg
           path: _deps/wine-sg
 
-      - name: Cache wine-sg
+      # Restore and save are separate steps so the build is cached as soon as
+      # it succeeds. actions/cache's combined form saves only when the whole job
+      # passes, so a failing gate threw away a 35-minute build every time.
+      - name: Restore wine-sg
         id: wine-sg-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /opt/wine-sg
           key: wine-sg-opt-${{ runner.os }}-${{ hashFiles('_deps/wine-sg/wine-version', '_deps/wine-sg/patches/**', '_deps/wine-sg/build.sh') }}
@@ -71,6 +80,13 @@ jobs:
           apt-get build-dep -y --no-install-recommends wine
           apt-get install -y --no-install-recommends libsane-dev
           make -C _deps/wine-sg install
+
+      - name: Save wine-sg
+        if: steps.wine-sg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /opt/wine-sg
+          key: ${{ steps.wine-sg-cache.outputs.cache-primary-key }}
 
       - name: Confirm the gate will use wine-sg
         run: |
