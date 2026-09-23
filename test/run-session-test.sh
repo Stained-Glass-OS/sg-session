@@ -127,6 +127,11 @@ export WLR_BACKENDS WLR_LIBINPUT_NO_DEVICES WLR_RENDERER
 # own gate sets it to its build tree), else sg-compositor, else cage.
 . "$STAGE/usr/lib/stained-glass/sg-common.sh" 2>/dev/null || true
 echo "== compositor: ${SG_COMPOSITOR:-cage}"
+# Put wine-sg on PATH before looking for `wine`: it lives in /opt/wine-sg/bin,
+# where only sg_wine_env adds it. Checked first, a machine with wine-sg and no
+# distribution Wine -- CI, since it stopped installing stock Wine -- skipped the
+# gate as "wine not installed".
+command -v sg_wine_env >/dev/null 2>&1 && sg_wine_env
 for tool in "${SG_COMPOSITOR:-cage}" Xwayland wine xwininfo; do
     command -v "$tool" >/dev/null 2>&1 || { echo "SKIP: $tool not installed"; exit 77; }
 done
