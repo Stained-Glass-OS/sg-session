@@ -58,7 +58,20 @@ case "$got" in
 esac
 rm -f "$secret"
 
-# 3. The user's own private directory, which Unix grants them.
+# 3. Deleting a SYSTEM file from SYSTEM's directory. DeleteFile opens with
+#    only DELETE access, so a readable file opens; the unlink at close must
+#    then be done with the user's rights, not the server's.
+victim="$C/windows/sg-access-victim.txt"
+runuser -u "$SG_SYSTEM_USER" -- sh -c "echo keep > '$victim' && chmod 644 '$victim'"
+as_user_wine 'del C:\windows\sg-access-victim.txt' >/dev/null
+if [ -e "$victim" ]; then
+    pass "an ordinary user's program cannot delete a SYSTEM file"
+else
+    fail "an ordinary user's program deleted a SYSTEM file from C:\\windows (Unix denies the same user)"
+fi
+rm -f "$victim"
+
+# 4. The user's own private directory, which Unix grants them.
 own=$(runuser -u "$SG_USER" -- mktemp -d)
 own_w=$(runuser -u "$SG_USER" -- sh -c ". '$SG_LIB/sg-common.sh'; sg_wine_env; winepath -w '$own'" 2>/dev/null | tr -d '\r')
 as_user_wine "echo mine > $own_w\\note.txt" >/dev/null
