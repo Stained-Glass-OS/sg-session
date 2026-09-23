@@ -41,8 +41,11 @@ run_probe() {
     grep -q "PROCMEM OK" "$_out"
 }
 
+# Do NOT pkill by pattern here: "[s]g-procagent" also matches this script's own
+# name, sg-procagent-check, so it would signal itself (the pkill -f self-match).
+# Removing the socket is enough; sg-procagent unlinks and rebinds it anyway, and
+# the only agent we start is our own, killed at the end.
 _sock="$SG_PREFIX/.sg-procagent.$(id -u)"
-pkill -u "$(id -u)" -f "[s]g-procagent" 2>/dev/null || true
 rm -f "$_sock" 2>/dev/null || true
 sleep 1
 
