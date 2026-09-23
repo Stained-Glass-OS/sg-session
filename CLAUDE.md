@@ -40,6 +40,7 @@ separately.
 | `config/greetd-config.toml` | autologin placeholder for `sg-greeter` |
 | `bin/sg-install-apps` | installs PowerShell 7 and Python into the prefix (see below) |
 | `bin/sg-apps-check` | **the bundled-apps gate** |
+| `bin/sg-update-prepare` | downloads updates for the next reboot to install (see below) |
 | `bin/sg-wineserver` | **the machine-level wineserver**: the Windows system itself |
 | `bin/sg-services-start` | starts the SCM inside it, as SYSTEM |
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
@@ -352,10 +353,30 @@ that point at the right program.
 - **Real copies, marked `.sg-bundled`**, replaced wholesale when the payload's
   `VERSION` changes. A directory without the marker is someone else's and is
   left alone.
-- **pwsh needs a console.** With no console and its output redirected, its
-  ConsoleHost throws a NullReferenceException on Wine; the gate runs it under
-  `script(1)`. Launched from the desktop it has a console window and is fine.
-  Worth a Wine fix before PowerShell runs unattended (login scripts, RMM).
+- **pwsh needs a console.** Without one its ConsoleHost throws a
+  NullReferenceException; the gate runs it under `script(1)`. From a
+  console-less Windows parent, `CREATE_NO_WINDOW` (the RMM/service way) works,
+  but default flags do not: Windows would give the child a new console and Wine
+  does not. Measured and tabled in sg-image's `docs/packages.md`.
+
+## Staged updates: download now, install on the next reboot
+
+`sg-update-prepare` (run daily by `sg-update-prepare.timer`, randomised across
+an hour so a fleet does not arrive at once) asks PackageKit to refresh and
+download updates without installing them, then `pkcon offline-trigger` marks
+the next boot. That boot enters `system-update.target`, where PackageKit's own
+`packagekit-offline-update.service` installs everything and reboots into the
+updated system -- before anyone logs in, so nothing is replaced under a running
+program. It is the Windows and PureOS pattern and PackageKit's standard
+mechanism, not a new one. Updates come from whatever apt sources are
+configured.
+
+- **The package starts the timer, never the service.** A postinst that started
+  the service would run a network update check inside dpkg on a live system.
+  `debian/rules` handles the two units separately for that reason.
+- **The gate is sg-image's `make update-test`**: a canary package upgraded from
+  a local test repository, asserted *not* installed before the reboot and
+  installed after it, with the machine still reaching its login screen.
 
 ## Never disable mscoree/mshtml for more than one command
 

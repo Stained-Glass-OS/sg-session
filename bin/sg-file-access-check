@@ -1,0 +1,74 @@
+#!/bin/sh
+# Can an ordinary user's Windows program reach files that Unix would deny them?
+#
+# EXPECTED TO FAIL until the file-access flaw recorded as multi-user debt D14 is
+# fixed. Like the S2 gate it is deliberately kept out of `make test` and CI,
+# where a known-red gate would mask real regressions; run it on purpose, as
+# root, on a machine with the machine-level wineserver (the image does).
+#
+# Why it fails today: Wine's server, not the client, opens files, and hands the
+# descriptor over. With the shared machine-level wineserver running as the
+# SYSTEM account, every user's file access is performed with SYSTEM's Unix
+# rights. Measured 2026-09-22: an ordinary user's program wrote into
+# C:\windows\system32 and read a SYSTEM-only (0600) file -- both of which Unix
+# refuses the same user directly -- and could not reach the user's own 0700
+# directory, which Unix allows.
+#
+# Each clause does the same operation twice, once through Unix and once through
+# Wine, as the same ordinary user, and passes only when the two agree. The
+# probes are removed afterwards.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+[ "$(id -u)" = 0 ] || { echo "run as root: it acts as $SG_USER and $SG_SYSTEM_USER"; exit 2; }
+if ! getent passwd "$SG_USER" >/dev/null || ! getent passwd "$SG_SYSTEM_USER" >/dev/null; then
+    echo "SKIP: needs both $SG_USER and $SG_SYSTEM_USER"; exit 77
+fi
+
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+
+C="$SG_PREFIX/drive_c"
+as_user_wine() {
+    runuser -u "$SG_USER" -- sh -c ". '$SG_LIB/sg-common.sh'; sg_wine_env; wine cmd /c \"\$1\" 2>/dev/null" sh "$1" | tr -d '\r'
+}
+
+# 1. Writing into SYSTEM's directory.
+probe="$C/windows/system32/sg-access-probe.txt"
+rm -f "$probe"
+as_user_wine 'echo probe > C:\windows\system32\sg-access-probe.txt' >/dev/null
+if [ -e "$probe" ]; then
+    fail "an ordinary user's program wrote into C:\\windows\\system32 (Unix denies the same user)"
+else
+    pass "an ordinary user's program cannot write into C:\\windows\\system32"
+fi
+rm -f "$probe"
+
+# 2. Reading a file only SYSTEM may read.
+secret="$C/windows/sg-access-secret.txt"
+runuser -u "$SG_SYSTEM_USER" -- sh -c "echo SYSTEM-ONLY > '$secret' && chmod 600 '$secret'"
+got=$(as_user_wine 'type C:\windows\sg-access-secret.txt')
+case "$got" in
+    *SYSTEM-ONLY*) fail "an ordinary user's program read a SYSTEM-only (0600) file" ;;
+    *)             pass "an ordinary user's program cannot read a SYSTEM-only file" ;;
+esac
+rm -f "$secret"
+
+# 3. The user's own private directory, which Unix grants them.
+own=$(runuser -u "$SG_USER" -- mktemp -d)
+own_w=$(runuser -u "$SG_USER" -- sh -c ". '$SG_LIB/sg-common.sh'; sg_wine_env; winepath -w '$own'" 2>/dev/null | tr -d '\r')
+as_user_wine "echo mine > $own_w\\note.txt" >/dev/null
+if [ -e "$own/note.txt" ]; then
+    pass "an ordinary user's program can write the user's own private directory"
+else
+    fail "an ordinary user's program cannot write the user's own 0700 directory (Unix allows it)"
+fi
+rm -rf "$own"
+
+echo
+if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL (expected until D14 is fixed)"; fi
+exit "$RC"

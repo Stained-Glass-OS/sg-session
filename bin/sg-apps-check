@@ -119,7 +119,12 @@ if sg_addon_staged mono; then
     # A real round trip: .NET Framework's own C# compiler -- itself a .NET
     # program -- builds a program, and the program runs on the Framework
     # runtime through mscoree. Wine Mono puts csc.exe where Windows has it.
-    _t=$(mktemp -d)
+    #
+    # The program is built into the user's %TEMP%, where a Windows program
+    # would build it. The source sits in a world-readable directory: the
+    # wineserver opens files with its own rights (debt D14), so a private
+    # directory of the user's is unreadable to it.
+    _t=$(mktemp -d); chmod 755 "$_t"
     cat > "$_t/hello.cs" <<'EOF'
 using System;
 class Hello {
@@ -129,11 +134,15 @@ class Hello {
     }
 }
 EOF
+    chmod 644 "$_t/hello.cs"
+    _wtemp=$(wine cmd /c echo %TEMP% 2>/dev/null | clean | sed 's/ *$//')
+    _exe="$_wtemp\\sg-apps-check-$$.exe"
+    info "building into %TEMP% ($_wtemp)"
     wine 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' /nologo \
-        "/out:$(winepath -w "$_t/hello.exe")" "$(winepath -w "$_t/hello.cs")" >/dev/null 2>&1 || true
-    if [ -f "$_t/hello.exe" ]; then
+        "/out:$_exe" "$(winepath -w "$_t/hello.cs")" >/dev/null 2>&1 || true
+    if [ -n "$(wine cmd /c if exist "$_exe" echo yes 2>/dev/null | clean)" ]; then
         pass ".NET Framework compiler (csc) built a program"
-        raw=$(wine "$_t/hello.exe" 2>/dev/null) && rc=0 || rc=$?
+        raw=$(wine "$_exe" 2>/dev/null) && rc=0 || rc=$?
         out=$(printf '%s\n' "$raw" | clean)
         case "$out" in
             ".NET Framework 4."*) pass "it runs on the Framework runtime: $out" ;;
@@ -141,8 +150,9 @@ EOF
         esac
         if [ "$rc" = 7 ]; then pass ".NET Framework exit code propagates (7)"
         else fail ".NET Framework exit code: expected 7, got $rc"; fi
+        wine cmd /c del "$_exe" >/dev/null 2>&1 || true
     else
-        fail ".NET Framework compiler (csc) did not build a program -- is Wine Mono installed?"
+        fail ".NET Framework compiler (csc) did not build a program into %TEMP% -- is Wine Mono installed?"
     fi
     rm -rf "$_t"
 else
@@ -150,15 +160,33 @@ else
 fi
 
 if sg_addon_staged gecko; then
-    # Presence only. The HTML engine loads under a display, but a functional
-    # check through the script host fails in Wine's JScript ActiveXObject
-    # layer rather than in Gecko, so this claims installation and no more.
-    _g_ok=1
-    for _arch in system32 syswow64; do
-        [ -n "$(find "$SG_PREFIX/drive_c/windows/$_arch/gecko" -maxdepth 3 -name wine_gecko 2>/dev/null)" ] || _g_ok=0
+    # Does mshtml find the engine? Asked of mshtml itself: a script creates an
+    # HTML document, and mshtml's trace says where it looked and what it found.
+    # The engine needs a display to initialise, so borrow the session's; with
+    # no session, say so rather than guess. This shows the engine is found and
+    # accepted, not that it renders: creating the document through the script
+    # host fails later, in Wine's JScript ActiveXObject layer, not in Gecko.
+    # The session publishes its display a little after login; wait for it, as
+    # sg-session-check does, rather than race it and skip.
+    _w=0
+    while [ ! -f "$SG_STATE/session.env" ] && [ "$_w" -lt "${SG_CHECK_TIMEOUT:-60}" ]; do
+        sleep 2; _w=$((_w + 2))
     done
-    if [ "$_g_ok" = 1 ]; then pass "Wine Gecko (HTML engine) installed, 64- and 32-bit"
-    else fail "Wine Gecko is staged but not installed in both system32 and syswow64"; fi
+    # shellcheck source=/dev/null  # written by sg-run-explorer at session start
+    [ -f "$SG_STATE/session.env" ] && . "$SG_STATE/session.env" 2>/dev/null
+    if [ -n "${DISPLAY:-}" ]; then
+        export DISPLAY
+        _t=$(mktemp -d); chmod 755 "$_t"
+        printf '%s\n' 'try { new ActiveXObject("htmlfile"); } catch (e) {}' > "$_t/probe.js"
+        chmod 644 "$_t/probe.js"
+        _trace=$(WINEDEBUG=+mshtml wine cscript //nologo "$(winepath -w "$_t/probe.js")" 2>&1 | clean)
+        rm -rf "$_t"
+        _found=$(printf '%s\n' "$_trace" | sed -n 's/.*check_version .*: "\(Wine Gecko [0-9.]*\)".*/\1/p' | head -1)
+        if [ -n "$_found" ]; then pass "mshtml finds and accepts the HTML engine: $_found"
+        else fail "mshtml did not find Wine Gecko (staged, but not found)"; fi
+    else
+        info "no session display -- Gecko is staged but its loading was not checked"
+    fi
 else
     info "Wine Gecko not staged -- HTML engine not checked"
 fi

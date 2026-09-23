@@ -136,8 +136,11 @@ sg_wine_env() {
 # pops a download dialog that would wait forever for a click. So suppress each
 # only when it is not staged: suppressing a staged one would skip installing it.
 sg_addon_staged() {
+    # Either form Wine accepts: an MSI it installs into the prefix, or the
+    # unpacked directory (wine-mono-<ver>, wine-gecko-<ver>-<arch>) it runs in
+    # place -- which is how the image ships them.
     for _d in "${SG_WINE_DIR:-/opt/wine-sg}/share/wine/$1" "/usr/share/wine/$1"; do
-        for _f in "$_d"/*.msi; do [ -f "$_f" ] && return 0; done
+        for _f in "$_d"/*.msi "$_d"/wine-"$1"-*; do [ -e "$_f" ] && return 0; done
     done
     return 1
 }

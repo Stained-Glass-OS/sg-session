@@ -1,0 +1,15 @@
+[Unit]
+Description=Stained Glass OS: download updates to install on the next reboot
+Documentation=man:pkcon(1)
+# PackageKit does the work; this only asks it to download and mark the next
+# boot for installation (see sg-update-prepare).
+Wants=network-online.target
+After=network-online.target packagekit.service
+ConditionPathExists=/usr/bin/pkcon
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-update-prepare
+# Downloading is background work: stay out of the user's way.
+Nice=10
+IOSchedulingClass=idle

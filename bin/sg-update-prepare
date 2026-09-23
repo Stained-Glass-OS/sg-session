@@ -1,0 +1,49 @@
+#!/bin/sh
+# Download system updates now; install them on the next reboot.
+#
+# Windows and PureOS both update this way: the download happens in the
+# background, and the installation happens early in the next boot, before
+# anyone has logged in or has a document open -- so nothing is replaced under a
+# running program, and a machine is never half-upgraded while in use.
+#
+# This is PackageKit's offline-update mechanism, not a new one. `pkcon update
+# --only-download` fetches and prepares the transaction; `pkcon
+# offline-trigger` marks it for the next boot, where systemd enters
+# system-update.target and PackageKit's packagekit-offline-update.service
+# installs it and reboots into the updated system.
+#
+# Run by sg-update-prepare.timer. Safe to run by hand; running it with nothing
+# to update does nothing.
+set -eu
+
+log() { printf '[sg-update] %s\n' "$*"; }
+
+command -v pkcon >/dev/null 2>&1 || { log "PackageKit (pkcon) is not installed"; exit 0; }
+
+# pkcon's exit codes: 0 success, 5 "nothing useful was done" (for example,
+# nothing to update). Anything else is a failure worth a non-zero exit, so the
+# timer's failures show up in `systemctl --failed`.
+pk() {
+    _rc=0
+    pkcon --noninteractive "$@" || _rc=$?
+    case $_rc in
+        0|5) return 0 ;;
+        *)   log "pkcon $* failed ($_rc)"; return "$_rc" ;;
+    esac
+}
+
+log "refreshing package lists"
+pk refresh
+
+log "downloading available updates"
+out=$(pkcon --noninteractive update --only-download 2>&1) && rc=0 || rc=$?
+printf '%s\n' "$out"
+case $rc in
+    5) log "no updates available"; exit 0 ;;
+    0) ;;
+    *) log "download failed ($rc)"; exit "$rc" ;;
+esac
+
+# Something was downloaded and prepared: install it on the next reboot.
+pk offline-trigger
+log "updates downloaded; they will be installed on the next reboot"

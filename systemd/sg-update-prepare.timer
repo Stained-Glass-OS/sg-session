@@ -1,0 +1,14 @@
+[Unit]
+Description=Stained Glass OS: check for updates daily
+
+[Timer]
+# Not at boot, when the machine is busiest and the network may not be up yet.
+OnBootSec=15min
+OnUnitActiveSec=1d
+# Spread a fleet's requests across an hour instead of every machine at once.
+RandomizedDelaySec=1h
+# A machine that was off at the scheduled time checks soon after it starts.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
