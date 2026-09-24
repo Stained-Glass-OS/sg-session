@@ -53,6 +53,27 @@ sg_apply_policy
 [ "$(val 'HKLM\Software\Policies\SGDetat' Keep)" = 1 ] && pass "and still leaves the program's own value" \
     || fail "Keep removed"
 
+# --- user policy (HKCU), the same de-tattoo at login ---------------------------
+uval() { wine reg query "$1" /v "$2" 2>/dev/null | tr -d '\r' | grep -c "    $2    "; }
+US="$T/user-policy.applied"
+wine reg add 'HKCU\Software\Policies\SGDetat' /v Keep /t REG_SZ /d mine /f >/dev/null 2>&1
+printf '%s\n' 'Windows Registry Editor Version 5.00' '' \
+  '[HKEY_CURRENT_USER\Software\Policies\SGDetat]' '"P"=dword:00000001' '"Q"=dword:00000002' > "$T/up.reg"
+sg_apply_user_policy "$T/up.reg" "$US"
+[ "$(uval 'HKCU\Software\Policies\SGDetat' P)" = 1 ] && [ "$(uval 'HKCU\Software\Policies\SGDetat' Q)" = 1 ] \
+    && pass "user: a policy's HKCU values are applied at login" || fail "user policy values not applied"
+printf '%s\n' 'Windows Registry Editor Version 5.00' '' \
+  '[HKEY_CURRENT_USER\Software\Policies\SGDetat]' '"P"=dword:00000001' > "$T/up.reg"
+sg_apply_user_policy "$T/up.reg" "$US"
+[ "$(uval 'HKCU\Software\Policies\SGDetat' Q)" = 0 ] && pass "user: a value removed from the policy is de-tattooed" \
+    || fail "user Q still present"
+[ "$(uval 'HKCU\Software\Policies\SGDetat' P)" = 1 ] && pass "user: a value still in force stays" || fail "user P removed"
+[ "$(uval 'HKCU\Software\Policies\SGDetat' Keep)" = 1 ] && pass "user: a program's own HKCU value is untouched" \
+    || fail "user Keep removed"
+# no policy at all next login (file gone): P lifts
+sg_apply_user_policy "$T/none.reg" "$US"
+[ "$(uval 'HKCU\Software\Policies\SGDetat' P)" = 0 ] && pass "user: with no policy, the last value lifts" || fail "user P survived"
+
 echo
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

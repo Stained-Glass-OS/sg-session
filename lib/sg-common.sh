@@ -143,13 +143,33 @@ sg_apply_policy() {
     if [ -f "$_state" ]; then
         comm -23 "$_state" "$_now" | while IFS="$(printf '\t')" read -r _k _v; do
             [ -n "$_k" ] || continue
-            if [ -n "$_v" ]; then wine reg delete "$_k" /v "$_v" /f >/dev/null 2>&1
-            else wine reg delete "$_k" /ve /f >/dev/null 2>&1; fi
+            if [ -n "$_v" ]; then wine reg delete "$_k" /v "$_v" /f >/dev/null 2>&1 || :
+            else wine reg delete "$_k" /ve /f >/dev/null 2>&1 || :; fi
             sg_log "removed stale policy value: ${_k}\\${_v}"
         done
     fi
-    mkdir -p "$(dirname "$_state")" 2>/dev/null
+    mkdir -p "$(dirname "$_state")" 2>/dev/null || :
     mv "$_now" "$_state" 2>/dev/null || rm -f "$_now"
+}
+
+# Apply a user's Group Policy registry file (HKCU) with de-tattoo, at login:
+# a value the user's policy set last time and does not set now is deleted, so
+# a policy removed from the user's GPOs lifts. State persists in the user's own
+# home ($2), which outlives the login; HKCU is the user's own hive.
+#   sg_apply_user_policy NEW_REG STATE_FILE
+sg_apply_user_policy() {
+    _new=$1 _ustate=$2 _cur=$(mktemp)
+    [ -r "$_new" ] && sg_reg_values "$_new" | sort -u > "$_cur"
+    if [ -f "$_ustate" ]; then
+        comm -23 "$_ustate" "$_cur" | while IFS="$(printf '\t')" read -r _k _v; do
+            [ -n "$_k" ] || continue
+            if [ -n "$_v" ]; then wine reg delete "$_k" /v "$_v" /f >/dev/null 2>&1 || :
+            else wine reg delete "$_k" /ve /f >/dev/null 2>&1 || :; fi
+        done
+    fi
+    { [ -r "$_new" ] && wine reg import "$(winepath -w "$_new" 2>/dev/null)" >/dev/null 2>&1; } || :
+    mkdir -p "$(dirname "$_ustate")" 2>/dev/null || :
+    mv "$_cur" "$_ustate" 2>/dev/null || rm -f "$_cur"
 }
 
 # Protect the machine registry branches (multi-user debt / S2 clause 3). Run

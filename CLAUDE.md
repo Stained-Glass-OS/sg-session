@@ -523,7 +523,10 @@ difference from the previous set is deleted. **Only the exact `(key, value)`
 pairs policy set are touched** -- never a branch key and never a descriptor,
 so a program's own state under a policy branch survives, and the boot-time
 protection (which is not re-stamped mid-refresh) is not disturbed. First run
-has no state, so nothing is deleted. Gate: `test/detattoo-test.sh`.
+has no state, so nothing is deleted. The same applies to **user policy**
+(`sg_apply_user_policy`, HKCU) at login, with per-user state in the user's
+home. The delete loop is `set -e` safe (it runs under `set -eu`). Gate:
+`test/detattoo-test.sh` (machine and user).
 
 **Machine Group Policy**: `domain/sg-gpo-machine` (root) asks Samba which
 GPOs apply to the computer account. It fetches each one's

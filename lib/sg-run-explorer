@@ -125,9 +125,13 @@ _netdir="/run/stained-glass-net/drives/$(id -u)"
 if [ -r "$_netdir/volatile.reg" ]; then
     wine reg import "Z:$_netdir/volatile.reg" >/dev/null 2>&1 || sg_log "the domain logon variables were not set"
 fi
-if [ -r "$_netdir/user-policy.reg" ]; then
+# The user's Group Policy (HKCU), with de-tattoo: a value removed from the
+# user's GPOs is deleted, so a restriction lifted in the directory lifts here
+# at the next login. State persists in the user's own home (HKCU is theirs).
+_upstate="${HOME:-$SG_STATE}/.local/state/stained-glass/user-policy.applied"
+if [ -r "$_netdir/user-policy.reg" ] || [ -f "$_upstate" ]; then
     sg_log "applying the user's Group Policy registry settings"
-    wine reg import "Z:$_netdir/user-policy.reg" >/dev/null 2>&1 || sg_log "user policy was not applied"
+    sg_apply_user_policy "$_netdir/user-policy.reg" "$_upstate"
 fi
 
 # What starts alongside the shell waits until the shell owns the desktop.
