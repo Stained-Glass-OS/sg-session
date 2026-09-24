@@ -515,6 +515,16 @@ item-level targeting by security group only, and items with other filters
 are skipped), `scripts.ini` [Logon] (appended to the logon scripts) and user
 `Registry.pol` (to HKCU through sg-polimport).
 
+**Group Policy de-tattoos** (sg_apply_policy). A value a policy set last
+time and no policy sets now is deleted on the next apply -- a policy removed
+from a GPO, or a local `.reg` dropped from `policy.d`, stops applying. The set
+of values policy set is recorded in `$SG_STATE/policy-applied.list`; the
+difference from the previous set is deleted. **Only the exact `(key, value)`
+pairs policy set are touched** -- never a branch key and never a descriptor,
+so a program's own state under a policy branch survives, and the boot-time
+protection (which is not re-stamped mid-refresh) is not disturbed. First run
+has no state, so nothing is deleted. Gate: `test/detattoo-test.sh`.
+
 **Machine Group Policy**: `domain/sg-gpo-machine` (root) asks Samba which
 GPOs apply to the computer account. It fetches each one's
 `Machine\Registry.pol` from SYSVOL with the machine account (`smbclient -P`)

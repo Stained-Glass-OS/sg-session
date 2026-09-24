@@ -89,10 +89,24 @@ sg_session_env() {
 # HKLM first (wine-sg 0025), the policy binds every user and no user can
 # override it. Idempotent: importing the same policy twice is harmless.
 SG_POLICY_DIR="${SG_POLICY_DIR:-/etc/stained-glass/policy.d}"
+# The registry values a .reg sets, one "KEY<TAB>NAME" per line (NAME empty for
+# the default value). Used to de-tattoo: a policy value removed from a GPO must
+# stop applying, as Windows clears the managed policy branch each refresh.
+sg_reg_values() {
+    awk '
+        /^\[/  { k = substr($0, 2, length($0) - 2); next }
+        /^@=/  { if (k != "") print k "\t"; next }
+        /^"/   { n = $0; sub(/"=.*/, "", n); sub(/^"/, "", n); gsub(/\\"/, "\"", n);
+                 if (k != "") print k "\t" n; next }
+    ' "$1"
+}
+
 sg_apply_policy() {
     [ "${SG_SYSTEM_PREFIX:-1}" = "1" ] || return 0
     [ -d "$SG_POLICY_DIR" ] || return 0
     _pi="${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-polimport"
+    _state="${SG_STATE:-/var/lib/stained-glass/state}/policy-applied.list"
+    _now=$(mktemp)
     for _p in "$SG_POLICY_DIR"/*.reg "$SG_POLICY_DIR"/*.pol; do
         [ -f "$_p" ] || continue
         case "$_p" in
@@ -104,6 +118,7 @@ sg_apply_policy() {
             if "$_pi" "$_p" > "$_reg" 2>/dev/null && \
                wine reg import "$(winepath -w "$_reg" 2>/dev/null)" >/dev/null 2>&1; then
                 sg_log "applied policy: $(basename "$_p")"
+                sg_reg_values "$_reg" >> "$_now"
             else
                 sg_log "WARNING: could not apply policy $(basename "$_p")"
             fi
@@ -111,11 +126,30 @@ sg_apply_policy() {
         *.reg)
             if wine reg import "$(winepath -w "$_p" 2>/dev/null)" >/dev/null 2>&1; then
                 sg_log "applied policy: $(basename "$_p")"
+                sg_reg_values "$_p" >> "$_now"
             else
                 sg_log "WARNING: could not apply policy $(basename "$_p")"
             fi ;;
         esac
     done
+
+    # De-tattoo: a value this machine set last time that no policy sets now is
+    # deleted, so a policy removed from a GPO (or a local .reg dropped) stops
+    # applying. Only the exact values policy set are touched -- never a branch,
+    # never a descriptor -- so a program's own state under those keys is left
+    # alone. sgsystem is the machine's administrator, so it may write the
+    # administrator-owned policy branches.
+    sort -u "$_now" -o "$_now"
+    if [ -f "$_state" ]; then
+        comm -23 "$_state" "$_now" | while IFS="$(printf '\t')" read -r _k _v; do
+            [ -n "$_k" ] || continue
+            if [ -n "$_v" ]; then wine reg delete "$_k" /v "$_v" /f >/dev/null 2>&1
+            else wine reg delete "$_k" /ve /f >/dev/null 2>&1; fi
+            sg_log "removed stale policy value: ${_k}\\${_v}"
+        done
+    fi
+    mkdir -p "$(dirname "$_state")" 2>/dev/null
+    mv "$_now" "$_state" 2>/dev/null || rm -f "$_now"
 }
 
 # Protect the machine registry branches (multi-user debt / S2 clause 3). Run

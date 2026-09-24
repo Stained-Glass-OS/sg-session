@@ -144,6 +144,7 @@ lint:
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
+	@sh test/detattoo-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
