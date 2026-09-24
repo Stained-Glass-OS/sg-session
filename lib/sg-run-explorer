@@ -44,6 +44,27 @@ if [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && [ -z "${DISPLAY:-}" ]; then
     fi
 fi
 
+# The desktop is the monitor's size. A fixed default (SG_DESKTOP_W x _H) either
+# leaves a larger screen unfilled or asks Wine for a mode the output cannot
+# show -- and when that mode is refused, a fresh prefix keeps Wine's 1024x768
+# default and lays the taskbar out for it. The X root window is the
+# compositor's output, so measure it. SG_DESKTOP_AUTO=0 keeps the configured
+# size for administrators who want a fixed one.
+if [ "${SG_DESKTOP_AUTO:-1}" != 0 ] && [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && command -v xwininfo >/dev/null 2>&1; then
+    root=""
+    tries=0
+    while [ -z "$root" ] && [ "$tries" -lt 20 ]; do
+        root=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
+        [ -n "$root" ] || { sleep 0.5; tries=$((tries + 1)); }
+    done
+    if [ -n "$root" ]; then
+        [ "$root" != "$GEOM" ] && sg_log "desktop sized to the output: $root (configured $GEOM)"
+        GEOM=$root
+    else
+        sg_log "could not measure the output; using the configured $GEOM"
+    fi
+fi
+
 # Publish where the session lives, so a check running over ssh can attach to it
 # without having to guess. Without this the gate cannot find the display.
 mkdir -p "$SG_STATE"

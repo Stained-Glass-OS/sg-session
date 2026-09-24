@@ -119,9 +119,18 @@ Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
   `HKCU\Software\Wine\Drivers\Graphics = x11`, the x11 path silently becomes the
   wayland path, and the virtual desktop — and therefore the taskbar — vanishes.
   See ADR 0003.
-- **`/desktop=shell,WxH` geometry is an upper bound.** Wine clamps the desktop
-  to the compositor's output. Asking for 1280x800 on a 1280x720 output gets you
-  1280x720.
+- **The desktop is sized to the output.** `sg-run-explorer` measures the X root
+  window, which is the compositor's output, and runs `/desktop=shell,WxH` at
+  that size. A fixed default would leave a larger screen unfilled, or ask for a
+  mode the output cannot show. `SG_DESKTOP_AUTO=0` keeps `SG_DESKTOP_W`x`_H`.
+  Wine clamps a larger request to the output anyway.
+- **The machine's Windows system never uses a display.** `sg-prefix-init`,
+  `sg-wineserver` and `sg-services-start` unset `DISPLAY`/`WAYLAND_DISPLAY`.
+  Whatever screen they were started from (a build host, a developer's desktop)
+  must not be recorded as the machine's monitor.
+- **`SG_TEST_HOLD`** runs a command against the live gate session after the
+  result is taken, e.g. `wine reg query ...`. Note that reg.exe itself runs a
+  display update and can perturb display state.
 - **The window checks are x11-only,** because cage exposes no toplevel
   enumeration protocol. `sg-session-check` fails loudly rather than skipping if
   pointed at the wayland path. That is intentional.

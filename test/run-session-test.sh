@@ -161,6 +161,10 @@ echo "== running sg-session-check"
 set +e
 SG_CHECK_TIMEOUT="$TIMEOUT_SESSION" "$SG_BIN/sg-session-check"
 RC=$?
+# Debugging: run a command against the live session before it is torn down,
+# e.g. SG_TEST_HOLD='wine reg query ...' to see what the check just saw. It
+# runs after the result is taken, so it can never change it.
+if [ -n "${SG_TEST_HOLD:-}" ]; then sh -c "$SG_TEST_HOLD" || true; fi
 set -e
 
 if [ "$RC" -ne 0 ]; then

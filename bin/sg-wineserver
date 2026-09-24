@@ -14,6 +14,11 @@ set -eu
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
 . "$SG_LIB/sg-common.sh"
+# The machine's Windows system never uses a display. Whatever screen this was
+# started from -- a build host's, a developer's desktop -- would otherwise be
+# recorded in the shared prefix as the machine's monitor, and every user's
+# desktop would be laid out for it.
+unset DISPLAY WAYLAND_DISPLAY XAUTHORITY
 sg_wine_env
 
 # The prefix must exist before there is anything to serve.
