@@ -87,6 +87,18 @@ case "$1" in
         adduser sggreet "$SG_WINE_GROUP" >/dev/null 2>&1 || true
         getent group render >/dev/null && adduser sggreet render >/dev/null 2>&1 || true
 
+        # Remote Desktop's network-facing side runs as this account and nothing
+        # more (sg-rdp-authd drops to it after forking its root monitor).
+        # It needs a home: FreeRDP will not make a connection's settings
+        # without one ("KNOWN_PATH_HOME is (nil)", and every connection fails).
+        if ! getent passwd sgrdp >/dev/null; then
+            adduser --system --group --no-create-home --home /var/lib/sg-rdp \
+                    --gecos "Stained Glass Remote Desktop" \
+                    --disabled-password sgrdp
+        fi
+        # Its home is made by tmpfiles.d (sg-session.conf): an image build
+        # cannot chown here.
+
         # The Windows profile service: pam_exec runs sg-profile-create as each
         # session opens (/usr/share/pam-configs/stained-glass-profile).
         pam-auth-update --package

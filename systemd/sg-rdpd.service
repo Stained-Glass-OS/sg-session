@@ -1,0 +1,25 @@
+# Remote Desktop (ADR 0010, pattern B): sign in over RDP and get a session.
+#
+# Off by default, as on Windows: `systemctl enable --now sg-rdpd` turns it on.
+[Unit]
+Description=Stained Glass Remote Desktop
+Documentation=https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/decisions/0010-remote-access-and-the-lock-screen.md
+After=network.target sg-wineserver.service
+Wants=sg-wineserver.service
+
+[Service]
+Type=exec
+# Starts as root only to fork the monitor (PAM, and the sessions it starts);
+# the RDP side drops to sgrdp before it listens.
+ExecStartPre=/usr/libexec/stained-glass/sg-rdp-cert
+ExecStart=/usr/libexec/stained-glass/sg-rdp-authd 3389
+Environment=SG_RDP_CERT=/etc/stained-glass/rdp/cert.pem
+Environment=SG_RDP_KEY=/etc/stained-glass/rdp/key.pem
+Environment=SG_RDP_LOG=/var/log/stained-glass/rdp.log
+# FreeRDP needs a home to make each connection's settings; sgrdp's.
+Environment=HOME=/var/lib/sg-rdp
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

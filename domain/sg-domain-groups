@@ -1,0 +1,55 @@
+#!/bin/sh
+# A domain member's local groups for a domain user, at sign-in (D1).
+#
+# pam_exec runs this as root when a session opens (pam-configs
+# stained-glass-domain-groups, turned on by sg-domain-join). Windows makes a
+# member's Domain Users local Users and its Domain Admins local
+# Administrators; here those are the Windows system's group (sgwine) and
+# sg-admins with sudo.
+#
+# Written into the group file, not granted by pam_group: greetd sets the
+# session's groups with initgroups() after PAM's setcred, which dropped
+# pam_group's additions, and the session then could not reach the Windows
+# system at all. The group file is what initgroups() reads.
+#
+# Only memberships this granted are ever taken away (recorded in
+# /var/lib/stained-glass/domain-groups), so a demotion in the directory takes
+# effect at the next sign-in -- as a Windows token does -- without touching
+# what an administrator set by hand.
+set -u
+[ "${PAM_TYPE:-}" = open_session ] || exit 0
+grep -qx 'role=member' /etc/stained-glass/role 2>/dev/null || exit 0
+user=${PAM_USER:-}
+[ -n "$user" ] || exit 0
+# A domain account: the directory knows it. Local accounts are left alone.
+wbinfo --name-to-sid "$user" >/dev/null 2>&1 || exit 0
+
+STATE=/var/lib/stained-glass/domain-groups
+WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
+
+member() { getent group "$1" | cut -d: -f4 | tr ',' '\n' | grep -qxF -- "$user"; }
+grant() {
+    member "$1" && return 0
+    gpasswd -a "$user" "$1" >/dev/null 2>&1 || return 0
+    printf '%s %s\n' "$user" "$1" >> "$STATE"
+}
+revoke() {
+    grep -qxF -- "$user $1" "$STATE" 2>/dev/null || return 0
+    gpasswd -d "$user" "$1" >/dev/null 2>&1 || true
+    grep -vxF -- "$user $1" "$STATE" > "$STATE.new" 2>/dev/null || true
+    mv "$STATE.new" "$STATE"
+}
+
+touch "$STATE"
+chmod 600 "$STATE"
+grant "$WINE_GROUP"
+
+admins=$(getent group "domain admins" | cut -d: -f3)
+is_admin=0
+if [ -n "$admins" ]; then
+    for g in $(id -G "$user" 2>/dev/null); do [ "$g" = "$admins" ] && is_admin=1; done
+fi
+for g in sg-admins sudo; do
+    if [ "$is_admin" = 1 ]; then grant "$g"; else revoke "$g"; fi
+done
+exit 0

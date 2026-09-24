@@ -408,24 +408,116 @@ everything again.
   keyboard onto a blank disk, restarts, and runs the boot gate on the
   installed disk as the new owner.
 
-## Remote login over RDP
+## Domain controller role (D2)
+
+One image, two roles. `domain/sg-dc-provision` (installed as
+`sg-dc-provision`) turns a machine into an Active Directory domain controller:
+Samba AD DC with its internal DNS, `samba-tool domain provision
+--use-rfc2307`, the realm's `krb5.conf`, the resolver pointed at itself
+(`/etc/systemd/resolved.conf.d/50-sg-dc.conf`, stub listener off so Samba has
+port 53), `samba-ad-dc` enabled. The image ships every Samba service disabled
+(a preset in sg-image) until a role asks. The gates use the test domain
+SGTEST.LAN only.
+
+- **Wipe a workstation's Samba databases before provisioning** (Samba's own
+  guide says so). Left in place, the caches of the winbind that ran before
+  confused the DC's winbindd.
+- **A negative idmap answer is cached for a week.** A lookup of a well-known
+  SID (Everyone, S-1-1-0) made while the DC was still starting cached "no
+  mapping", and every SMB session setup then failed with
+  `NT_STATUS_INVALID_SID`. The provisioner waits until `wbinfo --sid-to-gid
+  S-1-1-0` answers, flushing the cache (`net cache flush`) until it does.
+- **The Administrator password is on samba-tool's command line** for the
+  seconds provisioning takes; samba-tool has no other way to take it.
+
+## Domain member (D1)
+
+`domain/sg-domain-join` (installed as `sg-domain-join`) joins an Active
+Directory domain, as "Join a domain" does on Windows: DNS pointed at the DC
+(`--dc`), `krb5.conf`, a member `smb.conf` (`security = ADS`, rid idmap for
+the domain), `net ads join` with the password in `$PASSWD` (never argv),
+winbind on. Then sign-in: `pam_winbind` with `krb5_auth` (a ticket at sign-in,
+`FILE:/tmp/krb5cc_<uid>`, which Wine's Kerberos/Negotiate use -- single
+sign-on for Windows programs), `pam_mkhomedir`, and `sg-domain-groups`
+(pam_exec at session open, as root; pam-configs `stained-glass-domain-groups`,
+off until the join) putting a signing-in domain user in the Windows system's
+group, and Domain Admins in `sg-admins` and `sudo` -- Windows' "Domain Users
+are local Users, Domain Admins local Administrators".
+
+- **Not pam_group.** greetd sets the session's groups with `initgroups()`
+  after PAM's setcred, which drops pam_group's additions: the session could not
+  reach the prefix and ended at once, silently. The group file is what
+  initgroups() reads, so sg-domain-groups writes the membership there before
+  the session starts. It records what it granted
+  (`/var/lib/stained-glass/domain-groups`) and takes away only that, so a
+  demotion in the directory applies at the next sign-in.
+- **`winbind use default domain = yes`**: domain users are `alice`, not
+  `SGTEST\alice`. A backslash in a Unix user name would become a path
+  separator in Wine (`C:\users\SGTEST\alice`).
+- **The shell's command line reads as bare `explorer.exe /desktop`** on the
+  image (see the note under "Things that will bite you"): gates match
+  `explorer.exe`, never `/desktop=shell`.
+- **Gate:** sg-image's `make domain-test`: two copies of the image on a private
+  segment, one provisioned as the DC, the other joined, a domain user signed in
+  at the console by typing, SSPI Kerberos from a Windows program
+  (`test/sg-sspi-probe.c`), a Domain Admin who is an administrator and a Domain
+  User who is not.
+
+## Remote Desktop (RDP in)
 
 `sg-rdp-authd` is pattern B of ADR 0010: the technician types the username and
 password into the RDP client before connecting and lands in an unlocked desktop,
-as with `mstsc`. It authenticates; streaming the session needs `sg-compositor`,
-so it is **built and gated but not installed** — a login service that leads
-nowhere should not run on machines. `make test-rdp` is the gate.
+as with `mstsc`. `sg-rdpd.service` runs it; it is installed **disabled**, as
+Remote Desktop is on Windows (`systemctl enable --now sg-rdpd`). The TLS
+certificate is made on first start (`sg-rdp-cert`, `/etc/stained-glass/rdp/`,
+key 0600 root) and never overwritten, so an administrator may install their own.
 
-**Privilege separation, as in sshd.** At startup, as root, it forks a *monitor*
-that keeps root and does exactly one thing: run `sg-rdp-pamcheck` for a
-credential handed to it over a socketpair. The RDP side then drops to an
-unprivileged account (all four UIDs, no supplementary groups — verified) before
-the listener opens. The TLS key is read into memory before the drop and
-`mlock`ed, so the key file can be root-only (0600). A failed guess costs 2s,
-enforced in the monitor, where reconnecting cannot skip it.
+**After PAM says yes, the root monitor finds that user's session** and hands the
+RDP side a connection to its compositor's privileged socket (SCM_RIGHTS): the
+worker gains exactly that user's session, and only after that user's password
+was accepted. A user with no session gets one: `systemd-run` with
+`PAMName=stained-glass-remote` (logind session, profile service) runs
+`sg-session-start` with `SG_REMOTE=1` -- sg-compositor on the headless backend
+at the client's size (`SG_OUTPUT_SIZE`) -- in a seat of its own,
+`/run/stained-glass-seat/rdp-<uid>`, with its own `sg-lockd` bound to it, so
+Win+L works remotely and sg-brokerd finds it for consent prompts. Disconnecting
+leaves the session running; the next login reconnects to it, as on Windows. A
+user **signed in at the console** is refused for now: Windows moves that
+session to RDP and locks the console, which needs the compositor to move a
+session between outputs (E1b).
+
+`rdp/sg-rdp-stream.c` is the stream: screencopy frames (pointer drawn in,
+`copy_with_damage` paces it), 64x64 tiles compared with the last frame sent,
+changed ones as **uncompressed 32bpp bitmap updates** (bottom-up BGRA, every
+client since RDP 4 decodes them; bulk compression still applies). Input: RDP
+scancodes -> winpr virtual keys -> evdev, on a virtual keyboard carrying the
+ordinary evdev/us keymap; absolute pointer, buttons, wheel. Everything runs on
+the peer's thread, which polls the Wayland fd beside FreeRDP's handles.
+
+- **Not planar.** FreeRDP 3.15's planar encoder does not round-trip: with RLE
+  any detail comes back streaked (its own round-trip test is disabled upstream
+  as unfinished), and raw planes arrive at the client with red and blue
+  swapped. Found by the gate's lossless check. An encoder of our own for the
+  open RDP 6.0 bitmap compression spec is the way to get bandwidth back.
+- **`make test-rdp-stream`** is the gate: a real FreeRDP client on Xvfb into a
+  headless session running a Windows program. A wrong password starts nothing;
+  the session is the client's size; the client's screen equals the session's
+  captured frame **pixel for pixel** (`SG_RDP_FRAME_DUMP`); typing and clicks
+  reach the program; disconnect keeps the session, reconnect finds the same
+  one; the session ending disconnects the client. `SG_RDP_SESSION_CMD` and
+  `SG_RDP_SEAT_ROOT` exist for this gate only.
+- **Privilege separation, as in sshd.** At startup, as root, it forks a
+  *monitor* that keeps root and does two things: check a credential with
+  `sg-rdp-pamcheck`, and for an accepted one, find or start that user's
+  session. The RDP side then drops to `sgrdp` (all four UIDs, no supplementary
+  groups -- verified) before the listener opens. The TLS key is read into
+  memory before the drop and `mlock`ed. A failed guess costs 2s, enforced in
+  the monitor, where reconnecting cannot skip it. One worker process serves
+  every connection; one per connection would contain a compromised parser to
+  the sessions it was given.
 
 **TLS plus PAM, not NLA, for local accounts.** Server-side NLA has to verify the
-client's NTLM exchange, which needs every user's NT hash — the MD4 hashes
+client's NTLM exchange, which needs every user's NT hash -- the MD4 hashes
 Windows keeps in the SAM and pass-the-hash attacks go after. We store none;
 PAM checks the password against the normal store. Domain accounts get NLA via
 Kerberos in Phase 2, which needs only the machine keytab. Until then a

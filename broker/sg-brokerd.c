@@ -192,10 +192,24 @@ static int find_surface(uid_t uid, struct surface *sf)
     if (c && pv) {
         snprintf(sf->control, sizeof(sf->control), "%s", c);
         snprintf(sf->priv, sizeof(sf->priv), "%s", pv);
-    } else if ((size_t)snprintf(sf->control, sizeof(sf->control), "%s/%u/control.sock", g_seat_dir, (unsigned)uid) >= sizeof(sf->control) ||
-               (size_t)snprintf(sf->priv, sizeof(sf->priv), "%s/%u/priv.sock", g_seat_dir, (unsigned)uid) >= sizeof(sf->priv))
-        return 0;
-    if ((fd = surface_connect(sf)) < 0) { logmsg("consent: no compositor at %s", sf->control); return 0; }
+        fd = surface_connect(sf);
+    } else {
+        /* The console seat, then the user's Remote Desktop seat
+         * (<seat root>/rdp-<uid>, made by sg-rdp-authd's monitor). */
+        char root[200], seats[2][260];
+        const char *slash = strrchr(g_seat_dir, '/');
+        int i;
+        snprintf(root, sizeof(root), "%.*s", slash ? (int)(slash - g_seat_dir) : 1, slash ? g_seat_dir : ".");
+        snprintf(seats[0], sizeof(seats[0]), "%s", g_seat_dir);
+        snprintf(seats[1], sizeof(seats[1]), "%s/rdp-%u", root, (unsigned)uid);
+        for (fd = -1, i = 0; i < 2 && fd < 0; i++) {
+            if ((size_t)snprintf(sf->control, sizeof(sf->control), "%s/%u/control.sock", seats[i], (unsigned)uid) >= sizeof(sf->control) ||
+                (size_t)snprintf(sf->priv, sizeof(sf->priv), "%s/%u/priv.sock", seats[i], (unsigned)uid) >= sizeof(sf->priv))
+                return 0;
+            fd = surface_connect(sf);
+        }
+    }
+    if (fd < 0) { logmsg("consent: no compositor for uid %u", (unsigned)uid); return 0; }
     ok = !getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) && cred.uid == uid;
     {
         /* a well-behaved client: ask something, read the answer, then hang up */

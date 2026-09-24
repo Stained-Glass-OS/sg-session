@@ -1,0 +1,18 @@
+#!/bin/sh
+# Remote Desktop's TLS certificate: made on first start, as Windows does, and
+# kept. The key is root's alone (0600); sg-rdp-authd reads it before it drops
+# privileges. An administrator may replace both files with a certificate from
+# their own CA; this never overwrites an existing pair.
+set -eu
+DIR="${SG_RDP_CERT_DIR:-/etc/stained-glass/rdp}"
+[ -s "$DIR/cert.pem" ] && [ -s "$DIR/key.pem" ] && exit 0
+umask 077
+mkdir -p "$DIR"
+openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
+    -keyout "$DIR/key.pem.new" -out "$DIR/cert.pem.new" \
+    -subj "/CN=$(hostname)" -addext "extendedKeyUsage=serverAuth" >/dev/null 2>&1
+chmod 600 "$DIR/key.pem.new"
+chmod 644 "$DIR/cert.pem.new"
+mv "$DIR/key.pem.new" "$DIR/key.pem"
+mv "$DIR/cert.pem.new" "$DIR/cert.pem"
+printf 'sg-rdp-cert: made a certificate for %s\n' "$(hostname)"

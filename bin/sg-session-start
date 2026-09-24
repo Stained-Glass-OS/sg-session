@@ -28,6 +28,21 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
     chmod 700 "$XDG_RUNTIME_DIR"
 fi
 
+# A remote session (started by sg-rdp-authd, ADR 0010) has no screen of its
+# own: the compositor runs headless, at the RDP client's size, and the RDP
+# daemon streams it through the compositor's privileged socket. Its seat
+# directory (SG_SEAT_DIR) is its own, so it has its own lock screen.
+if [ "${SG_REMOTE:-0}" = 1 ]; then
+    WLR_BACKENDS=headless
+    WLR_LIBINPUT_NO_DEVICES=1
+    WLR_RENDERER=pixman
+    export WLR_BACKENDS WLR_LIBINPUT_NO_DEVICES WLR_RENDERER SG_SEAT_DIR
+    case "${SG_OUTPUT_SIZE:-}" in
+        [0-9]*x[0-9]*) GEOM="$SG_OUTPUT_SIZE"; export SG_OUTPUT_SIZE ;;
+    esac
+    sg_log "remote session: headless at $GEOM, seat $SG_SEAT_DIR"
+fi
+
 # The per-user process agent (ADR 0014, debt D16/D19): the machine-level
 # wineserver runs as SYSTEM and cannot ptrace/signal this user's processes, so
 # it delegates those to this agent, which runs as the user. Started before the

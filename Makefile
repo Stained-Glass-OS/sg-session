@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
-BINS         = bin/sg-install bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+BINS         = bin/sg-install domain/sg-dc-provision domain/sg-domain-join bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
@@ -31,7 +31,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter token-probe procagent
+install: d3d-probe greeter token-probe procagent rdp
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
@@ -54,6 +54,12 @@ install: d3d-probe greeter token-probe procagent
 	@if [ -f build/sg-lockd ]; then \
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	@# Remote Desktop (ADR 0010): the daemon and its certificate helper. The
+	@# unit is installed disabled, as Remote Desktop is on Windows.
+	@if [ -f build/sg-rdp-authd ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/sg-rdp-authd bin/sg-rdp-cert $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# Setup (live boots only): the wizard, its bridge, and the root service
 	@# that runs sg-install, behind a socket only the login screen may use.
@@ -87,6 +93,10 @@ install: d3d-probe greeter token-probe procagent
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-policy-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The single-sign-on probe for the domain gate (sg-image make domain-test).
+	@if [ -f build/sg-sspi-probe.exe ]; then \
+	    install -m 0755 build/sg-sspi-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
 	@# Machine policy drop-in directory (Group Policy). Ships the README and a
 	@# disabled example; an administrator adds .reg files here.
 	install -d $(DESTDIR)/etc/stained-glass/policy.d
@@ -100,6 +110,9 @@ install: d3d-probe greeter token-probe procagent
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
 	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
+	@# Off until sg-domain-join turns it on: a domain user's local groups.
+	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
+	install -m 0755 domain/sg-domain-groups $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-greeter64.exe ]; then \
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe build/sg-consent64.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -113,19 +126,22 @@ install: d3d-probe greeter token-probe procagent
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
-	    systemd/sg-installd@.service $(UNITDIR)
+	    systemd/sg-installd@.service systemd/sg-rdpd.service $(UNITDIR)
+	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
+	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create setup/sg-installd; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create setup/sg-installd test/setup-e2e.sh || exit 1; \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups test/setup-e2e.sh \
+		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
 		echo "shellcheck not installed; skipping (advisory)"; \
@@ -189,6 +205,7 @@ token-probe:
 	    $(MINGW64) -O2 -o build/sg-token-probe-admin.exe test/sg-token-probe.c \
 	        build/sg-token-probe-admin.res -ladvapi32 && \
 	    $(MINGW64) -O2 -o build/sg-policy-probe.exe test/sg-policy-probe.c -lshell32 && \
+	    $(MINGW64) -O2 -municode -o build/sg-sspi-probe.exe test/sg-sspi-probe.c -lsecur32 && \
 	    echo "built: build/sg-token-probe.exe build/sg-token-probe-admin.exe build/sg-policy-probe.exe"; \
 	fi
 
@@ -266,21 +283,34 @@ test-security: security
 
 # --- remote login over RDP (ADR 0010, pattern B) ---------------------------
 #
-# Built when FreeRDP's server library is present, and not installed yet: the
-# daemon authenticates but cannot stream a session until sg-compositor exists,
-# and a login service that leads nowhere should not be running on machines.
-.PHONY: rdp test-rdp
+# Built when FreeRDP's server library is present. Installed with its unit
+# disabled: Remote Desktop is off until an administrator turns it on.
+.PHONY: rdp test-rdp test-rdp-stream
 rdp:
 	@pkg-config --exists freerdp-server3 winpr3 || { echo "SKIP: freerdp3-dev not installed"; exit 0; }
 	@mkdir -p build
-	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-authd greeter/sg-rdp-authd.c \
-	    $$(pkg-config --cflags --libs freerdp-server3 freerdp3 winpr3)
+	@pkg-config --exists wayland-client xkbcommon || { echo "SKIP: wayland-client/xkbcommon dev files missing"; exit 0; }
+	for p in wlr-screencopy-unstable-v1 wlr-virtual-pointer-unstable-v1; do \
+	    wayland-scanner client-header rdp/protocol/$$p.xml build/$$p-client-protocol.h && \
+	    wayland-scanner private-code rdp/protocol/$$p.xml build/$$p-protocol.c || exit 1; \
+	done
+	wayland-scanner client-header test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-client-protocol.h
+	wayland-scanner private-code test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-protocol.c
+	$(CC) $(CFLAGS_BRIDGE) -Ibuild -Irdp -o build/sg-rdp-authd greeter/sg-rdp-authd.c rdp/sg-rdp-stream.c \
+	    build/wlr-screencopy-unstable-v1-protocol.c build/wlr-virtual-pointer-unstable-v1-protocol.c \
+	    build/virtual-keyboard-unstable-v1-protocol.c \
+	    $$(pkg-config --cflags --libs freerdp-server3 freerdp3 winpr3 wayland-client xkbcommon)
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
 	@echo "built the RDP login daemon and its PAM helper"
 
 test-rdp: rdp
 	@SG_LIBEXEC=$(CURDIR)/build $(CURDIR)/bin/sg-rdp-check; \
 	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# Streaming: a real FreeRDP client into a headless sg-compositor session (the
+# compositor checkout beside this repo), lossless, typed into and clicked.
+test-rdp-stream: rdp
+	@sh test/rdp-stream-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # The lock screen end to end: sg-compositor (beside this repo) + sg-lockd + the
 # Wine greeter in lock mode. Needs the session prefix from `make test`.

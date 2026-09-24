@@ -1,0 +1,139 @@
+#!/bin/sh
+# Make this machine an Active Directory domain controller (D2): the "DC" role
+# of the one Stained Glass image. Samba AD DC with its internal DNS.
+#
+#   sg-dc-provision --realm SGTEST.LAN [--domain SGTEST] [--hostname dc1]
+#                   [--address IP] [--forwarder IP] --admin-password-stdin
+#
+# The Administrator password is read from stdin (one line). Run once, on a
+# machine nothing else depends on yet: it renames the machine, points its
+# resolver at itself, and starts the directory. It refuses to run twice.
+#
+# Test domains only in this project's gates (SGTEST.LAN); nothing here is
+# specific to them.
+set -eu
+
+die() { printf 'sg-dc-provision: %s\n' "$*" >&2; exit 1; }
+log() { printf 'sg-dc-provision: %s\n' "$*"; }
+
+REALM="" DOMAIN="" HOST="dc1" FORWARDER="" ADDR="" PASS_STDIN=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --realm) REALM=${2:?}; shift ;;
+        --domain) DOMAIN=${2:?}; shift ;;
+        --hostname) HOST=${2:?}; shift ;;
+        --forwarder) FORWARDER=${2:?}; shift ;;
+        --address) ADDR=${2:?}; shift ;;
+        --admin-password-stdin) PASS_STDIN=1 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+[ "$(id -u)" = 0 ] || die "must run as root"
+[ -n "$REALM" ] || die "--realm is required"
+[ "$PASS_STDIN" = 1 ] || die "--admin-password-stdin is required"
+command -v samba-tool >/dev/null || die "samba-tool is missing (package samba-ad-dc)"
+
+# Names: a DNS realm, a NetBIOS domain of at most 15 characters, a host name.
+REALM=$(printf '%s' "$REALM" | tr '[:lower:]' '[:upper:]')
+printf '%s' "$REALM" | grep -Eq '^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?(\.[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?)+$' \
+    || die "'$REALM' is not a DNS domain name (for example SGTEST.LAN)"
+[ -n "$DOMAIN" ] || DOMAIN=${REALM%%.*}
+DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:lower:]' '[:upper:]')
+printf '%s' "$DOMAIN" | grep -Eq '^[A-Z0-9][A-Z0-9-]{0,14}$' || die "'$DOMAIN' is not a NetBIOS domain name"
+printf '%s' "$HOST" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,13}[a-z0-9])?$' || die "'$HOST' is not a host name (15 characters at most)"
+DNSDOMAIN=$(printf '%s' "$REALM" | tr '[:upper:]' '[:lower:]')
+
+[ ! -e /var/lib/samba/private/sam.ldb ] || die "this machine is already a domain controller"
+
+IFS= read -r PASSWORD || true
+[ -n "$PASSWORD" ] || die "empty password"
+# AD's default policy: 7+ characters from three of upper, lower, digit, other.
+classes=0
+for c in '[A-Z]' '[a-z]' '[0-9]' '[^A-Za-z0-9]'; do
+    printf '%s' "$PASSWORD" | grep -q "$c" && classes=$((classes + 1))
+done
+if [ "${#PASSWORD}" -lt 7 ] || [ "$classes" -lt 3 ]; then
+    die "the Administrator password must be 7+ characters from three of: upper, lower, digit, symbol"
+fi
+
+# The address other machines will reach us on: given, or the source of the
+# default route. It must be one of ours.
+[ -n "$ADDR" ] || ADDR=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+[ -n "$ADDR" ] || die "no IPv4 address with a default route; give --address"
+ip -4 -o addr show | grep -q "inet $ADDR/" || die "$ADDR is not an address of this machine"
+if [ -z "$FORWARDER" ]; then
+    FORWARDER=$(resolvectl dns 2>/dev/null | awk '$1 == "Link" && NF >= 4 {print $4; exit}')
+fi
+
+log "realm $REALM, domain $DOMAIN, host $HOST.$DNSDOMAIN at $ADDR${FORWARDER:+, forwarding to $FORWARDER}"
+
+# A workstation's Samba pieces must not run beside the directory's own.
+systemctl disable --now smbd nmbd winbind >/dev/null 2>&1 || true
+systemctl unmask samba-ad-dc >/dev/null 2>&1 || true
+
+hostnamectl set-hostname "$HOST"
+sed -i "/[[:space:]]${HOST}\$/d; /[[:space:]]${HOST}\.${DNSDOMAIN}[[:space:]]/d" /etc/hosts
+printf '%s %s.%s %s\n' "$ADDR" "$HOST" "$DNSDOMAIN" "$HOST" >> /etc/hosts
+
+[ -f /etc/samba/smb.conf ] && mv /etc/samba/smb.conf "/etc/samba/smb.conf.before-dc.$(date +%s)"
+# Databases a workstation's winbind left behind (caches under the machine's
+# old name, among them) must go before provisioning, as Samba's own guide says:
+# kept, the DC's winbindd could not map well-known SIDs such as Everyone, and
+# every SMB session setup failed with NT_STATUS_INVALID_SID.
+rm -f /var/lib/samba/*.tdb /var/lib/samba/*.ldb /var/cache/samba/*.tdb \
+      /var/lib/samba/private/*.tdb /var/lib/samba/private/*.ldb
+# The password is on samba-tool's command line for the seconds provisioning
+# takes: samba-tool has no other way to take it. It runs before anyone but
+# root can be signed in to a machine being made a DC.
+samba-tool domain provision --use-rfc2307 --server-role=dc --dns-backend=SAMBA_INTERNAL \
+    --realm="$REALM" --domain="$DOMAIN" --host-name="$HOST" --host-ip="$ADDR" \
+    --adminpass="$PASSWORD" \
+    ${FORWARDER:+--option="dns forwarder = $FORWARDER"} \
+    --option="template shell = /bin/bash" --option="template homedir = /home/%U" \
+    --option="interfaces = lo $ADDR" --option="bind interfaces only = yes" \
+    >/var/log/sg-dc-provision.log 2>&1 \
+    || { tail -20 /var/log/sg-dc-provision.log >&2; die "samba-tool domain provision failed"; }
+PASSWORD=""
+cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
+
+# The DC answers its own DNS: the resolver asks it, and the stub listener gets
+# out of port 53's way.
+mkdir -p /etc/systemd/resolved.conf.d
+cat > /etc/systemd/resolved.conf.d/50-sg-dc.conf <<EOF
+# Written by sg-dc-provision: this machine is the DNS server for $DNSDOMAIN.
+[Resolve]
+DNS=127.0.0.1
+Domains=$DNSDOMAIN
+DNSStubListener=no
+EOF
+systemctl restart systemd-resolved
+ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
+
+# Serve on the chosen address only, and only once the network is up: at boot
+# Samba enumerates every interface, and an address still being configured (a
+# tentative IPv6 one) made it fail to bind and exit -- the DC did not survive
+# its first reboot.
+mkdir -p /etc/systemd/system/samba-ad-dc.service.d
+printf '# Written by sg-dc-provision.\n[Unit]\nWants=network-online.target\nAfter=network-online.target\n' \
+    > /etc/systemd/system/samba-ad-dc.service.d/50-sg-network.conf
+systemctl daemon-reload
+systemctl enable --now samba-ad-dc >/dev/null
+# Up when its DNS answers for the domain.
+i=0
+until host -t SRV "_ldap._tcp.$DNSDOMAIN" 127.0.0.1 >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 60 ] || die "the directory did not come up (see journalctl -u samba-ad-dc)"
+    sleep 1
+done
+# And when its winbindd maps well-known SIDs. A lookup made while the service
+# was still starting caches a negative answer for a week, and then every SMB
+# session setup fails with NT_STATUS_INVALID_SID: flush until it answers.
+i=0
+until wbinfo --sid-to-gid S-1-1-0 >/dev/null 2>&1; do
+    net cache flush >/dev/null 2>&1 || true
+    i=$((i + 1)); [ "$i" -lt 60 ] || die "the directory's identity mapping did not come up"
+    sleep 1
+done
+mkdir -p /etc/stained-glass
+printf 'role=dc\nrealm=%s\ndomain=%s\n' "$REALM" "$DOMAIN" > /etc/stained-glass/role
+log "done: $HOST.$DNSDOMAIN is the domain controller for $REALM"

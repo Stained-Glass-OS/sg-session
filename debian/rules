@@ -19,6 +19,8 @@ override_dh_installsystemd:
 	# Setup's installer: the socket is enabled everywhere and exists only on
 	# a live boot (ConditionKernelCommandLine); the service is per connection.
 	dh_installsystemd sg-installd.socket
+	# Remote Desktop is off by default, as on Windows.
+	dh_installsystemd --no-enable --no-start sg-rdpd.service
 	# The timer is enabled and started. The service it runs is installed but
 	# never started by the package: a postinst that started it would run an
 	# update check -- network, downloads -- inside dpkg on a live system.

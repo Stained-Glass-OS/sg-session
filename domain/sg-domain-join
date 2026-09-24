@@ -1,0 +1,156 @@
+#!/bin/sh
+# Join this machine to an Active Directory domain (D1): the workstation role
+# of a domain member, as "Join a domain" does on Windows.
+#
+#   sg-domain-join --domain SGTEST.LAN [--dc ADDRESS] [--workgroup SGTEST]
+#                  --user administrator --password-stdin
+#
+# The joining account's password is read from stdin (one line). Afterwards:
+#
+#   - domain users sign in by name (alice, as on a Windows member), with the
+#     domain's password; their Linux home is made at first sign-in;
+#   - they get a Kerberos ticket at sign-in, which Windows programs use through
+#     Wine's Kerberos/Negotiate (single sign-on to the domain's services);
+#   - Domain Users are this machine's Users (the Windows system's group) and
+#     Domain Admins its Administrators -- as a join does on Windows.
+#
+# Test domains only in this project's gates (SGTEST.LAN); nothing here is
+# specific to them.
+set -eu
+
+die() { printf 'sg-domain-join: %s\n' "$*" >&2; exit 1; }
+log() { printf 'sg-domain-join: %s\n' "$*"; }
+
+REALM="" DC="" WORKGROUP="" JOIN_USER="" PASS_STDIN=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --domain) REALM=${2:?}; shift ;;
+        --dc) DC=${2:?}; shift ;;
+        --workgroup) WORKGROUP=${2:?}; shift ;;
+        --user) JOIN_USER=${2:?}; shift ;;
+        --password-stdin) PASS_STDIN=1 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+[ "$(id -u)" = 0 ] || die "must run as root"
+[ -n "$REALM" ] || die "--domain is required"
+[ -n "$JOIN_USER" ] || die "--user is required"
+[ "$PASS_STDIN" = 1 ] || die "--password-stdin is required"
+if ! command -v net >/dev/null || ! command -v winbindd >/dev/null; then die "Samba's winbind is missing"; fi
+
+REALM=$(printf '%s' "$REALM" | tr '[:lower:]' '[:upper:]')
+printf '%s' "$REALM" | grep -Eq '^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?(\.[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?)+$' \
+    || die "'$REALM' is not a DNS domain name"
+DNSDOMAIN=$(printf '%s' "$REALM" | tr '[:upper:]' '[:lower:]')
+[ -n "$WORKGROUP" ] || WORKGROUP=${REALM%%.*}
+WORKGROUP=$(printf '%s' "$WORKGROUP" | tr '[:lower:]' '[:upper:]')
+printf '%s' "$WORKGROUP" | grep -Eq '^[A-Z0-9][A-Z0-9-]{0,14}$' || die "'$WORKGROUP' is not a NetBIOS domain name"
+printf '%s' "$JOIN_USER" | grep -Eq '^[A-Za-z0-9._-]{1,64}$' || die "'$JOIN_USER' is not an account name"
+if [ -n "$DC" ]; then
+    printf '%s' "$DC" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || die "--dc must be an IPv4 address"
+fi
+if [ -f /etc/stained-glass/role ] && grep -q '^role=' /etc/stained-glass/role; then
+    die "this machine already has a role: $(sed -n 's/^role=//p' /etc/stained-glass/role)"
+fi
+
+IFS= read -r PASSWORD || true
+[ -n "$PASSWORD" ] || die "empty password"
+
+NETBIOS=$(hostname -s | cut -c1-15 | tr '[:lower:]' '[:upper:]')
+log "joining $REALM ($WORKGROUP) as $NETBIOS${DC:+, through $DC}"
+
+# --- name resolution: the domain's DNS answers for the domain --------------
+if [ -n "$DC" ]; then
+    mkdir -p /etc/systemd/resolved.conf.d
+    cat > /etc/systemd/resolved.conf.d/50-sg-domain.conf <<EOF
+# Written by sg-domain-join: $DNSDOMAIN is resolved by its domain controller.
+[Resolve]
+DNS=$DC
+Domains=$DNSDOMAIN
+EOF
+    systemctl restart systemd-resolved
+fi
+i=0
+until host -t SRV "_ldap._tcp.$DNSDOMAIN" >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 20 ] || die "cannot find $REALM's domain controllers in DNS (_ldap._tcp.$DNSDOMAIN); give --dc"
+    sleep 1
+done
+
+# --- Kerberos and Samba -------------------------------------------------------
+cat > /etc/krb5.conf <<EOF
+# Written by sg-domain-join.
+[libdefaults]
+    default_realm = $REALM
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+    rdns = false
+EOF
+[ -f /etc/samba/smb.conf ] && mv /etc/samba/smb.conf "/etc/samba/smb.conf.before-join.$(date +%s)"
+cat > /etc/samba/smb.conf <<EOF
+# Written by sg-domain-join: a member of $REALM.
+[global]
+    security = ADS
+    realm = $REALM
+    workgroup = $WORKGROUP
+    netbios name = $NETBIOS
+    kerberos method = secrets and keytab
+    dedicated keytab file = /etc/krb5.keytab
+    # Domain users by their plain names, as a Windows member shows them: a
+    # backslash in a Unix user name would become a path separator in Wine.
+    winbind use default domain = yes
+    winbind refresh tickets = yes
+    winbind offline logon = yes
+    template shell = /bin/bash
+    template homedir = /home/%D/%U
+    idmap config * : backend = tdb
+    idmap config * : range = 3000-7999
+    idmap config $WORKGROUP : backend = rid
+    idmap config $WORKGROUP : range = 100000-999999
+    # No shares: file sharing stays off, as it is on a Windows workstation.
+    load printers = no
+    printing = bsd
+    printcap name = /dev/null
+EOF
+
+# A cache from before the join (the machine's old name, and negative answers)
+# must not outlive it -- the domain controller role taught that.
+systemctl stop winbind >/dev/null 2>&1 || true
+rm -f /var/lib/samba/*.tdb /var/cache/samba/*.tdb /var/lib/samba/private/secrets.tdb
+
+# net reads the password from $PASSWD, not the command line.
+if ! PASSWD="$PASSWORD" net ads join -U "$JOIN_USER" >/var/log/sg-domain-join.log 2>&1; then
+    PASSWORD=""
+    tail -5 /var/log/sg-domain-join.log >&2
+    die "the domain refused the join"
+fi
+PASSWORD=""
+systemctl enable winbind >/dev/null 2>&1
+systemctl restart winbind
+i=0
+until wbinfo -t >/dev/null 2>&1; do
+    net cache flush >/dev/null 2>&1 || true
+    i=$((i + 1)); [ "$i" -lt 60 ] || die "winbind cannot use the machine account (wbinfo -t)"
+    sleep 1
+done
+
+# --- sign-in -------------------------------------------------------------------
+for db in passwd group; do
+    grep -Eq "^$db:.*winbind" /etc/nsswitch.conf || sed -i "s/^\($db:.*\)\$/\1 winbind/" /etc/nsswitch.conf
+done
+cat > /etc/security/pam_winbind.conf <<EOF
+# Written by sg-domain-join.
+[global]
+# A Kerberos ticket at sign-in, in a file Wine's Kerberos finds (KRB5CCNAME).
+krb5_auth = yes
+krb5_ccache_type = FILE
+cached_login = yes
+EOF
+# Windows puts a member's Domain Users in the local Users group and Domain
+# Admins in Administrators: here the Windows system's group and sg-admins,
+# given at each sign-in by sg-domain-groups (pam_exec, as root).
+DEBIAN_FRONTEND=noninteractive pam-auth-update --enable winbind mkhomedir stained-glass-domain-groups >/dev/null
+
+mkdir -p /etc/stained-glass
+printf 'role=member\nrealm=%s\ndomain=%s\n' "$REALM" "$WORKGROUP" > /etc/stained-glass/role
+log "done: $NETBIOS is a member of $REALM"

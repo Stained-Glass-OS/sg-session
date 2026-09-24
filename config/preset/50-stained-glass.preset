@@ -1,0 +1,4 @@
+# Remote Desktop is off until an administrator turns it on, as on Windows:
+# `systemctl enable --now sg-rdpd`. A preset, because an image build applies
+# presets after the package's own scripts, and Debian's default enables all.
+disable sg-rdpd.service
