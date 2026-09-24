@@ -515,6 +515,17 @@ item-level targeting by security group only, and items with other filters
 are skipped), `scripts.ini` [Logon] (appended to the logon scripts) and user
 `Registry.pol` (to HKCU through sg-polimport).
 
+**Machine Group Policy**: `domain/sg-gpo-machine` (root) asks Samba which
+GPOs apply to the computer account. It fetches each one's
+`Machine\Registry.pol` from SYSVOL with the machine account (`smbclient -P`)
+into the machine policy directory as `60-domain-NN-{GUID}.pol`, in
+application order, and removes the file of a GPO that no longer applies.
+`sg_apply_policy` imports the files as SYSTEM, at boot (sg-services-start)
+and from `sg-gpupdate` (gpupdate, root), which `sg-gpupdate.timer` runs every
+90 minutes. Not yet: removing the *values* a GPO that stopped applying had
+set (Windows rewrites the policy keys on each refresh), and machine startup
+scripts.
+
 **The Start menu and the logon scripts wait for the shell's desktop window.**
 A Wine GUI program started before the shell makes Wine create the desktop
 itself (a bare `explorer /desktop`). The shell's explorer then found it taken

@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
-BINS         = bin/sg-install domain/sg-dc-provision domain/sg-domain-join bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+BINS         = bin/sg-install domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
@@ -112,7 +112,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
-	install -m 0755 domain/sg-domain-groups domain/sg-domain-logon domain/sg-gpo-user $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 domain/sg-domain-groups domain/sg-domain-logon domain/sg-gpo-user domain/sg-gpo-machine $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-greeter64.exe ]; then \
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe build/sg-consent64.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -127,7 +127,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
-	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service $(UNITDIR)
+	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
+	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)

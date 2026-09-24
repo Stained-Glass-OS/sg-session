@@ -1,0 +1,10 @@
+# Machine Group Policy from the domain (sg-gpupdate): fetched and applied.
+[Unit]
+Description=Stained Glass machine Group Policy refresh
+After=network-online.target winbind.service sg-wineserver.service
+Wants=network-online.target
+ConditionPathExists=/etc/stained-glass/role
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-gpupdate

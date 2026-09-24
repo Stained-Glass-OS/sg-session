@@ -1,0 +1,111 @@
+#!/usr/bin/python3
+# A domain member's machine Group Policy (D1): the computer's registry policy
+# from the domain.
+#
+#   sg-gpo-machine
+#
+# Run as root by sg-gpupdate (at boot and every 90 minutes, as Windows
+# refreshes Group Policy). The GPOs that apply to this computer -- its OU
+# chain, link order, enforced links, security filtering on the computer
+# account's token -- are Samba's (samba.gp.gpclass.get_gpo_list with the
+# machine account). Each one's Machine\Registry.pol is fetched from SYSVOL
+# with the machine account (smbclient -P) and put in the machine policy
+# directory as 60-domain-NN-{GUID}.pol, in the order the GPOs apply; the
+# machine's policy machinery (sg-session's sg_apply_policy, as SYSTEM)
+# imports it into HKLM. A GPO that stops applying loses its file.
+#
+# Best effort: a failure leaves the policy the machine had.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import glob
+import os
+import subprocess
+import sys
+import syslog
+import tempfile
+
+POLICY_DIR = os.environ.get("SG_POLICY_DIR", "/etc/stained-glass/policy.d")
+PREFIX = "60-domain-"
+
+
+def log(msg):
+    syslog.syslog(syslog.LOG_INFO, msg)
+
+
+def fetch(dc, path, dest):
+    """Fetch path (relative to SYSVOL) with the machine account."""
+    cmd = 'get "%s" "%s"' % (path.replace("/", "\\"), dest)
+    r = subprocess.run(["smbclient", "//%s/sysvol" % dc, "-P", "-c", cmd],
+                       capture_output=True, text=True, timeout=60)
+    return r.returncode == 0 and os.path.isfile(dest) and os.path.getsize(dest) > 0
+
+
+def main():
+    syslog.openlog("sg-gpo-machine")
+    role = open("/etc/stained-glass/role").read() if os.path.exists("/etc/stained-glass/role") else ""
+    if "role=member" not in role.split():
+        return 0
+
+    from samba.param import LoadParm
+    from samba.credentials import Credentials
+    from samba.gp.gpclass import get_dc_hostname, get_gpo_list
+
+    lp = LoadParm()
+    lp.load_default()
+    creds = Credentials()
+    creds.guess(lp)
+    creds.set_machine_account(lp)
+    dc = get_dc_hostname(creds, lp)
+    machine = (lp.get("netbios name") or "").upper() + "$"
+    gpos = get_gpo_list(dc, creds, lp, machine)
+    log("%s: %d GPOs apply: %s" % (machine, len(gpos), ", ".join(g.display_name or g.name for g in gpos)))
+
+    os.makedirs(POLICY_DIR, exist_ok=True)
+    keep = set()
+    tmp = tempfile.mkdtemp()
+    try:
+        for n, gpo in enumerate(gpos):
+            if not gpo.file_sys_path:
+                continue
+            parts = [p for p in gpo.file_sys_path.split("\\") if p]
+            low = [p.lower() for p in parts]
+            if "sysvol" not in low or ".." in parts:
+                continue
+            rel = "/".join(parts[low.index("sysvol") + 1:] + ["Machine", "Registry.pol"])
+            local = os.path.join(tmp, "%02d.pol" % n)
+            if not fetch(dc, rel, local):
+                continue
+            name = "%s%02d-%s.pol" % (PREFIX, n, gpo.name)
+            target = os.path.join(POLICY_DIR, name)
+            with open(local, "rb") as f:
+                data = f.read()
+            with open(target + ".new", "wb") as f:
+                f.write(data)
+            os.chmod(target + ".new", 0o644)
+            os.replace(target + ".new", target)
+            keep.add(name)
+            log("machine policy from %s (%s)" % (gpo.display_name or gpo.name, name))
+    finally:
+        for f in glob.glob(os.path.join(tmp, "*")):
+            os.unlink(f)
+        os.rmdir(tmp)
+
+    # a GPO that no longer applies: its policy goes
+    for path in glob.glob(os.path.join(POLICY_DIR, PREFIX + "*.pol")):
+        if os.path.basename(path) not in keep:
+            os.unlink(path)
+            log("removed %s" % os.path.basename(path))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as e:
+        import traceback
+        syslog.openlog("sg-gpo-machine")
+        log("machine Group Policy not refreshed: %s" % e)
+        for line in traceback.format_exc().splitlines():
+            log(line)
+        sys.exit(0)

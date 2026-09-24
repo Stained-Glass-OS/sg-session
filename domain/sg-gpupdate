@@ -1,0 +1,24 @@
+#!/bin/sh
+# Refresh machine Group Policy now, as Windows' gpupdate does (D1).
+#
+# Root. On a domain member, sg-gpo-machine fetches the computer's GPOs'
+# registry policy into the machine policy directory; then the machine policy
+# is applied to the running Windows system as SYSTEM, as it is at boot
+# (sg-services-start). sg-gpupdate.timer runs this every 90 minutes.
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+if [ "$(id -u)" != 0 ]; then
+    echo "sg-gpupdate: must be run as root" >&2
+    exit 1
+fi
+grep -qx 'role=member' /etc/stained-glass/role 2>/dev/null && /usr/libexec/stained-glass/sg-gpo-machine
+
+# Only against the machine's own Windows system: never start one for this.
+systemctl is-active --quiet sg-wineserver.service || exit 0
+# shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+    SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" \
+    sh -c '. "$SG_LIB/sg-common.sh"; sg_wine_env; sg_apply_policy'
