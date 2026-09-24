@@ -1,0 +1,86 @@
+#!/bin/sh
+# The privileged half of Setup: runs sg-install for the setup wizard.
+#
+# Socket-activated, one instance per connection (sg-installd.socket), as root.
+# The socket exists only on a live boot and only the login screen's account
+# (group sggreet) may connect: installing is for whoever is at the machine's
+# console with the installation media booted, as with Windows Setup. The
+# wizard decides nothing; this checks what it asks for and sg-install checks
+# it again.
+#
+# Protocol on stdin/stdout, one request per line:
+#
+#   <- HELLO
+#   -> LIST
+#   <- DISK <path>\t<bytes>\t<model>      one per disk, then
+#   <- END
+#   -> INSTALL <disk>\t<account>\t<hostname>\t<full name>
+#   -> PASSWORD <password>                starts the installation
+#   <- PROGRESS <percent> <text>          ...
+#   <- DONE | FAILED <text>
+#   -> REBOOT | POWEROFF
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_INSTALL="${SG_INSTALL:-/usr/bin/sg-install}"
+LOCK="${SG_INSTALLD_LOCK:-/run/sg-installd.lock}"
+SYSTEMCTL="${SG_SYSTEMCTL:-systemctl}"
+TAB=$(printf '\t')
+
+say() { printf '%s\n' "$*"; }
+log() { printf 'sg-installd: %s\n' "$*" >&2; }
+
+if ! grep -qw systemd.volatile=overlay /proc/cmdline && [ "${SG_INSTALLD_TEST:-0}" != 1 ]; then
+    say "FAILED Setup runs only from the installation media."
+    exit 1
+fi
+say HELLO
+
+disk="" account="" host="" full=""
+while IFS= read -r line; do
+    case "$line" in
+    LIST)
+        "$SG_INSTALL" --list 2>/dev/null | while IFS= read -r d; do say "DISK $d"; done
+        say END
+        ;;
+    "INSTALL "*)
+        set -f
+        old_ifs=$IFS; IFS=$TAB
+        # shellcheck disable=SC2086  # split on tabs, globbing off
+        set -- ${line#INSTALL }
+        IFS=$old_ifs; set +f
+        disk=${1:-} account=${2:-} host=${3:-} full=${4:-}
+        ;;
+    "PASSWORD "*)
+        pw=${line#PASSWORD }
+        line=""
+        if [ -z "$disk" ] || [ -z "$account" ] || [ -z "$host" ]; then
+            pw=""; say "FAILED Choose a disk and an account first."; continue
+        fi
+        # Only a disk the installer itself offers: not the media, nothing too
+        # small, nothing read-only.
+        if ! "$SG_INSTALL" --list 2>/dev/null | cut -f1 | grep -qxF -- "$disk"; then
+            pw=""; say "FAILED $disk cannot be used."; continue
+        fi
+        exec 9>"$LOCK"
+        if ! flock -n 9; then pw=""; say "FAILED Setup is already installing."; exec 9>&-; continue; fi
+        log "installing onto $disk for $account, host name $host"
+        err=$(mktemp)
+        if printf '%s\n' "$pw" | "$SG_INSTALL" --disk "$disk" --user "$account" --hostname "$host" \
+                ${full:+--full-name "$full"} --password-stdin --yes 2>"$err"; then
+            log "installed onto $disk"
+            say DONE
+        else
+            why=$(grep '^sg-install: ' "$err" | tail -1 | sed 's/^sg-install: //')
+            log "failed: ${why:-unknown}"
+            say "FAILED ${why:-The installation did not complete.}"
+        fi
+        pw=""
+        rm -f "$err"
+        exec 9>&-
+        ;;
+    REBOOT) log "restarting"; "$SYSTEMCTL" reboot ;;
+    POWEROFF) log "shutting down"; "$SYSTEMCTL" poweroff ;;
+    *) say "ERROR unknown request" ;;
+    esac
+done

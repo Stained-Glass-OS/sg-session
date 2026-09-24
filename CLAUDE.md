@@ -45,6 +45,8 @@ separately.
 | `bin/sg-services-start` | starts the SCM inside it, as SYSTEM |
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
 | `systemd/sg-wineserver.service` | runs the machine-level server before greetd |
+| `bin/sg-install` | installs the live system onto a disk (see below) |
+| `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
 environment variables — `SG_LIB`, `SG_BIN`, `SG_ROOT`, `SG_PREFIX`, `SG_STATE`,
@@ -354,6 +356,57 @@ Things that bit:
 - **A control client that hangs up early used to kill the compositor**
   (SIGPIPE on the reply). This is fixed in sg-compositor. The broker still
   sends `STATUS` on its probe connection rather than connecting bare.
+
+## Installing: sg-install and Setup
+
+`bin/sg-install` installs the running **live** system onto a disk. The live
+system is the stick booted through its `-live` boot entry
+(`systemd.volatile=overlay`, added by sg-image's `mkosi.postoutput`): `/` is an
+overlay on a tmpfs, and the stick's root partition underneath is mounted
+read-only, so `systemd-repart` can copy it block for block (`CopyBlocks=`)
+with the ESP, and mark it to grow into the rest of the disk. The copy is then
+made a machine of its own: a new ext4 UUID, an empty machine-id, the chosen host
+name, ssh host keys generated on first boot, the live entry and the lab
+account `sguser` removed, and the owner created in `sgwine`, `sg-admins` and
+`sudo`. The source is the pristine read-only root, so nothing from the live
+session reaches the installed machine: the Wine prefix is built on its first
+boot.
+
+**Setup** is the wizard around it. On a live boot `sg-login-ui` starts
+`sg-setup64.exe` where the login screen would be; it asks `sg-setup-bridge`,
+which asks `sg-installd` -- root, socket-activated, one instance per
+connection -- to run sg-install. The socket (`/run/stained-glass-setup/installd.sock`,
+root:sggreet 0660) exists **only on a live boot**
+(`ConditionKernelCommandLine=`), and only the login screen's account may
+connect: installing is for whoever is at the console with the installation
+media booted, as with Windows Setup. The wizard decides nothing; sg-installd
+checks the disk against sg-install's own list, and sg-install validates
+everything again.
+
+- **Where the live root is.** systemd 257 does not expose the lower layer at
+  `/run/systemd/volatile-root` -- it is `/sysroot` in the initrd's namespace.
+  sg-install takes the root-type partition on the ESP's disk (GPT
+  auto-discovery, as at boot) and requires the kernel's ext4 state
+  (`/proc/fs/ext4/<dev>/options`) not to be `rw`. One superblock, one state.
+- **The live overlay is small** (under 1 GB on a 4 GB machine) and the Wine
+  prefix alone is ~650 MB: sg-image mounts a tmpfs of its own on
+  `/var/lib/stained-glass` on live boots.
+- **Never put a socket under `/run/stained-glass`.** It is sg-wineserver's
+  `RuntimeDirectory`: systemd chowned the installer's socket to sgsystem, and
+  would delete it whenever that service stops. Setup's is in
+  `/run/stained-glass-setup`; the install gate checks its owner and mode.
+- **`userdel -r` exits non-zero after removing an account** with no home or
+  mail spool; sg-install checks that the account is gone instead.
+- **The wizard acts on Enter/Escape release, for a press seen on the same
+  page**, and "Ready to install" opens with focus on Back: a key held on one
+  page must never answer "erase this disk". It logs each page change
+  (`sg-setup: page <name>`, journal tag `sg-setup`), which is what the gates
+  wait on.
+- **Gates:** `make test-setup` runs the real wizard, bridge and sg-installd on
+  this machine under xvfb, with a stand-in for sg-install; sg-image's
+  `make install-test` boots the stick in QEMU, drives Setup through the VM's
+  keyboard onto a blank disk, restarts, and runs the boot gate on the
+  installed disk as the new owner.
 
 ## Remote login over RDP
 

@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 
 Package: sg-session
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, libpam-runtime,
+Depends: ${misc:Depends}, ${shlibs:Depends}, libpam-runtime, systemd-repart, e2fsprogs,
 Recommends: sg-shell,
          wine-sg | wine,
          sg-compositor | cage,

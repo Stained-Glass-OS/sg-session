@@ -1,0 +1,20 @@
+# Setup's installer service (sg-installd). Live boots only -- the stick's
+# "live" entry -- and only the login screen's account may connect: installing
+# is for whoever is at the console with the installation media booted.
+# Not under /run/stained-glass: that is sg-wineserver's RuntimeDirectory,
+# which systemd chowns to sgsystem, and deletes when the service stops.
+[Unit]
+Description=Stained Glass Setup installer socket
+ConditionKernelCommandLine=systemd.volatile=overlay
+
+[Socket]
+ListenStream=/run/stained-glass-setup/installd.sock
+SocketUser=root
+SocketGroup=sggreet
+SocketMode=0660
+DirectoryMode=0755
+Accept=yes
+MaxConnections=2
+
+[Install]
+WantedBy=sockets.target

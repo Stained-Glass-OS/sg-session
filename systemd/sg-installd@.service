@@ -1,0 +1,9 @@
+[Unit]
+Description=Stained Glass Setup installer
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=/usr/libexec/stained-glass/sg-installd
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

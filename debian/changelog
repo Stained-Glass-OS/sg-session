@@ -1,3 +1,16 @@
+sg-session (0.1.0-5) unstable; urgency=medium
+
+  * sg-install: installs Stained Glass from the live system (the stick's
+    "live" entry) onto a disk -- systemd-repart block copy, the root grown to
+    the disk, a fresh machine identity, the owner as administrator, no lab
+    account, no live entry. Depends on systemd-repart and e2fsprogs.
+  * Setup: on a live boot the login screen is replaced by the installation
+    wizard (sg-setup.exe), which asks sg-installd -- a root service behind a
+    socket only the login screen's account can reach -- to run sg-install.
+    Gate: make test-setup; sg-image's make install-test drives it in a VM.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 24 Sep 2026 06:40:55 -0700
+
 sg-session (0.1.0-4) unstable; urgency=medium
 
   * The desktop is sized to the compositor output (SG_DESKTOP_AUTO=0 keeps a

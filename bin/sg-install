@@ -1,0 +1,226 @@
+#!/bin/sh
+# Install Stained Glass OS from the running live system onto a disk.
+#
+#   sg-install --list
+#       Disks it could install to, one per line: PATH<TAB>BYTES<TAB>MODEL.
+#   sg-install --disk DEV --user NAME --password-stdin [--full-name TEXT]
+#              [--hostname NAME] [--keep-lab-user] --yes
+#       Erase DEV and install. The password is read from stdin (one line).
+#
+# The live system is the installer: booted from a stick with the "live" entry
+# (systemd.volatile=overlay), its root partition is mounted read-only under a
+# tmpfs overlay, so systemd-repart copies it -- and the ESP -- block for block
+# onto the target, and marks the root to grow into the rest of the disk on
+# first boot. Then the copy is made the owner's: a fresh machine identity, the
+# owner's administrator account, the hostname, no lab account, no live entry.
+#
+# Progress goes to stdout as "PROGRESS <percent> <text>" lines, for the setup
+# UI; errors to stderr, exit status non-zero.
+set -eu
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+MIN_BYTES=$((16 * 1024 * 1024 * 1024))
+ESP_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+ROOT_TYPE=4f68bce3-e8cd-4db1-96e7-fbcaf984b709   # root, x86-64
+
+die() { printf 'sg-install: %s\n' "$*" >&2; exit 1; }
+progress() { printf 'PROGRESS %s %s\n' "$1" "$2"; }
+
+# --- where the live system runs from ---------------------------------------
+# With systemd.volatile=overlay, / is an overlay on a tmpfs whose lower layer
+# is the real root, mounted read-only in the initrd and not reachable from
+# here. The root is the root-type partition on the disk the ESP is on (the
+# same GPT auto-discovery that found it at boot); the kernel's ext4 state says
+# whether it is mounted, and how.
+source_esp() {
+    for m in /boot /efi /boot/efi; do
+        s=$(findmnt -n -o SOURCE,FSTYPE "$m" 2>/dev/null | awk '$2 == "vfat" {print $1}')
+        [ -n "$s" ] && { echo "$s"; return; }
+    done
+}
+source_root() {
+    [ "$(findmnt -n -o FSTYPE /)" = overlay ] || return 0
+    grep -qw systemd.volatile=overlay /proc/cmdline || return 0
+    esp=$(source_esp); [ -n "$esp" ] || return 0
+    d=$(parent_disk "$esp"); [ -n "$d" ] || return 0
+    lsblk -n -o PATH,PARTTYPE "/dev/$d" | awk -v t="$ROOT_TYPE" 'tolower($2) == t {print $1; exit}'
+}
+# "ro" if the ext4 on $1 is mounted read-only, "rw" if read-write, "" if not
+# mounted. One superblock, one state: it cannot be rw anywhere while ro here.
+ext4_state() {
+    o="/proc/fs/ext4/${1##*/}/options"
+    [ -r "$o" ] && grep -xE 'ro|rw' "$o" | head -1
+}
+parent_disk() { lsblk -n -o PKNAME "$1" 2>/dev/null | head -1; }
+
+boot_disk() {
+    for part in "$(source_root)" "$(source_esp)" "$(findmnt -n -o SOURCE / 2>/dev/null)"; do
+        [ -n "$part" ] || continue
+        p=$(parent_disk "$part")
+        [ -n "$p" ] && { echo "/dev/$p"; return; }
+    done
+}
+
+list_disks() {
+    boot=$(boot_disk)
+    # Raw output, fields read in order -- never eval'd: the model string comes
+    # from the hardware. lsblk escapes spaces in it as \x20.
+    lsblk -d -n -b -r -o PATH,SIZE,TYPE,RO,MODEL | while read -r dev bytes type ro model; do
+        [ "$type" = disk ] || continue
+        [ "$ro" = 0 ] || continue
+        case "$dev" in /dev/loop*|/dev/ram*|/dev/zram*|/dev/sr*) continue ;; esac
+        [ "$dev" != "$boot" ] || continue
+        [ "$bytes" -ge "$MIN_BYTES" ] || continue
+        printf '%s\t%s\t%s\n' "$dev" "$bytes" "$(printf '%s' "${model:-disk}" | sed 's/\\x20/ /g')"
+    done
+}
+
+# --- arguments ---------------------------------------------------------------
+DISK="" USER_NAME="" FULL_NAME="" HOSTNAME_NEW="stained-glass" PASS_STDIN=0 YES=0 KEEP_LAB=0 MODE=install
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --list) MODE=list ;;
+        --disk) DISK=${2:?}; shift ;;
+        --user) USER_NAME=${2:?}; shift ;;
+        --full-name) FULL_NAME=${2:?}; shift ;;
+        --hostname) HOSTNAME_NEW=${2:?}; shift ;;
+        --password-stdin) PASS_STDIN=1 ;;
+        --keep-lab-user) KEEP_LAB=1 ;;
+        --yes) YES=1 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+if [ "$MODE" = list ]; then list_disks; exit 0; fi
+
+[ -n "$DISK" ] || die "--disk is required"
+[ -n "$USER_NAME" ] || die "--user is required"
+[ "$PASS_STDIN" = 1 ] || die "--password-stdin is required: a password on the command line is visible to every process"
+[ "$YES" = 1 ] || die "this erases $DISK; pass --yes to confirm"
+
+# The account name: what useradd accepts, and not a system name.
+case "$USER_NAME" in
+    root|sgsystem|nobody|daemon|sguser) die "'$USER_NAME' is reserved" ;;
+esac
+printf '%s' "$USER_NAME" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "'$USER_NAME' is not a valid account name (lower case, digits, - and _)"
+printf '%s' "$HOSTNAME_NEW" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$' || die "'$HOSTNAME_NEW' is not a valid host name"
+IFS= read -r PASSWORD || true
+[ -n "$PASSWORD" ] || die "empty password"
+
+# The source must be read-only: a block copy of a file system that is being
+# written to is not a consistent file system.
+SRC_ROOT=$(source_root)
+[ -n "$SRC_ROOT" ] || die "not running live (boot the 'live' entry): the root file system is writable, so it cannot be copied safely"
+[ "$(ext4_state "$SRC_ROOT")" != rw ] || die "the live root $SRC_ROOT is mounted read-write"
+SRC_ESP=$(source_esp)
+[ -n "$SRC_ESP" ] || die "cannot find the ESP this system booted from"
+
+# The target: a whole disk, not the one we run from, big enough, not in use.
+[ -b "$DISK" ] || die "$DISK is not a block device"
+[ "$(lsblk -d -n -o TYPE "$DISK")" = disk ] || die "$DISK is not a whole disk"
+[ "$DISK" != "$(boot_disk)" ] || die "$DISK is the disk this system is running from"
+size=$(lsblk -d -n -b -o SIZE "$DISK")
+[ "$size" -ge "$MIN_BYTES" ] || die "$DISK is too small ($size bytes; at least 16 GiB)"
+if lsblk -n -o MOUNTPOINTS "$DISK" | grep -q .; then die "$DISK has mounted file systems"; fi
+
+# --- 1. partition and copy -------------------------------------------------
+WORK=$(mktemp -d /run/sg-install.XXXXXX)
+cleanup() {
+    for m in "$WORK/esp" "$WORK/root"; do mountpoint -q "$m" 2>/dev/null && umount "$m"; done
+    rm -rf "$WORK"
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$WORK/repart" "$WORK/root" "$WORK/esp"
+cat > "$WORK/repart/00-esp.conf" <<EOF
+[Partition]
+Type=esp
+CopyBlocks=$SRC_ESP
+SizeMinBytes=512M
+SizeMaxBytes=512M
+EOF
+cat > "$WORK/repart/10-root.conf" <<EOF
+[Partition]
+Type=root
+CopyBlocks=$SRC_ROOT
+GrowFileSystem=yes
+EOF
+
+progress 5 "Preparing $DISK"
+wipefs -a -q "$DISK" 2>/dev/null || die "cannot wipe $DISK"
+progress 10 "Copying the system"
+systemd-repart --dry-run=no --empty=force --definitions="$WORK/repart" --no-pager "$DISK" >"$WORK/repart.log" 2>&1 \
+    || { cat "$WORK/repart.log" >&2; die "systemd-repart failed"; }
+udevadm settle
+progress 70 "Making it yours"
+
+part_of_type() {
+    lsblk -n -o PATH,PARTTYPE "$DISK" | awk -v t="$1" 'tolower($2) == t {print $1; exit}'
+}
+T_ROOT=$(part_of_type "$ROOT_TYPE")
+T_ESP=$(part_of_type "$ESP_TYPE")
+if [ -z "$T_ROOT" ] || [ -z "$T_ESP" ]; then die "the new partitions did not appear"; fi
+# A block copy keeps the file system's UUID; the copy must not be mistaken for
+# the stick it came from if both are ever attached.
+e2fsck -f -p "$T_ROOT" >/dev/null 2>&1 || true
+tune2fs -U random "$T_ROOT" >/dev/null || die "cannot give the new root its own UUID"
+mount "$T_ROOT" "$WORK/root"
+mount "$T_ESP" "$WORK/esp"
+R="$WORK/root"
+
+# --- 2. a machine of its own -----------------------------------------------
+# machine-id: empty, so the first boot creates one (the copy must not share
+# the stick's, or every machine installed from it would look alike).
+: > "$R/etc/machine-id"
+rm -f "$R/var/lib/systemd/random-seed" "$R/var/lib/dbus/machine-id"
+rm -f "$WORK/esp/loader/random-seed"
+printf '%s\n' "$HOSTNAME_NEW" > "$R/etc/hostname"
+if [ -d "$R/etc/ssh" ]; then
+    # host keys belong to a machine: generated on its first boot
+    rm -f "$R"/etc/ssh/ssh_host_*
+    cat > "$R/etc/systemd/system/sg-ssh-hostkeys.service" <<'EOF'
+[Unit]
+Description=Generate this machine's ssh host keys
+ConditionPathExists=!/etc/ssh/ssh_host_ed25519_key
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    mkdir -p "$R/etc/systemd/system/multi-user.target.wants"
+    ln -sf ../sg-ssh-hostkeys.service "$R/etc/systemd/system/multi-user.target.wants/sg-ssh-hostkeys.service"
+fi
+
+# The live entry is for the stick; an installed machine boots its own root.
+rm -f "$WORK"/esp/loader/entries/*-live.conf
+mkdir -p "$R/etc/stained-glass"
+printf 'installed %s from %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SRC_ROOT" > "$R/etc/stained-glass/installed"
+
+# --- 3. the owner ------------------------------------------------------------
+progress 85 "Creating $USER_NAME"
+if [ "$KEEP_LAB" = 0 ] && grep -q '^sguser:' "$R/etc/passwd"; then
+    # userdel -r exits non-zero when the account had no home or mail spool,
+    # after removing it; what matters is that it is gone.
+    userdel -R "$R" -r sguser >/dev/null 2>&1 || true
+    ! grep -q '^sguser:' "$R/etc/passwd" || die "cannot remove the lab account"
+    rm -rf "$R/home/sguser"
+fi
+groups=""
+for g in sgwine sg-admins sudo; do
+    grep -q "^$g:" "$R/etc/group" && groups="${groups:+$groups,}$g"
+done
+useradd -R "$R" -m -s /bin/bash -c "${FULL_NAME:-$USER_NAME}" ${groups:+-G "$groups"} "$USER_NAME" \
+    || die "cannot create $USER_NAME"
+printf '%s:%s\n' "$USER_NAME" "$PASSWORD" | chpasswd -R "$R" || die "cannot set the password"
+PASSWORD=""
+
+# --- 4. done -------------------------------------------------------------------
+progress 95 "Finishing"
+sync
+umount "$WORK/esp" "$WORK/root"
+progress 100 "Installed. Remove the installation media and restart."

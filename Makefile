@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
-BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+BINS         = bin/sg-install bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
@@ -55,6 +55,17 @@ install: d3d-probe greeter token-probe procagent
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# Setup (live boots only): the wizard, its bridge, and the root service
+	@# that runs sg-install, behind a socket only the login screen may use.
+	@if [ -f build/sg-setup-bridge ]; then \
+	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
+	    install -m 0755 build/sg-setup-bridge $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	@if [ -f build/sg-setup64.exe ]; then \
+	    install -m 0755 build/sg-setup64.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
+	install -m 0755 setup/sg-installd $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-polimport ]; then \
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-polimport $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -101,19 +112,20 @@ install: d3d-probe greeter token-probe procagent
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
-	    systemd/sg-update-prepare.timer $(UNITDIR)
+	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
+	    systemd/sg-installd@.service $(UNITDIR)
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create setup/sg-installd; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create || exit 1; \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create setup/sg-installd test/setup-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
 		echo "shellcheck not installed; skipping (advisory)"; \
@@ -140,6 +152,7 @@ clean:
 	rm -rf test/tmp
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
 	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub
+	rm -f build/sg-setup64.exe build/sg-setup-bridge
 
 # --- the D3D probe ---------------------------------------------------------
 #
@@ -197,6 +210,8 @@ greeter:
 	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c -lgdi32 -luser32
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-setup-bridge setup/sg-setup-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
@@ -289,6 +304,12 @@ vkbd:
 .PHONY: test-consent
 test-consent: greeter rdp procagent vkbd
 	@sh test/consent-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# Setup end to end: the real wizard, bridge and sg-installd, with a stand-in
+# for sg-install (sg-image's install-test erases a real disk).
+.PHONY: test-setup
+test-setup: greeter
+	@sh test/setup-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # The login screen end to end, with the real Wine greeter against a greetd stub.
 .PHONY: test-login

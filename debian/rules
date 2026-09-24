@@ -16,6 +16,9 @@ override_dh_installsystemd:
 	dh_installsystemd --name=sg-prefix-init
 	dh_installsystemd --name=sg-wineserver
 	dh_installsystemd --name=sg-lockd
+	# Setup's installer: the socket is enabled everywhere and exists only on
+	# a live boot (ConditionKernelCommandLine); the service is per connection.
+	dh_installsystemd sg-installd.socket
 	# The timer is enabled and started. The service it runs is installed but
 	# never started by the package: a postinst that started it would run an
 	# update check -- network, downloads -- inside dpkg on a live system.
