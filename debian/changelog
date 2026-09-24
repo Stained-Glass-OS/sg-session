@@ -1,3 +1,15 @@
+sg-session (0.1.0-7) unstable; urgency=medium
+
+  * The machine's wineserver owns the prefix at boot: sg-prefix-init stops the
+    transient server its own Wine commands started (its wait is bounded), and
+    sg-wineserver stops any server still holding the prefix before starting.
+    Once a prefix has auto-start services -- Microsoft Edge installs three --
+    they kept the transient server alive, the machine's server found the
+    prefix taken and never started, and the login screen came up on the wrong
+    server.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 24 Sep 2026 10:24:05 -0700
+
 sg-session (0.1.0-6) unstable; urgency=medium
 
   * Remote Desktop (E1, ADR 0010): sg-rdp-authd streams the user's session.

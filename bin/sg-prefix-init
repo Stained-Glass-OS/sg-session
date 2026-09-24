@@ -18,6 +18,14 @@ sg_wine_env
 
 STAMP="$SG_PREFIX/.sg-initialized"
 
+# The Wine commands below run on a transient server of their own, before the
+# machine's (sg-wineserver) exists. Stop it when done, whatever happens: once
+# the prefix has auto-start services -- Microsoft Edge installs three -- they
+# keep a transient server alive, and the machine's server then found the
+# prefix taken and never started.
+stop_transient_server() { timeout 30 wineserver -k 2>/dev/null || true; }
+trap stop_transient_server EXIT
+
 # Run the installers for staged payloads. Each is stamp-guarded, so on an
 # up-to-date prefix this costs a few file reads; on a newer payload it installs.
 run_installers() {
@@ -49,7 +57,9 @@ if [ -e "$STAMP" ]; then
     # machine account, with the Mono/Gecko prompts suppressed -- rather than
     # leave that update to a user's desktop or a Windows service.
     sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
-    wineserver -w
+    # Bounded: auto-start services never exit, so an unbounded wait would
+    # hang boot on a machine that has any.
+    timeout 120 wineserver -w || true
     set_machine_settings
     run_installers
     exit 0

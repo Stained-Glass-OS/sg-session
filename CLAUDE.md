@@ -95,6 +95,18 @@ rule** — that would hand every desktop user raw access to every USB device on
 the machine. A device the class rules do not match gets its own line; the rules
 file shows the form.
 
+## The machine's server must own the prefix
+
+Any Wine command run before `sg-wineserver` starts (sg-prefix-init's, at
+boot) runs on a transient server of its own. It used to exit when idle, but
+auto-start services -- Microsoft Edge installs three -- keep it alive, and the
+machine's server then found the prefix taken, exited with status 2, and the
+greeter ended up on the transient one. sg-prefix-init now stops its server on
+exit (a trap; its `wineserver -w` is bounded, since services never exit), and
+sg-wineserver stops any server holding the prefix before it starts. **The
+tell:** `sg-wineserver.service: Main process exited, status=2` at boot, and a
+second `wineserver` without `-p -f` in `pgrep -a wineserver`.
+
 ## The shared system prefix
 
 `sg-prefix-init` marks the prefix with `.sg-system-prefix`, which puts `wine-sg`

@@ -46,6 +46,13 @@ chmod 700 "$XDG_RUNTIME_DIR"
 SG_WINSTATION='__wineservice_winstation\Default'
 export SG_WINSTATION
 
+# The machine's server must be the prefix's server. A Wine command run before
+# this one (sg-prefix-init's, say) started a transient server of its own, and
+# once the prefix has auto-start services -- Microsoft Edge installs three --
+# they keep that server alive: this one then found the prefix taken, exited,
+# and the machine came up on the wrong server. Stop any server first.
+timeout 30 wineserver -k 2>/dev/null || true
+
 sg_log "starting the machine-level wineserver (prefix: $SG_PREFIX)"
 
 # -p with no argument means persistent forever: the server must not exit when
