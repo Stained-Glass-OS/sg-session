@@ -1,0 +1,38 @@
+#!/bin/sh
+# Start the elevation consent prompt (User Account Control): its own X server
+# on the compositor's privileged socket, and sg-consent.exe on it.
+#
+#   sg-consent-ui admin|cred REQUESTER PROGRAM
+#
+# Started by sg-brokerd after it has put the compositor into SECURE mode; the
+# broker's pipes are this script's stdin and stdout, and the prompt inherits
+# them. Nothing else may hold them open, so Xwayland gets /dev/null.
+#
+# As with the lock screen (sg-lock-ui), the X server is separate from the
+# requester's on purpose: in SECURE mode the compositor shows and sends input
+# only to privileged clients, so no program in the requester's session can see
+# the prompt, click Yes or type into it (ADR 0009, ADR 0012).
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+unset WAYLAND_DISPLAY SG_WINSTATION
+
+mode="${1:?mode}"
+requester="${2:?requester}"
+program="${3:-}"
+case "$mode" in admin|cred) ;; *) echo DENY; exit 2 ;; esac
+
+N="${SG_CONSENT_DISPLAY_NUM:-${SG_LOCK_DISPLAY_NUM:-99}}"
+while [ -e "/tmp/.X${N}-lock" ] || [ -e "/tmp/.X11-unix/X${N}" ]; do N=$((N + 1)); done
+
+WAYLAND_DISPLAY="${SG_LOCK_PRIV:?SG_LOCK_PRIV}" Xwayland ":$N" -noreset \
+    </dev/null >/dev/null 2>&1 &
+_w=0
+while [ ! -e "/tmp/.X11-unix/X$N" ] && [ "$_w" -lt 100 ]; do sleep 0.1; _w=$((_w + 1)); done
+
+DISPLAY=":$N"
+export DISPLAY
+exec wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-consent64.exe" /consent "$mode" "$requester" "$program" \
+    2>>"${SG_LOG_DIR:-/tmp}/consent-ui.log"

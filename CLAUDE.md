@@ -311,6 +311,41 @@ inherited through Wine — so the real greeter never read a byte from the bridge
 at the login screen either. The login-screen gate missed it because it stood a
 shell script in for the greeter; `make test-lock` drives the real one.
 
+## Run as administrator: the consent prompt
+
+`sg-brokerd` (ADR 0012) asks on the **secure surface**. It finds the
+requester's compositor (`<seat>/<uid>/control.sock`, and it must be served by
+that uid according to `SO_PEERCRED`), sends `SECURE`, and runs `lib/sg-consent-ui`: its own
+X server on the privileged socket and `sg-consent64.exe` on it. An
+administrator gets Yes/No. Anyone else must give an administrator's name and
+password; the root monitor checks the password with PAM (`stained-glass-elevate`)
+and the broker checks membership of `sg-admins`. Three wrong tries, a closed
+prompt or 120s of silence all deny, and so does everything else. `RELEASE`
+follows in every case. In SECURE mode the compositor tells watchers `secure`,
+not `locked`, so `sg-lockd` puts no lock screen over the prompt.
+
+**`make test-consent`** runs the whole thing with PAM under `pam_wrapper`. It
+checks that Escape declines, that Yes allows, that there is no prompt over a
+locked machine, that a standard user's own password is refused, that a wrong
+administrator password is refused and the right one accepted, and that no key
+typed at a prompt reaches the session. It fails when the broker skips the
+administrator check, and when it skips `SECURE`.
+
+Things that bit:
+
+- **Drive Wine prompts with `build/sg-vkbd`, not `wtype`.** wtype makes up a
+  keymap per call and puts its first key on keycode 9. Until Wine notices the
+  keymap change it reads that key as **Escape**. The first key of each call
+  declined the prompt. That included the "warm-up" key, and an Escape test that
+  "passed" did so by accident. sg-vkbd uploads the ordinary evdev/us keymap,
+  so there is no change to race. `lock-e2e.sh` uses it too.
+- **The prompt acts on key release, and only for a key whose press it saw.**
+  It has no bare-letter shortcuts, only Alt+Y and Alt+N. Focus starts on No. A
+  stray key must never answer an elevation prompt.
+- **A control client that hangs up early used to kill the compositor**
+  (SIGPIPE on the reply). This is fixed in sg-compositor. The broker still
+  sends `STATUS` on its probe connection rather than connecting bare.
+
 ## Remote login over RDP
 
 `sg-rdp-authd` is pattern B of ADR 0010: the technician types the username and

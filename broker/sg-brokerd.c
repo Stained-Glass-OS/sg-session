@@ -18,7 +18,9 @@
  */
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -131,19 +133,171 @@ static int drop_privileges(const char *account)
 }
 
 /* ---- consent -----------------------------------------------------------
- * The real consent runs on the compositor's secure surface (the same isolated
- * display the lock screen uses -- ADR 0009): a Yes/No dialog for an
- * administrator, an administrator credential prompt for anyone else, exactly
- * as Windows' secure desktop does. That graphical prompt (a mode of
- * sg-greeter, driven like sg-lock-ui) is not wired yet, so without it the
- * broker denies -- fail closed. SG_BROKER_TEST substitutes a scripted decision
- * so the trust logic can be gated headlessly.
+ * Consent runs on the compositor's secure surface -- the same isolation the
+ * lock screen uses (ADR 0009): the compositor's SECURE mode shows and sends
+ * input to privileged clients only, so nothing in the requester's session can
+ * see the prompt, click it or type into it. The prompt is sg-consent.exe on its
+ * own X server on the privileged socket, started by SG_CONSENT_UI
+ * (lib/sg-consent-ui). An administrator gets Yes/No; anyone else must give an
+ * administrator's name and password, which the monitor checks against PAM.
+ *
+ * Everything fails closed: no compositor, a compositor not run by the
+ * requester, a locked machine, a UI that dies or says nothing in time -- all
+ * deny. SG_BROKER_TEST substitutes a scripted decision so the trust logic can
+ * be gated headlessly (sg-elevate-check).
  *
  * Returns 1 to allow, 0 to deny. Fills who[] with the human who authorised.
  */
-static int obtain_consent(int requester_admin, const char *requester, char *who, size_t wholen)
+static const char *g_seat_dir = "/run/stained-glass-seat/seat0";
+static const char *g_consent_ui = "/usr/lib/stained-glass/sg-consent-ui";
+
+struct surface { char control[256], priv[256]; };
+
+static int surface_connect(const struct surface *sf)
+{
+    struct sockaddr_un addr;
+    int fd;
+    memset(&addr, 0, sizeof(addr)); addr.sun_family = AF_UNIX;
+    if ((size_t)snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sf->control) >= sizeof(addr.sun_path)) return -1;
+    if ((fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)) < 0) return -1;
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+static int surface_command(const struct surface *sf, const char *cmd, char *reply, size_t max)
+{
+    int fd = surface_connect(sf);
+    ssize_t n;
+    if (fd < 0) return -1;
+    write_full(fd, cmd, strlen(cmd));
+    n = read(fd, reply, max - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    reply[n] = 0;
+    reply[strcspn(reply, "\r\n")] = 0;
+    return 0;
+}
+
+/* The requester's own compositor: <seat>/<uid>/control.sock, served -- by
+ * SO_PEERCRED -- by the requester's uid. Anyone in sgwine can make a directory
+ * in the seat dir, so the path alone proves nothing. The gate names the
+ * sockets directly (SG_BROKER_CONTROL/SG_BROKER_PRIV); the peer check holds
+ * either way. */
+static int find_surface(uid_t uid, struct surface *sf)
+{
+    const char *c = getenv("SG_BROKER_CONTROL"), *pv = getenv("SG_BROKER_PRIV");
+    struct ucred cred; socklen_t clen = sizeof(cred);
+    int fd, ok;
+
+    if (c && pv) {
+        snprintf(sf->control, sizeof(sf->control), "%s", c);
+        snprintf(sf->priv, sizeof(sf->priv), "%s", pv);
+    } else if ((size_t)snprintf(sf->control, sizeof(sf->control), "%s/%u/control.sock", g_seat_dir, (unsigned)uid) >= sizeof(sf->control) ||
+               (size_t)snprintf(sf->priv, sizeof(sf->priv), "%s/%u/priv.sock", g_seat_dir, (unsigned)uid) >= sizeof(sf->priv))
+        return 0;
+    if ((fd = surface_connect(sf)) < 0) { logmsg("consent: no compositor at %s", sf->control); return 0; }
+    ok = !getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &clen) && cred.uid == uid;
+    {
+        /* a well-behaved client: ask something, read the answer, then hang up */
+        char r[64];
+        if (write_full(fd, "STATUS\n", 7) || read(fd, r, sizeof(r)) <= 0) ok = 0;
+    }
+    close(fd);
+    if (!ok) logmsg("consent: %s is not the requester's compositor", sf->control);
+    return ok;
+}
+
+/* What the prompt shows as the program. The requester chose every byte of it,
+ * so it is shown, never trusted: control characters and quotes are replaced,
+ * and it is cut short rather than allowed to push the real text off the panel. */
+static void describe_program(char **argv, char *out, size_t max)
+{
+    size_t n = 0;
+    int i = (!strcmp(argv[0], "wine") && argv[1]) ? 1 : 0;
+    out[0] = 0;
+    for (; argv[i] && n + 1 < max; i++) {
+        const char *p;
+        if (n && n + 1 < max) out[n++] = ' ';
+        for (p = argv[i]; *p && n + 1 < max; p++)
+            out[n++] = ((unsigned char)*p < 0x20 || *p == 0x7f || *p == '"') ? '?' : *p;
+    }
+    out[n] = 0;
+    if (n > 200) strcpy(out + 197, "...");
+}
+
+struct consent_ui { pid_t pid; int to, from; };
+
+static int consent_ui_start(struct consent_ui *ui, const struct surface *sf, const char *mode,
+                            const char *requester, const char *program)
+{
+    int up[2], down[2];
+    if (pipe2(up, O_CLOEXEC) < 0) return -1;
+    if (pipe2(down, O_CLOEXEC) < 0) { close(up[0]); close(up[1]); return -1; }
+    if ((ui->pid = fork()) < 0) return -1;
+    if (!ui->pid) {
+        dup2(down[0], 0); dup2(up[1], 1);
+        setsid();   /* its own process group, so teardown takes Xwayland too */
+        signal(SIGCHLD, SIG_DFL);
+        setenv("SG_LOCK_PRIV", sf->priv, 1);
+        /* Arguments go as positional parameters, never into the command text:
+         * the program name is the requester's. */
+        {
+            char cmd[1024];
+            snprintf(cmd, sizeof(cmd), "exec %s \"$@\"", g_consent_ui);
+            execl("/bin/sh", "sh", "-c", cmd, "sg-consent-ui", mode, requester, program, (char *)NULL);
+        }
+        _exit(127);
+    }
+    close(up[1]); close(down[0]);
+    ui->from = up[0];
+    ui->to = down[1];
+    return 0;
+}
+
+static void consent_ui_stop(struct consent_ui *ui)
+{
+    int i;
+    if (ui->pid <= 0) return;
+    write_full(ui->to, "DONE\n", 5);
+    close(ui->to); close(ui->from);
+    /* SIGCHLD is ignored, so children reap themselves: kill(pid, 0) failing
+     * means it has gone. */
+    for (i = 0; i < 20 && kill(ui->pid, 0) == 0; i++) usleep(100000);
+    kill(-ui->pid, SIGTERM);
+    usleep(200000);
+    kill(-ui->pid, SIGKILL);
+    ui->pid = 0;
+}
+
+/* One line from the UI, waiting no later than deadline. -1 on EOF/timeout. */
+static int consent_read_line(int fd, char *buf, size_t max, time_t deadline)
+{
+    size_t i = 0;
+    while (i < max - 1) {
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        time_t left = deadline - time(NULL);
+        char c; ssize_t n;
+        if (left <= 0) return -1;
+        if (poll(&pfd, 1, (int)(left * 1000)) <= 0) { if (errno == EINTR) continue; return -1; }
+        n = read(fd, &c, 1);
+        if (n <= 0) { if (n < 0 && errno == EINTR) continue; return -1; }
+        if (c == '\n') break;
+        if (c != '\r') buf[i++] = c;
+    }
+    buf[i] = 0;
+    return 0;
+}
+
+static int obtain_consent(int requester_admin, const char *requester, uid_t uid, char **argv,
+                          char *who, size_t wholen)
 {
     const char *test = getenv("SG_BROKER_TEST");
+    const char *env;
+    struct surface sf;
+    struct consent_ui ui = { 0, -1, -1 };
+    char reply[64], program[256], line[1024];
+    int timeout = 120, attempts = 0, allowed = 0;
+    time_t deadline;
 
     if (test) {
         if (requester_admin) {
@@ -161,10 +315,63 @@ static int obtain_consent(int requester_admin, const char *requester, char *who,
         }
     }
 
-    /* TODO: engage the secure surface and run the consent UI (reuses the lock
-     * mechanism). Until then, refuse rather than elevate without consent. */
-    logmsg("no secure-surface consent UI available; refusing (fail-closed)");
-    return 0;
+    if ((env = getenv("SG_CONSENT_TIMEOUT")) && atoi(env) > 0) timeout = atoi(env);
+    if (!find_surface(uid, &sf)) { logmsg("consent: no secure surface for %s; refusing", requester); return 0; }
+    if (surface_command(&sf, "SECURE\n", reply, sizeof(reply)) || strcmp(reply, "OK secure")) {
+        logmsg("consent: the compositor refused SECURE (%s); refusing", reply);
+        return 0;
+    }
+    describe_program(argv, program, sizeof(program));
+    if (consent_ui_start(&ui, &sf, requester_admin ? "admin" : "cred", requester, program) < 0) {
+        logmsg("consent: cannot start the prompt; refusing");
+        goto out;
+    }
+
+    deadline = time(NULL) + timeout;
+    while (consent_read_line(ui.from, line, sizeof(line), deadline) == 0) {
+        if (requester_admin && !strcmp(line, "ALLOW")) {
+            snprintf(who, wholen, "%s", requester);
+            allowed = 1;
+            break;
+        }
+        if (!requester_admin && !strncmp(line, "CRED ", 5)) {
+            char *user = line + 5, *pass = strchr(user, '\t');
+            int ok = 0;
+            if (pass && (size_t)(pass - user) < wholen) {
+                *pass++ = 0;
+                /* Both checks, whatever the first says: a quick "not an
+                 * administrator" would tell a guesser which names to try. */
+                ok = check_password(user, pass);
+                ok = is_admin_name(user) && ok;
+            }
+            if (ok) memcpy(who, user, strlen(user) + 1);   /* fits: checked above */
+            explicit_bzero(line, sizeof(line));
+            if (ok) {
+                allowed = 1;
+                break;
+            }
+            logmsg("consent: credentials refused for %s (attempt %d)", requester, attempts + 1);
+            if (++attempts >= 3) break;
+            {
+                static const char msg[] = "FAILURE The user name or password is incorrect.\n";
+                write_full(ui.to, msg, sizeof(msg) - 1);
+            }
+            continue;
+        }
+        if (!strcmp(line, "DENY")) { logmsg("consent: declined"); break; }
+        /* Anything else is a protocol violation: stop. */
+        explicit_bzero(line, sizeof(line));
+        logmsg("consent: unexpected reply from the prompt; refusing");
+        break;
+    }
+    if (!allowed && time(NULL) >= deadline) logmsg("consent: no answer in %ds; refusing", timeout);
+    explicit_bzero(line, sizeof(line));
+
+out:
+    consent_ui_stop(&ui);
+    if (surface_command(&sf, "RELEASE\n", reply, sizeof(reply)))
+        logmsg("consent: RELEASE failed; the compositor keeps its state");
+    return allowed;
 }
 
 /* ---- launching the elevated program as SYSTEM -------------------------- */
@@ -225,6 +432,8 @@ int main(void)
     }
     if ((env = getenv("SG_ADMIN_GROUP"))) g_admin_group = env;
     if ((env = getenv("SG_SYSTEM_USER"))) g_system_user = env;
+    if ((env = getenv("SG_SEAT_DIR"))) g_seat_dir = env;
+    if ((env = getenv("SG_CONSENT_UI"))) g_consent_ui = env;
     /* PAM policy for elevation credential prompts */
     setenv("SG_REMOTE_PAM_SERVICE", "stained-glass-elevate", 0);
     g_log = logpath ? fopen(logpath, "a") : stderr;
@@ -279,7 +488,7 @@ int main(void)
         admin = is_admin_name(rpw->pw_name);
         logmsg("request from %s (%s): %s", rpw->pw_name, admin ? "administrator" : "standard user", argv[0]);
 
-        if (obtain_consent(admin, rpw->pw_name, who, sizeof(who))) {
+        if (obtain_consent(admin, rpw->pw_name, cred.uid, argv, who, sizeof(who))) {
             launch(argv, envp, cwd, g_system_user);
             status = 0;
             logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);

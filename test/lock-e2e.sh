@@ -32,8 +32,8 @@ trap cleanup EXIT INT TERM
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
 
-for t in wtype xev xdotool Xwayland python3; do command -v "$t" >/dev/null || { echo "SKIP: $t missing"; exit 77; }; done
-for f in "$COMP" "$HERE/build/sg-lockd" "$HERE/build/sg-rdp-pamcheck" "$HERE/build/sg-greeter64.exe" "$PW"; do
+for t in xev xdotool Xwayland python3; do command -v "$t" >/dev/null || { echo "SKIP: $t missing"; exit 77; }; done
+for f in "$COMP" "$HERE/build/sg-vkbd" "$HERE/build/sg-lockd" "$HERE/build/sg-rdp-pamcheck" "$HERE/build/sg-greeter64.exe" "$PW"; do
     [ -e "$f" ] || { echo "SKIP: $f not built"; exit 77; }; done
 [ -d "$PFX/drive_c" ] || { echo "SKIP: no prefix at $PFX (run make test first)"; exit 77; }
 
@@ -45,7 +45,7 @@ done
 printf '%s:correct-horse:stained-glass-lock\n' "$(id -un)" > "$T/passdb"
 
 ctl() { python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('$T/ctl.sock');s.sendall(b'$1\n');print(s.recv(64).decode().strip())"; }
-inj() { WAYLAND_DISPLAY="$T/priv.sock" wtype "$@"; sleep 1; }
+inj() { WAYLAND_DISPLAY="$T/priv.sock" "$HERE/build/sg-vkbd" "$@"; sleep 1; }
 user_keys() { awk '/^KeyPress/{p=1;next} p&&match($0,/keysym 0x[0-9a-f]+, [A-Za-z_0-9]+\)/){s=substr($0,RSTART,RLENGTH); sub(/.*, /,"",s); sub(/\)/,"",s); print s; p=0}' "$T/user.txt"; }
 
 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
@@ -78,6 +78,10 @@ before=$(user_keys | wc -l)
 
 inj -M logo l -m logo
 [ "$(ctl STATUS)" = "OK locked" ] && pass "Win+L locks" || fail "Win+L did not lock"
+# The baseline is taken once locked: Win+L's Super key is pressed while the
+# session is still unlocked, and legitimately reaches it.
+sleep 1
+before=$(user_keys | wc -l)
 _w=0; LN=""
 while [ $_w -lt 60 ]; do
     for d in /tmp/.X11-unix/X*; do

@@ -20,7 +20,7 @@ BINS         = bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui
+LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui
 
 .PHONY: all install lint test test-session test-multiuser deb clean
 
@@ -90,7 +90,7 @@ install: d3d-probe greeter token-probe procagent
 	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@if [ -f build/sg-greeter64.exe ]; then \
-	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe \
+	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe build/sg-consent64.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -m 0755 $(LIBS) $(LIBDIR)
@@ -139,7 +139,7 @@ clean:
 	rm -rf debian/sg-session debian/.debhelper debian/files debian/*.substvars debian/debhelper-build-stamp
 	rm -rf test/tmp
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
-	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-greet-bridge build/greetd-stub
+	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub
 
 # --- the D3D probe ---------------------------------------------------------
 #
@@ -196,6 +196,7 @@ greeter:
 	@mkdir -p build
 	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
@@ -269,8 +270,25 @@ test-rdp: rdp
 # The lock screen end to end: sg-compositor (beside this repo) + sg-lockd + the
 # Wine greeter in lock mode. Needs the session prefix from `make test`.
 .PHONY: test-lock
-test-lock: greeter rdp
+test-lock: greeter rdp vkbd
 	@sh test/lock-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# sg-vkbd: a virtual-keyboard test fixture with a stable keymap (see its
+# header for why wtype is not enough to drive a Wine prompt). Never installed.
+.PHONY: vkbd
+vkbd:
+	@pkg-config --exists wayland-client xkbcommon || { echo "SKIP: wayland-client/xkbcommon dev files missing"; exit 0; }
+	@mkdir -p build
+	wayland-scanner client-header test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-client-protocol.h
+	wayland-scanner private-code test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-protocol.c
+	$(CC) $(CFLAGS_BRIDGE) -Ibuild -o build/sg-vkbd test/sg-vkbd.c build/virtual-keyboard-unstable-v1-protocol.c \
+	    $$(pkg-config --cflags --libs wayland-client xkbcommon)
+
+# Elevation consent end to end (ADR 0012): sg-compositor's SECURE mode +
+# sg-brokerd + sg-consent.exe, driven over the privileged virtual keyboard.
+.PHONY: test-consent
+test-consent: greeter rdp procagent vkbd
+	@sh test/consent-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # The login screen end to end, with the real Wine greeter against a greetd stub.
 .PHONY: test-login

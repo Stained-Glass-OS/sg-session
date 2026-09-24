@@ -1,3 +1,12 @@
+sg-session (0.1.0-3) unstable; urgency=medium
+
+  * Elevation consent on the secure surface (ADR 0012): sg-brokerd engages
+    sg-compositor SECURE mode and runs sg-consent.exe (Yes/No for an
+    administrator, an administrator's credentials otherwise); fail closed.
+  * sg-vkbd test fixture (stable keymap); lock and consent gates use it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 23 Sep 2026 22:47:29 -0700
+
 sg-session (0.1.0-2) unstable; urgency=medium
 
   * Multi-user: supervised shell (AutoRestartShell), per-user session.env and
