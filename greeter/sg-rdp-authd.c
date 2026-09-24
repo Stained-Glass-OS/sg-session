@@ -11,9 +11,13 @@
  * keyboard and pointer. A client that disconnects leaves the session running,
  * and the next login for that user reconnects to it, as on Windows.
  *
- * A user already signed in at the console is not yet taken over (Windows moves
- * the session to RDP and locks the console); that needs the compositor to move
- * a session between outputs, and such a login is refused for now.
+ * A user already signed in at the console has that session taken over, as on
+ * Windows: the monitor asks the console's compositor (REMOTE, on its control
+ * socket) to move the user's windows to an output of their own, handing it
+ * one end of a socketpair as the remote connection; the console goes dark and
+ * ignores everything but Ctrl+Alt+Del, which takes the session back locked.
+ * When the client disconnects, that connection closes and the session goes
+ * back to the console, locked.
  *
  * Privilege separation, as in sshd. The code that parses RDP from the network
  * is the most exposed code in the system, so it must not run as root -- but
@@ -96,7 +100,7 @@ typedef struct
 enum session_status
 {
     SESSION_ATTACHED = 0,   /* a connection to the session comes with it */
-    SESSION_AT_CONSOLE,     /* signed in at the console: not taken over yet */
+    SESSION_AT_CONSOLE,     /* signed in at the console, and it could not be taken over */
     SESSION_NOT_ALLOWED,    /* no account, or not a Stained Glass user */
     SESSION_FAILED,         /* it could not be started */
 };
@@ -256,6 +260,43 @@ static int make_remote_seat( const struct passwd *pw, char *seat, size_t seatlen
     return 0;
 }
 
+/* Take over the session a user is signed in to at the console: ask its
+ * compositor (REMOTE, on the control socket, which it serves as that user)
+ * to move the session to a new output, handing it one end of a socketpair as
+ * the remote connection -- whose closing gives the session back to the
+ * console, locked. Returns the other end, for the stream. */
+static int take_over_console( const char *control, uid_t uid )
+{
+    char req[] = "REMOTE\n", reply[128] = "", cbuf[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = { .iov_base = req, .iov_len = sizeof(req) - 1 };
+    struct msghdr mh = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = cbuf, .msg_controllen = sizeof(cbuf) };
+    struct cmsghdr *cm;
+    int sv[2], fd;
+    ssize_t n;
+
+    if ((fd = connect_session( control, uid )) < 0) return -1;
+    if (socketpair( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv ) < 0) { close( fd ); return -1; }
+    memset( cbuf, 0, sizeof(cbuf) );
+    cm = CMSG_FIRSTHDR( &mh );
+    cm->cmsg_level = SOL_SOCKET;
+    cm->cmsg_type = SCM_RIGHTS;
+    cm->cmsg_len = CMSG_LEN( sizeof(int) );
+    memcpy( CMSG_DATA( cm ), &sv[0], sizeof(int) );
+    if (sendmsg( fd, &mh, MSG_NOSIGNAL ) < 0 || (n = read( fd, reply, sizeof(reply) - 1 )) <= 0 ||
+        strncmp( reply, "OK remote ", 10 ))
+    {
+        reply[strcspn( reply, "\n" )] = 0;
+        logmsg( "SESSION console take-over refused by the compositor: %s", reply[0] ? reply : "no answer" );
+        close( fd ); close( sv[0] ); close( sv[1] );
+        return -1;
+    }
+    reply[strcspn( reply, "\n" )] = 0;
+    logmsg( "SESSION console session taken over: %s", reply + 3 );
+    close( fd );
+    close( sv[0] );   /* the compositor has its own copy */
+    return sv[1];
+}
+
 /* Find or start the user's remote session; returns a connection to its
  * privileged socket, or -1 with *status saying why not. */
 static int session_for( const char *user, unsigned width, unsigned height, int *status )
@@ -289,10 +330,15 @@ static int session_for( const char *user, unsigned width, unsigned height, int *
     }
     if (!pw) return -1;
 
-    snprintf( console, sizeof(console), "%s/seat0/%u/priv.sock", g_seat_root, (unsigned)pw->pw_uid );
-    if (!test_cmd && (fd = connect_session( console, pw->pw_uid )) >= 0)
+    snprintf( console, sizeof(console), "%s/seat0/%u/control.sock", g_seat_root, (unsigned)pw->pw_uid );
+    if ((!test_cmd || getenv( "SG_RDP_CONSOLE_TEST" )) && (fd = connect_session( console, pw->pw_uid )) >= 0)
     {
         close( fd );
+        if ((fd = take_over_console( console, pw->pw_uid )) >= 0)
+        {
+            *status = SESSION_ATTACHED;
+            return fd;
+        }
         *status = SESSION_AT_CONSOLE;
         return -1;
     }

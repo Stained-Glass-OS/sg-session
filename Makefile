@@ -78,7 +78,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	fi
 	@# The per-user process agent (ADR 0014). sg-session-start launches it.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
-	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate \
+	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate build/sg-netmountd \
 	    $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-procmem-probe.exe ]; then \
 	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -112,7 +112,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
-	install -m 0755 domain/sg-domain-groups $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 domain/sg-domain-groups domain/sg-domain-logon domain/sg-gpo-user $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-greeter64.exe ]; then \
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe build/sg-consent64.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -126,21 +126,25 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
-	    systemd/sg-installd@.service systemd/sg-rdpd.service $(UNITDIR)
+	    systemd/sg-installd@.service systemd/sg-rdpd.service \
+	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
+	install -d $(UNITDIR)/user-runtime-dir@.service.d
+	install -m 0644 systemd/user-runtime-dir@.service.d/50-stained-glass-drives.conf \
+	    $(UNITDIR)/user-runtime-dir@.service.d/
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups test/setup-e2e.sh \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
@@ -249,6 +253,7 @@ procagent:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-procagent procagent/sg-procagent.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-brokerd broker/sg-brokerd.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-elevate broker/sg-elevate.c
+	$(CC) $(CFLAGS_BRIDGE) -Wno-format-truncation -o build/sg-netmountd domain/sg-netmountd.c -lresolv
 	@# The cross-process probe for sg-procagent-check (Windows PE, optional).
 	@if command -v $(MINGW64) >/dev/null 2>&1; then \
 	    $(MINGW64) -O2 -o build/sg-procmem-probe.exe test/sg-procmem-probe.c && \

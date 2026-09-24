@@ -1,0 +1,98 @@
+#!/bin/sh
+# A domain user's home drive and logon script at sign-in (D1).
+#
+# pam_exec runs this as root when a session opens and closes (pam-configs
+# stained-glass-domain-groups, turned on by sg-domain-join). Windows maps
+# the account's home folder (homeDirectory, e.g. \\dc1\home\alice) to its
+# home drive (homeDrive, H:) and runs its logon script (scriptPath, relative
+# to \\DOMAIN\NETLOGON). The account's attributes come from the directory
+# over the machine account (net ads search -P); the shares are mounted by
+# sg-netmountd with the *user's* Kerberos ticket, which pam_winbind got
+# during sign-in, so the file server decides what they may reach.
+#
+# The script itself is run by the session (lib/sg-run-explorer), as the
+# user, once the desktop is starting: this only records where it is.
+set -u
+grep -qx 'role=member' /etc/stained-glass/role 2>/dev/null || exit 0
+# The per-user service manager's own PAM session (user@.service) is not a
+# sign-in: it would map everything again, and it outlives the real session.
+[ "${PAM_SERVICE:-}" = systemd-user ] && exit 0
+user=${PAM_USER:-}
+[ -n "$user" ] || exit 0
+wbinfo --name-to-sid "$user" >/dev/null 2>&1 || exit 0
+uid=$(id -u "$user" 2>/dev/null) || exit 0
+
+NETMOUNT=/usr/libexec/stained-glass/sg-netmountd
+DIR=/run/stained-glass-net/drives/$uid
+log() { logger -t sg-domain-logon -- "$*"; }
+
+# Only sign-in. The drive letters go with the user's last session:
+# user-runtime-dir@.service's ExecStop removes them (a drop-in in this
+# package), since a session ended by logind leaves no PAM close to run.
+[ "${PAM_TYPE:-}" = open_session ] || exit 0
+
+attrs=$(timeout 20 net ads search -P "(sAMAccountName=$user)" homeDirectory homeDrive scriptPath 2>/dev/null) || exit 0
+attr() { printf '%s\n' "$attrs" | sed -n "s/^$1: //p" | head -n 1 | tr -d '\r'; }
+home=$(attr homeDirectory)
+drive=$(attr homeDrive)
+script=$(attr scriptPath)
+domain=$(sed -n 's/^domain=//p' /etc/stained-glass/role)
+
+# \\server\share\dir\dir -> server share dir dir, as separate arguments
+unc_args() {
+    # shellcheck disable=SC1003  # tr's argument is one backslash
+    printf '%s' "$1" | sed 's/^\\\\//; s/\\$//' | tr '\\' '\n'
+}
+
+mkdir -p "$DIR" && chmod 0755 "$DIR"
+rm -f "$DIR/logon-script" "$DIR/user-policy.reg" "$DIR/volatile.reg"
+
+# The variables a Windows domain logon sets (Volatile Environment): the
+# domain, the domain controller that signed the user in, and -- with a home
+# folder -- HOMEDRIVE, HOMESHARE and HOMEPATH. The session imports them into
+# HKCU before anything starts, so every program and logon script sees them.
+realm=$(sed -n 's/^realm=//p' /etc/stained-glass/role)
+dc=$(timeout 20 net ads info 2>/dev/null | sed -n 's/^LDAP server name: //p' | cut -d. -f1 | tr '[:lower:]' '[:upper:]')
+regq() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
+{
+    printf 'Windows Registry Editor Version 5.00\r\n\r\n[HKEY_CURRENT_USER\\Volatile Environment]\r\n'
+    printf '"USERDOMAIN"="%s"\r\n"USERDOMAIN_ROAMINGPROFILE"="%s"\r\n' "$domain" "$domain"
+    [ -n "$realm" ] && printf '"USERDNSDOMAIN"="%s"\r\n' "$realm"
+    [ -n "$dc" ] && printf '"LOGONSERVER"="%s"\r\n' "$(regq "\\\\$dc")"
+    if [ -n "$home" ] && [ -n "$drive" ]; then
+        # shellcheck disable=SC1003  # the argument is one backslash
+        printf '"HOMEDRIVE"="%s"\r\n"HOMESHARE"="%s"\r\n"HOMEPATH"="%s"\r\n' \
+            "$drive" "$(regq "$home")" "$(regq '\')"
+    fi
+} > "$DIR/volatile.reg"
+chmod 0644 "$DIR/volatile.reg"
+if [ -n "$home" ] && [ -n "$drive" ]; then
+    letter=$(printf '%s' "$drive" | cut -c1)
+    # One argument per UNC component, split on newlines (a component may hold spaces).
+    old_ifs=$IFS
+    IFS='
+'
+    # shellcheck disable=SC2046
+    if out=$(timeout 30 "$NETMOUNT" --uid "$uid" MAP "$letter" $(unc_args "$home")); then
+        case "$out" in OK*) log "$user: $drive is $home" ;; *) log "$user: cannot map $drive to $home: $out" ;; esac
+    fi
+    IFS=$old_ifs
+fi
+
+if [ -n "$script" ] && [ -n "$domain" ]; then
+    # The share is mounted now, with the user's ticket, so the script can run.
+    out=$(timeout 30 "$NETMOUNT" --uid "$uid" MOUNT "$domain" netlogon)
+    # shellcheck disable=SC1003  # tr's argument is one backslash
+    case "$out" in
+    OK*) script_win=$(printf '%s' "$script" | tr '/' '\\')
+         printf '\\\\%s\\NETLOGON\\%s\n' "$domain" "$script_win" > "$DIR/logon-script"
+         chmod 0644 "$DIR/logon-script"
+         log "$user: logon script \\\\$domain\\NETLOGON\\$script_win" ;;
+    *)   log "$user: cannot reach NETLOGON for the logon script: $out" ;;
+    esac
+fi
+
+# Group Policy: drive maps, logon scripts, user registry policy (the GPOs
+# that apply to this user; each step is best effort).
+timeout 90 /usr/libexec/stained-glass/sg-gpo-user "$user" "$uid" "$DIR" || true
+exit 0

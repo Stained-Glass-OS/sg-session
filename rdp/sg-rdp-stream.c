@@ -35,6 +35,8 @@ struct sg_stream
     struct wl_shm *shm;
     struct wl_seat *seat;
     struct wl_output *output;
+    uint32_t output_global;      /* its registry name: the newest output is taken */
+    uint32_t pointer_manager_version;
     struct zwlr_screencopy_manager_v1 *screencopy;
     struct zwlr_virtual_pointer_manager_v1 *pointer_manager;
     struct zwp_virtual_keyboard_manager_v1 *keyboard_manager;
@@ -96,15 +98,25 @@ static void registry_global( void *d, struct wl_registry *r, uint32_t name, cons
         s->shm = wl_registry_bind( r, name, &wl_shm_interface, 1 );
     else if (!strcmp( iface, wl_seat_interface.name ) && !s->seat)
         s->seat = wl_registry_bind( r, name, &wl_seat_interface, 1 );
-    else if (!strcmp( iface, wl_output_interface.name ) && !s->output)
+    else if (!strcmp( iface, wl_output_interface.name ) && (!s->output || name > s->output_global))
     {
+        /* The newest output: a Remote Desktop session's only one, or the one
+         * a console session's compositor made for Remote Desktop when it was
+         * taken over (sg-compositor's REMOTE). */
+        if (s->output) wl_output_destroy( s->output );
+        s->out_w = s->out_h = 0;
+        s->output_global = name;
         s->output = wl_registry_bind( r, name, &wl_output_interface, version < 2 ? version : 2 );
         wl_output_add_listener( s->output, &output_listener, s );
     }
     else if (!strcmp( iface, zwlr_screencopy_manager_v1_interface.name ) && version >= 3)
         s->screencopy = wl_registry_bind( r, name, &zwlr_screencopy_manager_v1_interface, 3 );
     else if (!strcmp( iface, zwlr_virtual_pointer_manager_v1_interface.name ))
-        s->pointer_manager = wl_registry_bind( r, name, &zwlr_virtual_pointer_manager_v1_interface, 1 );
+    {
+        s->pointer_manager_version = version < 2 ? version : 2;
+        s->pointer_manager = wl_registry_bind( r, name, &zwlr_virtual_pointer_manager_v1_interface,
+                                               s->pointer_manager_version );
+    }
     else if (!strcmp( iface, zwp_virtual_keyboard_manager_v1_interface.name ))
         s->keyboard_manager = wl_registry_bind( r, name, &zwp_virtual_keyboard_manager_v1_interface, 1 );
 }
@@ -164,7 +176,12 @@ struct sg_stream *sg_stream_new( int fd, char *err, size_t errlen )
         snprintf( err, errlen, "the session has no screen" );
         goto fail;
     }
-    s->pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer( s->pointer_manager, s->seat );
+    /* Absolute positions are on the captured output, not the whole layout. */
+    if (s->pointer_manager_version >= 2)
+        s->pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output( s->pointer_manager, s->seat,
+                                                                                          s->output );
+    else
+        s->pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer( s->pointer_manager, s->seat );
     s->keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard( s->keyboard_manager, s->seat );
     if (!s->pointer || !s->keyboard || upload_keymap( s ) < 0)
     {

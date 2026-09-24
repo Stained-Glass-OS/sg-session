@@ -475,6 +475,53 @@ are local Users, Domain Admins local Administrators".
   (`test/sg-sspi-probe.c`), a Domain Admin who is an administrator and a Domain
   User who is not.
 
+## Network drives, home drives and logon scripts
+
+`domain/sg-netmountd.c` (root, one instance per connection through
+`sg-netmountd.socket`, `/run/stained-glass-net/netmount.sock`, 0666) mounts
+`\\server\share` for whoever asks. The mount is kernel CIFS with
+`multiuser,sec=krb5,cruid=<peer uid>` at
+`/run/stained-glass-net/unc/<server>/<share>`, and drive letters are symlinks
+in `/run/stained-glass-net/drives/<uid>/<x>:`. **The mount grants nothing:**
+every user reaching it is a separate SMB session on their own Kerberos
+ticket (cifs.upcall finds `/tmp/krb5cc_<uid>`), so the file server decides.
+A user with no ticket gets no mount at all. Names are validated: a server is
+DNS, NetBIOS or IPv4; a share or directory name is what Windows allows, and
+never `.` or `..`. C: and Z: cannot be mapped. `\\DOMAIN\share` (NETLOGON,
+SYSVOL) goes to a domain controller found with DNS SRV. A short name gets the
+domain's DNS suffix so Kerberos finds `cifs/<fqdn>`. wine-sg 0056/0057 are
+the clients; the tab-separated wire format is in wine-sg's CLAUDE.md.
+
+`domain/sg-domain-logon` (pam_exec as root, with sg-domain-groups) reads a
+domain user's homeDirectory, homeDrive and scriptPath with `net ads search -P`
+(the machine account) at session open. It maps the home drive and records
+`\\DOMAIN\NETLOGON\<script>` in the user's drive directory, and
+`lib/sg-run-explorer` runs that script hidden as the desktop starts (Windows
+does not wait for it either). It also records the logon variables
+(USERDOMAIN, LOGONSERVER, HOMEDRIVE/HOMESHARE/HOMEPATH) as `volatile.reg`,
+which the session imports into `HKCU\Volatile Environment` first. Drive
+letters go when the user's last session ends: `user-runtime-dir@.service`'s
+ExecStop (a drop-in), because a session logind ends leaves no PAM close.
+The user service manager's own PAM session (`systemd-user`) is skipped.
+
+`domain/sg-gpo-user` (Python, root, from sg-domain-logon) is the Group Policy
+client for a user. Samba's `get_gpo_list` (machine account) decides which
+GPOs apply: the OU chain, link order, enforced links, and security filtering
+on the user's token. The files come from SYSVOL **with the user's ticket**:
+SYSVOL is mounted for them and read by a child that has dropped to their uid.
+Samba's own SMB client (`check_refresh_gpo_list`) failed with
+`STATUS_INVALID_PARAMETER_MIX` on a member. Handled: GPP `Drives.xml` (C/U/R/D;
+item-level targeting by security group only, and items with other filters
+are skipped), `scripts.ini` [Logon] (appended to the logon scripts) and user
+`Registry.pol` (to HKCU through sg-polimport).
+
+**The Start menu and the logon scripts wait for the shell's desktop window.**
+A Wine GUI program started before the shell makes Wine create the desktop
+itself (a bare `explorer /desktop`). The shell's explorer then found it taken
+and exited 0, and the supervisor logged "shell exited cleanly: ending the
+session" while the desktop stayed up with nothing watching it. That was the
+cause of the "shell shows as bare /desktop" oddity.
+
 ## Remote Desktop (RDP in)
 
 `sg-rdp-authd` is pattern B of ADR 0010: the technician types the username and
@@ -493,10 +540,18 @@ was accepted. A user with no session gets one: `systemd-run` with
 at the client's size (`SG_OUTPUT_SIZE`) -- in a seat of its own,
 `/run/stained-glass-seat/rdp-<uid>`, with its own `sg-lockd` bound to it, so
 Win+L works remotely and sg-brokerd finds it for consent prompts. Disconnecting
-leaves the session running; the next login reconnects to it, as on Windows. A
-user **signed in at the console** is refused for now: Windows moves that
-session to RDP and locks the console, which needs the compositor to move a
-session between outputs (E1b).
+leaves the session running; the next login reconnects to it, as on Windows.
+
+A user **signed in at the console** has that session taken over, as on
+Windows (E1b). The monitor sends `REMOTE` to the console compositor's control
+socket, with one end of a socketpair as the remote connection. The compositor
+moves the user's windows to an output of its own; the console goes dark and
+deaf except for Ctrl+Alt+Del. When the connection closes, the session goes
+back to the console, locked. The stream always captures the newest output,
+and its virtual pointer is created on that output. See sg-compositor's
+CLAUDE.md. In the gate, the console phase first stops the prefix's
+wineserver: a Wine desktop that belonged to a vanished X server makes the next
+Wine process on another one die of BadWindow.
 
 `rdp/sg-rdp-stream.c` is the stream: screencopy frames (pointer drawn in,
 `copy_with_damage` paces it), 64x64 tiles compared with the last frame sent,

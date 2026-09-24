@@ -1,3 +1,27 @@
+sg-session (0.1.0-8) unstable; urgency=medium
+
+  * Network drives (D1): sg-netmountd mounts \\server\share for a user with
+    their own Kerberos ticket (kernel CIFS, multiuser, so the file server
+    checks each user) under /run/stained-glass-net/unc, and keeps each
+    user's drive letters in /run/stained-glass-net/drives/<uid>. Socket
+    activated (sg-netmountd.socket); wine-sg 0056/0057 use it.
+  * sg-domain-logon (pam_exec, with sg-domain-groups): a domain user's home
+    drive (homeDirectory/homeDrive) is mapped at sign-in and their logon
+    script (scriptPath, from NETLOGON) recorded; the session runs it hidden
+    as the desktop starts. Drive letters go with the last session
+    (user-runtime-dir@.service drop-in).
+  * sg-gpo-user: a domain user's Group Policy at sign-in -- GPP drive maps,
+    GPO logon scripts, user Registry.pol into HKCU -- from the GPOs Samba's
+    get_gpo_list selects, read from SYSVOL with the user's own ticket.
+  * The domain logon variables (USERDOMAIN, LOGONSERVER, HOMEDRIVE/SHARE/PATH)
+    go into Volatile Environment before the session starts.
+  * The Start menu and logon scripts start once the shell owns the desktop:
+    started first, they made Wine create the desktop itself, and the shell's
+    explorer exited at once, which the supervisor took for a sign-out.
+  * Remote Desktop takes over a session signed in at the console (E1b).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 24 Sep 2026 12:17:14 -0700
+
 sg-session (0.1.0-7) unstable; urgency=medium
 
   * The machine's wineserver owns the prefix at boot: sg-prefix-init stops the

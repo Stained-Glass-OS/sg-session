@@ -1,0 +1,17 @@
+# Network drives and UNC paths (sg-netmountd): any local user may ask for a
+# share to be mounted with their own Kerberos ticket, or for a drive letter
+# of their own. wine-sg's ntdll asks here when a program opens \\server\share.
+[Unit]
+Description=Stained Glass network drive socket
+
+[Socket]
+ListenStream=/run/stained-glass-net/netmount.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0666
+DirectoryMode=0755
+Accept=yes
+MaxConnections=64
+
+[Install]
+WantedBy=sockets.target

@@ -118,19 +118,48 @@ reg_set() {
 reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
 reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 
-# The Start menu, if sg-shell is installed. It runs alongside the shell as a
-# persistent listener; explorer's Start button toggles it (wine-sg patch 0012).
-# Backgrounded and best-effort: a session without it still has Wine's built-in
-# Start menu, so this must never block the shell coming up.
-_sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
-if [ -f "$_sgstart" ]; then
-    sg_log "starting the Start menu (sg-start)"
-    # Its output goes where the session's does -- the journal, as this user
-    # (sg-session-start runs the compositor under systemd-cat), which a user
-    # can read for themselves and not for anyone else. It used to append to a
-    # file in the shared log directory, readable by every user (debt D11).
-    wine "$_sgstart" &
+# A domain user's registry policy (Group Policy, recorded at sign-in by
+# sg-domain-logon) goes into HKCU before the shell starts, as Windows applies
+# it before the desktop. reg.exe, a console program: it opens no desktop.
+_netdir="/run/stained-glass-net/drives/$(id -u)"
+if [ -r "$_netdir/volatile.reg" ]; then
+    wine reg import "Z:$_netdir/volatile.reg" >/dev/null 2>&1 || sg_log "the domain logon variables were not set"
 fi
+if [ -r "$_netdir/user-policy.reg" ]; then
+    sg_log "applying the user's Group Policy registry settings"
+    wine reg import "Z:$_netdir/user-policy.reg" >/dev/null 2>&1 || sg_log "user policy was not applied"
+fi
+
+# What starts alongside the shell waits until the shell owns the desktop.
+# A GUI program started first makes Wine create the desktop itself (a bare
+# `explorer /desktop`); the shell's own explorer then found it taken, exited
+# 0 at once, and the supervisor below took that for a sign-out -- the desktop
+# stayed up, but with nothing watching it.
+#   - the Start menu, if sg-shell is installed: a persistent listener that
+#     explorer's Start button toggles (wine-sg patch 0012). Best-effort: a
+#     session without it still has Wine's built-in Start menu. Its output
+#     goes where the session's does -- the journal, as this user (debt D11).
+#   - a domain user's logon scripts (the account's scriptPath from NETLOGON,
+#     then the GPOs'), one after another, hidden; Windows does not wait for
+#     them either.
+_sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
+(
+    _w=0
+    while [ "$_w" -lt 120 ] && ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; do
+        sleep 0.5; _w=$((_w + 1))
+    done
+    if [ -f "$_sgstart" ]; then
+        sg_log "starting the Start menu (sg-start)"
+        wine "$_sgstart" &
+    fi
+    if [ -r "$_netdir/logon-script" ]; then
+        cd / && while IFS= read -r _script; do
+            [ -n "$_script" ] || continue
+            sg_log "running the logon script $_script"
+            wine cmd.exe /c "$_script" </dev/null
+        done < "$_netdir/logon-script"
+    fi
+) &
 
 # The shell: a single virtual-desktop window named "shell" at the output size.
 #

@@ -1,0 +1,297 @@
+#!/usr/bin/python3
+# A domain user's Group Policy at sign-in (D1): drive maps, logon scripts and
+# user registry policy.
+#
+#   sg-gpo-user USER UID DIR
+#
+# Run as root by sg-domain-logon. The list of GPOs that apply to the user --
+# their OU chain, link order, enforced links, security filtering on their
+# token -- is Samba's (samba.gp.gpclass.get_gpo_list, the machine account's
+# credentials), and so is the download of those GPOs from SYSVOL. What is
+# done with them is ours, as Windows' client-side extensions would:
+#
+#   User\Preferences\Drives\Drives.xml   Group Policy Preferences drive maps
+#                                        (MS-GPPREF): mapped with the user's
+#                                        own ticket by sg-netmountd
+#   User\Scripts\scripts.ini [Logon]     logon scripts: appended to
+#                                        DIR/logon-script, run by the session
+#   User\Registry.pol                    the user's registry policy: converted
+#                                        to DIR/user-policy.reg, imported into
+#                                        HKCU by the session
+#
+# Everything is best effort: a sign-in never fails because Group Policy did.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import configparser
+import os
+import re
+import subprocess
+import sys
+import struct
+import syslog
+import tempfile
+import xml.etree.ElementTree as ET
+
+NETMOUNT = "/usr/libexec/stained-glass/sg-netmountd"
+POLIMPORT = "/usr/libexec/stained-glass/sg-polimport"
+
+
+def read_as_user(uid, paths):
+    """Read files as the user (their Kerberos ticket reaches the share): a
+    forked child drops to their uid and sends each file back, or nothing."""
+    import pwd
+    pw = pwd.getpwuid(uid)
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(r)
+            os.setgroups([])
+            os.setgid(pw.pw_gid)
+            os.setuid(uid)
+            with os.fdopen(w, "wb") as out:
+                for p in paths:
+                    try:
+                        with open(p, "rb") as f:
+                            data = f.read(4 * 1024 * 1024)
+                        out.write(struct.pack("<q", len(data)) + data)
+                    except OSError:
+                        out.write(struct.pack("<q", -1))
+        finally:
+            os._exit(0)
+    os.close(w)
+    result = {}
+    with os.fdopen(r, "rb") as f:
+        for p in paths:
+            head = f.read(8)
+            if len(head) < 8:
+                break
+            n = struct.unpack("<q", head)[0]
+            result[p] = f.read(n) if n >= 0 else None
+    os.waitpid(pid, 0)
+    return result
+
+
+def log(msg):
+    syslog.syslog(syslog.LOG_INFO, msg)
+
+
+def user_sids(user):
+    """The user's SID and group SIDs, as winbind knows them."""
+    try:
+        sid = subprocess.run(["wbinfo", "--name-to-sid", user], capture_output=True, text=True,
+                             timeout=20).stdout.split()[0]
+        out = subprocess.run(["wbinfo", "--user-sids", sid], capture_output=True, text=True,
+                             timeout=20).stdout.split()
+        return set([sid] + out)
+    except Exception:
+        return set()
+
+
+def expand(text, user, domain):
+    """The GPP variables a drive path uses most."""
+    for name, value in (("LogonUser", user), ("UserName", user), ("LogonDomain", domain)):
+        text = re.sub("%" + name + "%", value, text, flags=re.I)
+    return text
+
+
+def filters_pass(item, sids):
+    """Item-level targeting: security groups only (FilterGroup). An item with
+    any other kind of filter is skipped rather than applied to everyone."""
+    filters = item.find("Filters")
+    if filters is None or len(filters) == 0:
+        return True
+    result = None
+    for f in filters:
+        if f.tag != "FilterGroup":
+            return False
+        match = f.get("sid", "") in sids
+        if f.get("not") == "1":
+            match = not match
+        if result is None:
+            result = match
+        elif f.get("bool", "AND").upper() == "OR":
+            result = result or match
+        else:
+            result = result and match
+    return bool(result)
+
+
+def netmount(uid, *args):
+    try:
+        out = subprocess.run([NETMOUNT, "--uid", str(uid)] + list(args), capture_output=True,
+                             text=True, timeout=40).stdout.strip()
+    except Exception as e:
+        out = "ERR %s" % e
+    return out
+
+
+def unc_parts(path):
+    parts = [p for p in path.strip().lstrip("\\").split("\\") if p]
+    return parts if len(parts) >= 2 else None
+
+
+def apply_drives(xml_data, user, uid, domain, sids):
+    try:
+        root = ET.fromstring(xml_data)
+    except Exception as e:
+        log("%s: unreadable Drives.xml: %s" % (user, e))
+        return
+    for drive in root.findall("Drive"):
+        if drive.get("disabled") == "1" or not filters_pass(drive, sids):
+            continue
+        props = drive.find("Properties")
+        if props is None:
+            continue
+        action = (props.get("action") or "U").upper()
+        letter = (props.get("letter") or "").strip()[:1]
+        if props.get("useLetter", "1") != "1" or not letter.isalpha():
+            log("%s: drive map without a letter is not supported (%s)" % (user, props.get("path")))
+            continue
+        if action == "D":
+            netmount(uid, "UNMAP", letter)
+            log("%s: GPO removes %s:" % (user, letter.upper()))
+            continue
+        parts = unc_parts(expand(props.get("path", ""), user, domain))
+        if not parts:
+            continue
+        if action == "R":
+            netmount(uid, "UNMAP", letter)
+        out = netmount(uid, "MAP", letter, *parts)
+        log("%s: GPO maps %s: to \\\\%s: %s" % (user, letter.upper(), "\\".join(parts), out))
+
+
+def read_ini(data):
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        text = data.decode("utf-16")
+    else:
+        text = data.decode("utf-8", "replace")
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    parser.read_string(text)
+    return parser
+
+
+def logon_scripts(ini_data, gpo_unc):
+    """[Logon] nCmdLine / nParameters, in order; relative names are in the
+    GPO's User\\Scripts\\Logon folder."""
+    lines = []
+    try:
+        ini = read_ini(ini_data)
+    except Exception:
+        return lines
+    section = next((s for s in ini.sections() if s.lower() == "logon"), None)
+    if not section:
+        return lines
+    keys = {k.lower(): v for k, v in ini.items(section)}
+    n = 0
+    while ("%dcmdline" % n) in keys:
+        cmd = keys["%dcmdline" % n].strip()
+        params = keys.get("%dparameters" % n, "").strip()
+        if cmd:
+            if not cmd.startswith("\\\\") and not re.match(r"^[A-Za-z]:", cmd):
+                cmd = gpo_unc + "\\User\\Scripts\\Logon\\" + cmd
+            lines.append((cmd + " " + params).strip())
+        n += 1
+    return lines
+
+
+def main():
+    if len(sys.argv) != 4:
+        print("usage: sg-gpo-user USER UID DIR", file=sys.stderr)
+        return 2
+    user, uid, outdir = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+    syslog.openlog("sg-gpo-user")
+
+    from samba.param import LoadParm
+    from samba.credentials import Credentials
+    from samba.gp.gpclass import get_dc_hostname, get_gpo_list
+
+    lp = LoadParm()
+    lp.load_default()
+    creds = Credentials()
+    creds.guess(lp)
+    creds.set_machine_account(lp)
+    domain = lp.get("workgroup") or ""
+    realm = (lp.get("realm") or "").lower()
+
+    dc = get_dc_hostname(creds, lp)
+    gpos = get_gpo_list(dc, creds, lp, user)
+    sids = user_sids(user)
+    log("%s: %d GPOs apply: %s" % (user, len(gpos), ", ".join(g.display_name or g.name for g in gpos)))
+
+    # The GPOs' files come from SYSVOL with the user's own ticket, as Windows
+    # reads user policy as the user: the share is mounted for them by
+    # sg-netmountd, and read by a child running as them.
+    out = netmount(uid, "MOUNT", domain, "sysvol")
+    if not out.startswith("OK "):
+        log("%s: SYSVOL not reachable: %s" % (user, out))
+        return 0
+    sysvol = out[3:].strip()
+    wanted = {}
+    for gpo in gpos:
+        if not gpo.file_sys_path:
+            continue
+        parts = [p for p in gpo.file_sys_path.split("\\") if p]
+        # \\realm\sysvol\realm\Policies\{GUID}: below the share
+        low = [p.lower() for p in parts]
+        if "sysvol" not in low or ".." in parts:
+            continue
+        rel = parts[low.index("sysvol") + 1:]
+        base = os.path.join(sysvol, *rel)
+        gpo_unc = "\\\\%s\\SysVol\\%s" % (domain, "\\".join(rel))
+        wanted[gpo.name] = (base, gpo_unc)
+    files = read_as_user(uid, [os.path.join(b, *f) for b, _ in wanted.values()
+                               for f in (("User", "Preferences", "Drives", "Drives.xml"),
+                                         ("User", "Scripts", "scripts.ini"), ("User", "Registry.pol"))])
+
+    scripts, policy = [], []
+    for gpo in gpos:
+        if gpo.name not in wanted:
+            continue
+        base, gpo_unc = wanted[gpo.name]
+        data = files.get(os.path.join(base, "User", "Preferences", "Drives", "Drives.xml"))
+        if data:
+            apply_drives(data, user, uid, domain, sids)
+        data = files.get(os.path.join(base, "User", "Scripts", "scripts.ini"))
+        if data:
+            scripts += logon_scripts(data, gpo_unc)
+        data = files.get(os.path.join(base, "User", "Registry.pol"))
+        if data and os.access(POLIMPORT, os.X_OK):
+            with tempfile.NamedTemporaryFile(suffix=".pol") as f:
+                f.write(data)
+                f.flush()
+                reg = subprocess.run([POLIMPORT, f.name], capture_output=True, text=True, timeout=20).stdout
+            # sg-polimport writes machine policy; this is the user's
+            policy.append(reg.replace("[HKEY_LOCAL_MACHINE\\", "[HKEY_CURRENT_USER\\"))
+
+    if scripts:
+        with open(os.path.join(outdir, "logon-script"), "a") as f:
+            for line in scripts:
+                f.write(line + "\n")
+                log("%s: GPO logon script %s" % (user, line))
+        os.chmod(os.path.join(outdir, "logon-script"), 0o644)
+    if policy:
+        path = os.path.join(outdir, "user-policy.reg")
+        with open(path, "w") as f:
+            f.write("Windows Registry Editor Version 5.00\n\n")
+            for chunk in policy:
+                f.write("\n".join(l for l in chunk.splitlines()
+                                  if not l.startswith("Windows Registry Editor") and not l.startswith("REGEDIT")))
+                f.write("\n")
+        os.chmod(path, 0o644)
+        log("%s: user registry policy from %d GPOs" % (user, len(policy)))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as e:  # a sign-in never fails because Group Policy did
+        import traceback
+        syslog.openlog("sg-gpo-user")
+        log("Group Policy for %s not applied: %s" % (sys.argv[1] if len(sys.argv) > 1 else "?", e))
+        for line in traceback.format_exc().splitlines():
+            log(line)
+        sys.exit(0)

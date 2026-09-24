@@ -14,6 +14,9 @@
 #   - disconnecting leaves the session running; logging in again reconnects
 #     to the same one, not a second
 #   - when the session ends, the client is disconnected
+#   - a user signed in at the console has that session taken over (E1b): the
+#     client shows the console's program and types into it, no second
+#     session starts, and disconnecting gives it back to the console locked
 #   - no password appears in the log
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -25,7 +28,7 @@ PMDIR=/usr/lib/x86_64-linux-gnu/pam_wrapper
 PORT="${SG_RDP_TEST_PORT:-33900}"
 DPY_N="${SG_RDP_TEST_DISPLAY:-96}"
 RC=0
-DPID=""; XPID=""; CPID=""
+DPID=""; XPID=""; CPID=""; KPID=""
 
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
@@ -44,6 +47,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # shellcheck disable=SC2317  # invoked via trap
 cleanup() {
     [ -n "$CPID" ] && kill "$CPID" 2>/dev/null
+    [ -n "$KPID" ] && kill "$KPID" 2>/dev/null
     [ -n "$DPID" ] && kill "$DPID" 2>/dev/null
     [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
     [ -f "$T/session.pid" ] && kill "$(cat "$T/session.pid")" 2>/dev/null
@@ -85,7 +89,7 @@ chmod +x "$T/session.sh"
 
 PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$T/pam.d" LD_PRELOAD="$PW" \
 SG_RDP_PAMCHECK="$BUILD/sg-rdp-pamcheck" SG_RDP_CERT="$T/cert.pem" SG_RDP_KEY="$T/key.pem" \
-SG_RDP_FRAME_DUMP="$T/frame.ppm" SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$T/authd.log" SG_RDP_SEAT_ROOT="$T/seat" SG_RDP_SESSION_CMD="$T/session.sh" \
+SG_RDP_FRAME_DUMP="$T/frame.ppm" SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$T/authd.log" SG_RDP_SEAT_ROOT="$T/seat" SG_RDP_SESSION_CMD="$T/session.sh" SG_RDP_CONSOLE_TEST=1 \
     "$BUILD/sg-rdp-authd" "$PORT" >"$T/authd.out" 2>&1 &
 DPID=$!
 
@@ -194,6 +198,55 @@ if wait_log 'SESSION ended' "$T/authd.log" 20; then
     else pass "when the session ends, the client is disconnected"; fi
 else fail "the daemon did not notice the session end"; fi
 CPID=""
+
+# ---- a session at the console is taken over (E1b) ----------------------------
+control() {   # control CMD: the console compositor's answer
+    python3 -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.argv[2].encode() + b"\n")
+print(s.recv(128).decode().strip())' "$T/seat/seat0/$(id -u)/control.sock" "$1" 2>/dev/null
+}
+mkdir -p "$T/seat/seat0/$(id -u)"
+# A fresh Windows system: the remote session's desktop belonged to an X
+# server that has gone, and a new Wine process on another one would trip
+# over its windows.
+"$WINE_DIR/bin/wineserver" -k 2>/dev/null; sleep 1
+(unset LD_PRELOAD PAM_WRAPPER PAM_WRAPPER_SERVICE_DIR
+ SG_OUTPUT_SIZE=1024x768 WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+ exec "$COMP" -L "$T/seat/seat0/$(id -u)/priv.sock" -C "$T/seat/seat0/$(id -u)/control.sock" -U "$(id -u)" -- \
+    env -u WAYLAND_DISPLAY "$WINE_DIR/bin/wine" "$T/rdp-target.exe" "$T/console-target.log" 2>"$T/console.log") &
+KPID=$!
+wait_log '^ready' "$T/console-target.log" 60 || fail "the console session did not start: $(tail -5 "$T/console.log" 2>/dev/null)"
+starts_before=$(grep -c . "$T/session-starts")
+client alice correct-horse
+if wait_log 'console session taken over' "$T/authd.log" 30; then
+    pass "a login for a user signed in at the console takes that session over"
+else fail "console take-over: $(tail -3 "$T/authd.log"); console: $(tail -3 "$T/console.log" 2>/dev/null | tr '\n' ' ')"; fi
+if [ "$(control STATUS)" = "OK unlocked" ] && [ "$(grep -c . "$T/session-starts")" = "$starts_before" ]; then
+    pass "no second session: the console's own, unlocked for the remote user"
+else fail "after take-over: status '$(control STATUS)', $(grep -c . "$T/session-starts") session(s) started"; fi
+got=""; _w=0
+while [ $_w -lt 30 ]; do got=$(colour_at 100 100); [ "$got" = 129A3C ] && break; sleep 1; _w=$((_w + 1)); done
+if [ "$got" = 129A3C ]; then pass "the client shows the console session's program"
+else fail "take-over: the client shows #$got"; fi
+WIN=$(DISPLAY=":$DPY_N" xdotool search --class freerdp 2>/dev/null | head -1)
+DISPLAY=":$DPY_N" xdotool windowfocus "$WIN" mousemove 300 200 click 1 2>/dev/null
+sleep 2
+typed=""; _w=0
+while [ $_w -lt 4 ]; do
+    DISPLAY=":$DPY_N" xdotool type --delay 120 "glass" 2>/dev/null
+    sleep 2
+    typed=$(tr -d '\r' < "$T/console-target.log" | sed -n 's/^char //p' | tr -d '\n')
+    case "$typed" in *glass*) break ;; esac
+    _w=$((_w + 1))
+done
+case "$typed" in *glass*) pass "typing reaches the console session's program remotely ('glass')" ;;
+    *) fail "the console's program received '$typed'" ;; esac
+kill "$CPID" 2>/dev/null; wait "$CPID" 2>/dev/null; CPID=""
+_w=0; until [ "$(control STATUS)" = "OK locked" ] || [ $_w -ge 40 ]; do sleep 0.5; _w=$((_w + 1)); done
+if [ "$(control STATUS)" = "OK locked" ] && kill -0 "$KPID" 2>/dev/null; then
+    pass "disconnecting gives the session back to the console, locked"
+else fail "after disconnect: status '$(control STATUS)'"; fi
+kill "$KPID" 2>/dev/null; KPID=""
 
 case "$(cat "$T/authd.log")" in *correct-horse*) fail "a password appeared in the log" ;;
     *) pass "no password appears in the log" ;; esac

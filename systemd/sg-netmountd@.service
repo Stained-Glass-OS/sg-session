@@ -1,0 +1,9 @@
+[Unit]
+Description=Stained Glass network drive request
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=/usr/libexec/stained-glass/sg-netmountd
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

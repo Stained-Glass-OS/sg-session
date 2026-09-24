@@ -1,6 +1,7 @@
-Name: Stained Glass OS: a domain user's local groups at sign-in (domain members)
+Name: Stained Glass OS: a domain user's local groups, home drive and logon script at sign-in (domain members)
 Default: no
 Priority: 0
 Session-Type: Additional
 Session:
 	optional	pam_exec.so quiet /usr/libexec/stained-glass/sg-domain-groups
+	optional	pam_exec.so quiet /usr/libexec/stained-glass/sg-domain-logon
