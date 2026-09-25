@@ -1,0 +1,487 @@
+#!/usr/bin/python3
+# sg-settingsctl -- the native half of Settings (sg-shell's SystemSettings):
+# what a Windows program cannot reach on its own -- the sound server, the
+# Bluetooth daemon, the compositor's outputs and colour temperature, the idle
+# timers, and apt's view of pending updates. Everything here runs as the
+# signed-in user; root's work (the time zone, the computer name, fetching
+# updates) goes through sg-admind, never here.
+#
+# Wine gives a Windows program no pipes to a native one, so the caller passes
+# --out FILE and reads the answer from it (as sg-dictate --mics does). The
+# last line of every answer is OK or ERROR <kind> <message>; kind is one of
+# invalid (exit 2), unsupported (4), notfound (5), failed (1).
+#
+#   sg-settingsctl sound
+#       SINK|SOURCE <name>\t<default yes|no>\t<volume %>\t<muted yes|no>\t<description>
+#   sg-settingsctl sound default sink|source NAME
+#   sg-settingsctl sound volume sink|source NAME PERCENT      (0-150)
+#   sg-settingsctl sound mute sink|source NAME yes|no
+#   sg-settingsctl bluetooth
+#       BLUETOOTH yes|no, POWERED yes|no,
+#       DEVICE <mac>\t<connected yes|no>\t<paired yes|no>\t<name>
+#   sg-settingsctl bluetooth power on|off
+#   sg-settingsctl bluetooth connect|disconnect|remove|pair MAC
+#   sg-settingsctl bluetooth scan [SECONDS]            (then lists, as above)
+#   sg-settingsctl display
+#       OUTPUT <name>\t<WxH@Hz>\t<scale>\t<description>
+#       MODE <name>\t<WxH@Hz>\t<current yes|no>\t<preferred yes|no>
+#   sg-settingsctl display mode OUTPUT WxH[@Hz]
+#   sg-settingsctl display scale OUTPUT SCALE                  (1-3, steps of .25)
+#   sg-settingsctl nightlight [on|off] [--temp K]
+#       NIGHTLIGHT on|off\t<K>\t<available yes|no>\t<running yes|no>
+#   sg-settingsctl power [--screen MIN] [--sleep MIN]         (0 = never)
+#       POWER <screen min>\t<sleep min>\t<available yes|no>\t<running yes|no>
+#   sg-settingsctl updates
+#       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
+#   sg-settingsctl session-start      apply night light and the idle timers
+#
+# Settings are the user's: ~/.config/stained-glass/settings.json.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+
+EXIT = {"invalid": 2, "unsupported": 4, "notfound": 5, "failed": 1}
+
+
+class Fail(Exception):
+    def __init__(self, kind, msg):
+        super().__init__(msg)
+        self.kind = kind
+
+
+# ---- plumbing ---------------------------------------------------------------------------
+
+def tool(name):
+    """The tool's path: SG_SETTINGSCTL_TOOLS first (the gate's stand-ins), then
+    PATH, then the usual places -- a native program started by Wine may carry
+    the Windows PATH, not ours."""
+    for d in filter(None, [os.environ.get("SG_SETTINGSCTL_TOOLS")]):
+        p = os.path.join(d, name)
+        if os.access(p, os.X_OK):
+            return p
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in ("/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin"):
+        p = os.path.join(d, name)
+        if os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def run(argv, timeout=15, check=True):
+    exe = tool(argv[0])
+    if not exe:
+        raise Fail("unsupported", "%s is not installed" % argv[0])
+    env = dict(os.environ, LC_ALL="C", LANG="C")
+    try:
+        r = subprocess.run([exe] + argv[1:], capture_output=True, text=True, timeout=timeout,
+                           env=env, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise Fail("failed", "%s did not answer" % argv[0])
+    except OSError as e:
+        raise Fail("failed", "%s: %s" % (argv[0], e))
+    if check and r.returncode != 0:
+        err = (r.stderr or r.stdout).strip().splitlines()
+        raise Fail("failed", "%s: %s" % (argv[0], err[-1] if err else "exit %d" % r.returncode))
+    return r.stdout
+
+
+def config_path():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "stained-glass", "settings.json")
+
+
+def load_config():
+    try:
+        with open(config_path(), encoding="utf-8") as f:
+            c = json.load(f)
+            return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(c):
+    path = config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(c, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def runtime_dir():
+    d = os.environ.get("XDG_RUNTIME_DIR")
+    if d and os.path.isdir(d):
+        return d
+    d = os.path.join("/tmp", "sg-settings-%d" % os.getuid())
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    return d
+
+
+def pid_alive(name):
+    """The pid in <runtime>/<name>.pid if that process is still ours and alive."""
+    try:
+        with open(os.path.join(runtime_dir(), name + ".pid")) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        with open("/proc/%d/status" % pid) as f:
+            for line in f:
+                if line.startswith("Uid:") and int(line.split()[1]) != os.getuid():
+                    return 0
+        return pid
+    except (OSError, ValueError):
+        return 0
+
+
+def stop(name):
+    pid = pid_alive(name)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    try:
+        os.unlink(os.path.join(runtime_dir(), name + ".pid"))
+    except OSError:
+        pass
+
+
+def start(name, argv):
+    """Start a long-running helper, detached, and remember its pid."""
+    stop(name)
+    exe = tool(argv[0])
+    if not exe:
+        raise Fail("unsupported", "%s is not installed" % argv[0])
+    p = subprocess.Popen([exe] + argv[1:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    with open(os.path.join(runtime_dir(), name + ".pid"), "w") as f:
+        f.write("%d\n" % p.pid)
+
+
+def yn(v):
+    return "yes" if v else "no"
+
+
+def one_of(v, allowed, what):
+    if v not in allowed:
+        raise Fail("invalid", "%s must be one of %s" % (what, ", ".join(allowed)))
+    return v
+
+
+def integer(v, lo, hi, what):
+    if not re.fullmatch(r"\d{1,5}", v or "") or not lo <= int(v) <= hi:
+        raise Fail("invalid", "%s must be a number from %d to %d" % (what, lo, hi))
+    return int(v)
+
+
+def clean(s):
+    return re.sub(r"[\t\r\n]", " ", str(s))
+
+
+# ---- sound (PipeWire, through pactl) ------------------------------------------------------
+
+DEVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,199}")
+
+
+def device_name(v):
+    if not DEVICE_NAME.fullmatch(v or ""):
+        raise Fail("invalid", "not a device name")
+    return v
+
+
+def percent_of(dev):
+    vols = []
+    for ch in (dev.get("volume") or {}).values():
+        m = re.match(r"\s*(\d+)%", str(ch.get("value_percent", "")))
+        if m:
+            vols.append(int(m.group(1)))
+    return max(vols) if vols else 0
+
+
+def sound(args):
+    if not args:
+        out = []
+        for kind, what in (("SINK", "sinks"), ("SOURCE", "sources")):
+            try:
+                devs = json.loads(run(["pactl", "--format=json", "list", what]) or "[]")
+            except ValueError:
+                raise Fail("failed", "pactl gave an answer that is not JSON")
+            default = run(["pactl", "get-default-" + what[:-1]], check=False).strip()
+            for d in devs:
+                name = d.get("name", "")
+                props = d.get("properties") or {}
+                # an output's monitor is not a microphone
+                if kind == "SOURCE" and (props.get("device.class") == "monitor" or name.endswith(".monitor")):
+                    continue
+                out.append("%s %s\t%s\t%d\t%s\t%s" % (kind, clean(name), yn(name == default), percent_of(d),
+                                                      yn(d.get("mute")), clean(d.get("description") or name)))
+        return out
+    verb = args[0]
+    if verb == "default" and len(args) == 3:
+        kind = one_of(args[1], ("sink", "source"), "the device kind")
+        run(["pactl", "set-default-" + kind, device_name(args[2])])
+    elif verb == "volume" and len(args) == 4:
+        kind = one_of(args[1], ("sink", "source"), "the device kind")
+        pct = integer(args[3], 0, 150, "the volume")
+        run(["pactl", "set-%s-volume" % kind, device_name(args[2]), "%d%%" % pct])
+    elif verb == "mute" and len(args) == 4:
+        kind = one_of(args[1], ("sink", "source"), "the device kind")
+        on = one_of(args[3], ("yes", "no"), "mute")
+        run(["pactl", "set-%s-mute" % kind, device_name(args[2]), "1" if on == "yes" else "0"])
+    else:
+        raise Fail("invalid", "usage: sound [default|volume|mute ...]")
+    return []
+
+
+# ---- Bluetooth (bluez, through bluetoothctl) -----------------------------------------------
+
+MAC = re.compile(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
+
+
+def bluetooth(args):
+    if not tool("bluetoothctl"):
+        if not args:
+            return ["BLUETOOTH no", "POWERED no"]
+        raise Fail("unsupported", "Bluetooth is not installed")
+    if not args:
+        show = run(["bluetoothctl", "show"], check=False)
+        if "Controller" not in show:
+            return ["BLUETOOTH no", "POWERED no"]
+        out = ["BLUETOOTH yes", "POWERED %s" % yn(re.search(r"Powered:\s*yes", show))]
+        for line in run(["bluetoothctl", "devices"], check=False).splitlines():
+            m = re.match(r"Device (\S+) (.*)", line.strip())
+            if not m or not MAC.fullmatch(m.group(1)):
+                continue
+            info = run(["bluetoothctl", "info", m.group(1)], check=False)
+            out.append("DEVICE %s\t%s\t%s\t%s" % (m.group(1), yn(re.search(r"Connected:\s*yes", info)),
+                                                   yn(re.search(r"Paired:\s*yes", info)), clean(m.group(2))))
+        return out
+    if args[0] == "power" and len(args) == 2:
+        run(["bluetoothctl", "power", one_of(args[1], ("on", "off"), "power")])
+    elif args[0] == "scan" and len(args) <= 2:
+        # look for devices for a while, then list everything bluez now knows
+        secs = integer(args[1], 1, 30, "seconds") if len(args) == 2 else 8
+        run(["bluetoothctl", "--timeout", str(secs), "scan", "on"], timeout=secs + 15, check=False)
+        return bluetooth([])
+    elif args[0] == "pair" and len(args) == 2:
+        if not MAC.fullmatch(args[1]):
+            raise Fail("invalid", "not a device address")
+        run(["bluetoothctl", "pair", args[1]], timeout=60)
+        run(["bluetoothctl", "trust", args[1]], check=False)
+        run(["bluetoothctl", "connect", args[1]], timeout=30, check=False)
+    elif args[0] in ("connect", "disconnect", "remove") and len(args) == 2:
+        if not MAC.fullmatch(args[1]):
+            raise Fail("invalid", "not a device address")
+        run(["bluetoothctl", args[0], args[1]], timeout=30)
+    else:
+        raise Fail("invalid", "usage: bluetooth [power on|off | scan [SECONDS] | pair|connect|disconnect|remove MAC]")
+    return []
+
+
+# ---- display (the compositor's outputs, through wlr-randr) ----------------------------------
+
+OUTPUT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+MODE = re.compile(r"(\d{3,5})x(\d{3,5})(?:@(\d{1,3}(?:\.\d{1,3})?))?")
+
+
+def fmt_mode(m):
+    return "%dx%d@%s" % (m.get("width", 0), m.get("height", 0),
+                         ("%.2f" % m["refresh"]).rstrip("0").rstrip(".") if m.get("refresh") else "0")
+
+
+def outputs():
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        raise Fail("unsupported", "the display is not the compositor's")
+    try:
+        return json.loads(run(["wlr-randr", "--json"]) or "[]")
+    except ValueError:
+        raise Fail("failed", "wlr-randr gave an answer that is not JSON")
+
+
+def display(args):
+    if not args:
+        out = []
+        for o in outputs():
+            name = o.get("name", "")
+            cur = next((m for m in o.get("modes", []) if m.get("current")), {})
+            out.append("OUTPUT %s\t%s\t%s\t%s" % (clean(name), fmt_mode(cur) if cur else "off",
+                                                  o.get("scale", 1), clean(o.get("description") or name)))
+            for m in o.get("modes", []):
+                out.append("MODE %s\t%s\t%s\t%s" % (clean(name), fmt_mode(m), yn(m.get("current")),
+                                                    yn(m.get("preferred"))))
+        return out
+    if len(args) == 3 and args[0] in ("mode", "scale"):
+        if not OUTPUT_NAME.fullmatch(args[1]):
+            raise Fail("invalid", "not an output name")
+        if args[1] not in [o.get("name") for o in outputs()]:
+            raise Fail("notfound", "no output %s" % args[1])
+        if args[0] == "mode":
+            m = MODE.fullmatch(args[2])
+            if not m:
+                raise Fail("invalid", "a mode is WIDTHxHEIGHT[@HZ]")
+            run(["wlr-randr", "--output", args[1], "--mode", args[2]])
+        else:
+            if not re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", args[2]):
+                raise Fail("invalid", "the scale is 1 to 3 in steps of 0.25")
+            run(["wlr-randr", "--output", args[1], "--scale", args[2]])
+        return []
+    raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S]")
+
+
+# ---- night light (the compositor's gamma, through wlsunset) --------------------------------
+
+def nightlight_state(c):
+    n = c.get("nightlight") or {}
+    return bool(n.get("on")), int(n.get("temp", 4000))
+
+
+def apply_nightlight(c):
+    on, temp = nightlight_state(c)
+    if on and os.environ.get("WAYLAND_DISPLAY") and tool("wlsunset"):
+        # a fixed temperature: the same low and high, day and night
+        start("sg-nightlight", ["wlsunset", "-t", str(temp), "-T", str(temp + 1)])
+    else:
+        stop("sg-nightlight")
+
+
+def nightlight(args):
+    c = load_config()
+    on, temp = nightlight_state(c)
+    i = 0
+    changed = False
+    while i < len(args):
+        a = args[i]
+        if a in ("on", "off"):
+            on = a == "on"
+            changed = True
+        elif a == "--temp" and i + 1 < len(args):
+            temp = integer(args[i + 1], 1900, 6500, "the colour temperature")
+            changed = True
+            i += 1
+        else:
+            raise Fail("invalid", "usage: nightlight [on|off] [--temp K]")
+        i += 1
+    if changed:
+        c["nightlight"] = {"on": on, "temp": temp}
+        save_config(c)
+        apply_nightlight(c)
+    avail = bool(tool("wlsunset")) and bool(os.environ.get("WAYLAND_DISPLAY"))
+    return ["NIGHTLIGHT %s\t%d\t%s\t%s" % ("on" if on else "off", temp, yn(avail), yn(pid_alive("sg-nightlight")))]
+
+
+# ---- power and sleep (the compositor's idle notifications, through swayidle) ----------------
+
+def power_state(c):
+    p = c.get("power") or {}
+    return int(p.get("screen", 10)), int(p.get("sleep", 0))
+
+
+def apply_power(c):
+    screen, sleep = power_state(c)
+    if not os.environ.get("WAYLAND_DISPLAY") or not tool("swayidle") or (not screen and not sleep):
+        stop("sg-idle")
+        return
+    argv = ["swayidle", "-w"]
+    if screen and tool("wlopm"):
+        argv += ["timeout", str(screen * 60), "wlopm --off '*'", "resume", "wlopm --on '*'"]
+    if sleep:
+        argv += ["timeout", str(sleep * 60), "systemctl suspend"]
+    if len(argv) > 2:
+        start("sg-idle", argv)
+    else:
+        stop("sg-idle")
+
+
+def power(args):
+    c = load_config()
+    screen, sleep = power_state(c)
+    changed = False
+    i = 0
+    while i < len(args):
+        if args[i] in ("--screen", "--sleep") and i + 1 < len(args):
+            v = integer(args[i + 1], 0, 1440, "minutes")
+            if args[i] == "--screen":
+                screen = v
+            else:
+                sleep = v
+            changed = True
+            i += 2
+        else:
+            raise Fail("invalid", "usage: power [--screen MIN] [--sleep MIN]")
+    if changed:
+        c["power"] = {"screen": screen, "sleep": sleep}
+        save_config(c)
+        apply_power(c)
+    avail = bool(tool("swayidle")) and bool(os.environ.get("WAYLAND_DISPLAY"))
+    return ["POWER %d\t%d\t%s\t%s" % (screen, sleep, yn(avail), yn(pid_alive("sg-idle")))]
+
+
+# ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
+
+def updates(args):
+    if args:
+        raise Fail("invalid", "usage: updates")
+    out = []
+    text = run(["apt", "list", "--upgradable"], timeout=60, check=False)
+    for line in text.splitlines():
+        # name/suite new-version arch [upgradable from: old-version]
+        m = re.match(r"([^/\s]+)/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]", line)
+        if m:
+            out.append("UPDATE %s\t%s\t%s" % (m.group(1), m.group(3), m.group(2)))
+    out.append("STAGED %s" % yn(os.path.lexists(os.environ.get("SG_SYSTEM_UPDATE", "/system-update"))))
+    return out
+
+
+def session_start(args):
+    c = load_config()
+    for f in (apply_nightlight, apply_power):
+        try:
+            f(c)
+        except Fail:
+            pass
+    return []
+
+
+COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
+            "power": power, "updates": updates, "session-start": session_start}
+
+
+def main(argv):
+    out_path = None
+    if "--out" in argv:
+        i = argv.index("--out")
+        if i + 1 >= len(argv):
+            print("ERROR invalid --out needs a file")
+            return 2
+        out_path = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+    lines, code = [], 0
+    if not argv or argv[0] not in COMMANDS:
+        lines, code = ["ERROR invalid usage: sg-settingsctl " + "|".join(sorted(COMMANDS)) + " ..."], 2
+    else:
+        try:
+            lines = COMMANDS[argv[0]](argv[1:]) + ["OK"]
+        except Fail as e:
+            lines, code = ["ERROR %s %s" % (e.kind, clean(e))], EXIT.get(e.kind, 1)
+    text = "".join(line + "\n" for line in lines)
+    if out_path:
+        tmp = out_path + ".part"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, out_path)
+    else:
+        sys.stdout.write(text)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

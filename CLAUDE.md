@@ -48,6 +48,7 @@ separately.
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
+| `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
 | `speech/sg-dictate`, `speech/sgspeech.py` | voice typing's engine, its bridge, and sg-speechd, the model download (see below) |
 
@@ -759,6 +760,54 @@ format PART ntfs|exfat|fat32|ext4 [--label L]  FORMATTED <part> <fs>   (admin)
 - **Not yet**: resizing, creating or deleting partitions (sg-install's
   partitioner is root-only and live-boot-only; Disk Management's New/Delete
   would reuse it through here); SMART health; per-device enable/disable.
+
+## Settings' native half: sg-settingsctl
+
+`bin/sg-settingsctl` (Python, `/usr/bin/sg-settingsctl`) is what sg-shell's
+Settings (`sg-settings`, `ms-settings:`) cannot reach from the Windows side.
+It runs **as the signed-in user** and does only the user's own business;
+root's (time zone, clock, computer name, fetching updates) stays with
+sg-shell's sg-admind.
+
+```
+sg-settingsctl sound                          SINK|SOURCE <name>\t<default>\t<vol%>\t<muted>\t<description>
+sg-settingsctl sound default sink|source NAME
+sg-settingsctl sound volume sink|source NAME PERCENT      (0-150)
+sg-settingsctl sound mute sink|source NAME yes|no
+sg-settingsctl bluetooth                      BLUETOOTH yes|no, POWERED yes|no, DEVICE <mac>\t<connected>\t<paired>\t<name>
+sg-settingsctl bluetooth power on|off | scan [SECONDS] | pair|connect|disconnect|remove MAC
+sg-settingsctl display                        OUTPUT <name>\t<WxH@Hz>\t<scale>\t<desc>, MODE <name>\t<WxH@Hz>\t<current>\t<preferred>
+sg-settingsctl display mode OUTPUT WxH[@Hz] | scale OUTPUT S
+sg-settingsctl nightlight [on|off] [--temp K] NIGHTLIGHT on|off\t<K>\t<available>\t<running>
+sg-settingsctl power [--screen MIN] [--sleep MIN]   POWER <screen>\t<sleep>\t<available>\t<running>
+sg-settingsctl updates                        UPDATE <pkg>\t<installed>\t<new>, STAGED yes|no
+sg-settingsctl session-start                  night light and idle timers again (sg-run-explorer)
+```
+
+Every answer ends with `OK` or `ERROR <kind> <message>` (invalid 2,
+unsupported 4, notfound 5, failed 1). `--out FILE` writes the answer to a file
+(renamed into place whole): Wine gives a Windows program no pipes to a native
+child, so Settings reads files, as it does sg-dictate's.
+
+- **The tools**: pactl (PipeWire's Pulse server), bluetoothctl, wlr-randr
+  (sg-compositor's output management), wlsunset (its gamma control),
+  swayidle + wlopm (its idle notifications), `apt list --upgradable`.
+  sg-image installs them (`mkosi.conf`, "settings"); each command answers
+  `unsupported` without its tool, and display/night light/power without
+  `WAYLAND_DISPLAY`. `SG_SETTINGSCTL_TOOLS` puts stand-ins first (the gate).
+- **Choices persist** in `~/.config/stained-glass/settings.json`; the
+  helpers it starts (wlsunset, swayidle) are detached, their pids in
+  `$XDG_RUNTIME_DIR/sg-{nightlight,idle}.pid`, replaced on each change, and
+  `sg-run-explorer` runs `session-start` with every session.
+- **Inputs are validated** before a tool hears of them: device and output
+  names (no leading `-`, so no option smuggling), MAC addresses, numbers in
+  range, modes and scales by pattern; an output must exist.
+- **wlopm needs wlr-output-power-management, which sg-compositor does not
+  offer yet**: the screen-off timer's command fails harmlessly; sleep works.
+- **Gate: `test/settingsctl-test.py`** (in `make lint`): stand-in tools record
+  what they are asked -- the parsed answers Settings reads, the exact
+  commands, and every refusal. Seen red: device names that start with `-`
+  were accepted before the pattern was tightened.
 
 ## Voice typing: sg-dictate (Win+H)
 

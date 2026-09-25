@@ -148,6 +148,7 @@ fi
 #     explorer's Start button toggles (wine-sg patch 0012). Best-effort: a
 #     session without it still has Wine's built-in Start menu. Its output
 #     goes where the session's does -- the journal, as this user (debt D11).
+#   - Settings' night light and idle timers (sg-settingsctl session-start).
 #   - a domain user's logon scripts (the account's scriptPath from NETLOGON,
 #     then the GPOs'), one after another, hidden; Windows does not wait for
 #     them either.
@@ -171,6 +172,11 @@ _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
     fi
     if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
         wine "$_sgdictate" /background &
+    fi
+    # Settings' night light and screen/sleep timers (sg-settingsctl): the
+    # user's choices, applied again for this session.
+    if command -v sg-settingsctl >/dev/null 2>&1; then
+        sg-settingsctl session-start >/dev/null 2>&1 || sg_log "sg-settingsctl session-start failed"
     fi
     if [ -r "$_netdir/logon-script" ]; then
         cd / && while IFS= read -r _script; do

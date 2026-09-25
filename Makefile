@@ -36,6 +36,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo $(BINDIR)
+	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
+	install -m 0755 bin/sg-settingsctl $(BINDIR)
 	@# Voice typing: the engine (sgspeech.py) and its command. The model is
 	@# downloaded per machine by sg-speechd, never packaged.
 	install -m 0755 speech/sg-dictate $(BINDIR)
@@ -164,6 +166,7 @@ lint:
 	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
+	@python3 test/settingsctl-test.py
 	@sh test/drivers-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \

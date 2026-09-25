@@ -1,3 +1,20 @@
+sg-session (0.1.0-20) unstable; urgency=medium
+
+  * sg-settingsctl: the native half of Settings (sg-shell's sg-settings),
+    as the signed-in user -- sound devices, defaults, volumes and mute
+    (PipeWire through pactl), Bluetooth (bluez: power, scan, pair, connect,
+    disconnect, remove), the compositor's display modes and scale
+    (wlr-randr), night light (wlsunset at a fixed temperature), Power &
+    sleep's screen and sleep timers (swayidle; wlopm for the screen), and
+    apt's pending updates. Answers through --out files for Windows programs;
+    inputs validated before any tool runs; choices kept in
+    ~/.config/stained-glass/settings.json and applied again by
+    sg-run-explorer at every sign-in (session-start).
+  * Recommends wlr-randr, wlsunset, swayidle, wlopm, bluez.
+  * Gate: test/settingsctl-test.py (in make lint).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 07:55:17 -0700
+
 sg-session (0.1.0-19) unstable; urgency=medium
 
   * sg-sysinfo: the administrative tools' Linux side -- devices (Device
