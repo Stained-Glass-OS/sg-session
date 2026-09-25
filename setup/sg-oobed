@@ -134,7 +134,10 @@ finish() {
     mkdir -p "$ETC/default"
     printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS="%s"\nBACKSPACE="guess"\n' "$layouts" "$opts" \
         > "$ETC/default/keyboard.new" && mv "$ETC/default/keyboard.new" "$ETC/default/keyboard"
-    printf 'KEYMAP=%s\n' "$first" > "$ETC/vconsole.conf"
+    # Debian makes /etc/vconsole.conf a link to default/keyboard (the
+    # console reads the XKB values there): writing through it would replace
+    # the layouts just written. Only a vconsole.conf of its own gets KEYMAP.
+    [ -L "$ETC/vconsole.conf" ] || printf 'KEYMAP=%s\n' "$first" > "$ETC/vconsole.conf"
 
     # The device's own switches, as Settings > Privacy keeps them (HKLM).
     reg=$(mktemp) || { say "FAILED Out of resources."; return 1; }

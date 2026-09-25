@@ -101,6 +101,9 @@ cp "$1" "$SG_T/hklm.reg"
 EOS
 chmod +x "$T"/bin/*
 printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' > "$T/etc/default/keyboard"
+# As on Debian: vconsole.conf is a link to the keyboard file (the first image
+# run found sg-oobed writing KEYMAP= through it over the layouts).
+ln -s default/keyboard "$T/etc/vconsole.conf"
 
 # sg-oobed behind a socket, one instance per connection, as systemd would.
 SOCK="$T/oobed.sock"
@@ -225,8 +228,8 @@ get() { sed -n "s/^$1=//p" "$conf" 2>/dev/null; }
 if [ "$(get REGION_LOCALE) $(get REGION_GEO)" = "en-GB 242" ]; then pass "the region chosen is recorded: en-GB, country 242"
 else fail "region: '$(get REGION_LOCALE) $(get REGION_GEO)'"; fi
 if grep -qx 'XKBLAYOUT="us,de"' "$T/etc/default/keyboard" && grep -qx 'XKBOPTIONS="grp:win_space_toggle"' "$T/etc/default/keyboard" \
-        && grep -qx 'KEYMAP=us' "$T/etc/vconsole.conf"; then
-    pass "the keyboard: US and German, switched with Windows logo key + Space; the console US"
+        && [ -L "$T/etc/vconsole.conf" ]; then
+    pass "the keyboard: US and German, switched with Windows logo key + Space; Debian's vconsole.conf link kept"
 else fail "keyboard: $(cat "$T/etc/default/keyboard" 2>/dev/null)"; fi
 if grep -q 'wifi connect --ssid-hex 486f6d654e6574 --security wpa-psk --password-stdin' "$T/netctl.log" \
         && [ "$(cat "$T/wifi-key" 2>/dev/null)" = wifikey4321 ]; then

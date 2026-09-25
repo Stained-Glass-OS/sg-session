@@ -593,7 +593,9 @@ fi
 if [ -n "$KEYBOARD" ]; then
     printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' "$KEYBOARD" \
         > "$R/etc/default/keyboard"
-    printf 'KEYMAP=%s\n' "$KEYBOARD" > "$R/etc/vconsole.conf"
+    # Debian's vconsole.conf may be a link to default/keyboard: never write
+    # through it.
+    [ -L "$R/etc/vconsole.conf" ] || printf 'KEYMAP=%s\n' "$KEYBOARD" > "$R/etc/vconsole.conf"
 fi
 mkdir -p "$R/etc/stained-glass"
 printf 'installed %s from %s onto %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SRC_ROOT" "$ROOT_PART" \
