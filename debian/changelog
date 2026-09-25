@@ -1,3 +1,16 @@
+sg-session (0.1.0-29) unstable; urgency=medium
+
+  * Every compositor renders with pixman unless a GPU with a 3D driver is
+    present: wlroots' GL renderer on Mesa's software rasteriser (a VM's
+    virtio-gpu without virgl, simple display adapters) presented stale
+    frames, so an installed machine's first-run setup, Setup and the login
+    screen stayed black until a key was pressed.
+  * The first-run setup never keeps the machine from its login screen
+    (no service socket: skipped; no window in 300 s: stopped; three
+    unfinished runs: the login screen for this boot).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 16:31:23 -0700
+
 sg-session (0.1.0-28) unstable; urgency=medium
 
   * sg-profile-create: each profile gets Windows' Send to items once --

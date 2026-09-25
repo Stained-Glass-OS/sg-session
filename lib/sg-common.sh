@@ -250,6 +250,35 @@ sg_keyboard_env() {
 }
 sg_keyboard_env
 
+# wlroots' GL renderer on Mesa's software rasteriser -- what a display with
+# no 3D driver gets (a VM's virtio-gpu without virgl, bochs, qxl, simpledrm,
+# server graphics) -- presented stale frames: the first-run setup, Setup and
+# the login screen stayed black, or showed the page before, until a key
+# repainted them, while the X windows held the right pixels. pixman renders
+# them correctly and is as fast as software GL. So every compositor started
+# from here uses pixman unless a GPU with a 3D driver is present (a virtio
+# GPU counts when the host offers virgl, its feature bit 0). WLR_RENDERER
+# set by hand still wins.
+sg_renderer_env() {
+    [ -n "${WLR_RENDERER:-}" ] && return 0
+    _soft=1
+    for _c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*; do
+        case "${_c##*/}" in *-*) continue ;; esac
+        [ -e "$_c/device/driver" ] || continue
+        _drv=$(readlink -f "$_c/device/driver"); _drv=${_drv##*/}
+        case "$_drv" in
+        i915|xe|amdgpu|radeon|nouveau|nvidia|vmwgfx) _soft=0 ;;
+        virtio-pci|virtio_gpu)
+            for _f in "$_c"/device/virtio*/features; do
+                [ "$(cut -c1 "$_f" 2>/dev/null)" = 1 ] && _soft=0
+            done ;;
+        esac
+    done
+    if [ "$_soft" = 1 ]; then export WLR_RENDERER=pixman; fi
+    return 0
+}
+sg_renderer_env
+
 # Where a session's compositor puts its privileged and control sockets: one
 # directory per session user, named by uid, under a seat directory that
 # tmpfiles creates 1770 root:sgwine. Per-uid because the sticky bit would stop
