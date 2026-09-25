@@ -582,7 +582,7 @@ def write_status(**fields):
     os.replace(tmp, STATUS)
 
 
-def fetch_model(progress):
+def fetch_model(progress, skip_if_packaged=False):
     """Download what sgspeech.FILES lists into the model directory, resuming
     anything partly there, checking each file's SHA-256, and mark the model
     verified. `progress(done, total)` hears about it."""
@@ -590,11 +590,17 @@ def fetch_model(progress):
     import hashlib
     import urllib.request
 
-    target = sgspeech.model_path()
+    if skip_if_packaged and sgspeech.model_packaged():
+        # Installed as a package already: nothing to download. (sg-image's
+        # build-deb.sh calls this without it to fill its cache: that must
+        # really fetch, whatever the build machine has installed.)
+        progress(sgspeech.TOTAL_BYTES, sgspeech.TOTAL_BYTES)
+        return
+    target = sgspeech.download_path()
     os.makedirs(target, mode=0o755, exist_ok=True)
     lock = open(os.path.join(sgspeech.MODEL_DIR, ".lock"), "w")
     fcntl.flock(lock, fcntl.LOCK_EX)  # a second request waits for the first
-    if sgspeech.model_installed():
+    if sgspeech.model_downloaded():
         progress(sgspeech.TOTAL_BYTES, sgspeech.TOTAL_BYTES)
         return
     mirror = os.environ.get("SG_SPEECH_MIRROR") if os.getuid() != 0 else None
@@ -676,9 +682,15 @@ def fetch_model(progress):
         raise
 
 
+PACKAGED_MESSAGE = ("the speech model is installed as the sg-speech-model-parakeet package; "
+                    "remove that package to remove it")
+
+
 def remove_model():
+    """Remove sg-speechd's download. The packaged model is dpkg's: callers
+    refuse that before getting here."""
     import shutil
-    target = sgspeech.model_path()
+    target = sgspeech.download_path()
     try:
         os.unlink(os.path.join(target, ".verified"))
     except OSError:
@@ -731,7 +743,7 @@ def serve():
             say("ERROR denied only users of this computer may install the speech model")
             return 3
         try:
-            fetch_model(lambda d, t: say("PROGRESS %d %d" % (d, t)))
+            fetch_model(lambda d, t: say("PROGRESS %d %d" % (d, t)), skip_if_packaged=True)
         except OSError as e:
             say("ERROR failed " + str(e))
             return 1
@@ -741,6 +753,9 @@ def serve():
         if not admin:
             say("ERROR denied you need to be an administrator to remove the speech model")
             return 3
+        if sgspeech.model_packaged():
+            say("ERROR unsupported " + PACKAGED_MESSAGE)
+            return 4
         remove_model()
         say("OK")
         return 0
@@ -764,7 +779,7 @@ def ask(argv, show):
             return 0
         if line.startswith("ERROR "):
             log(line.split(" ", 2)[-1])
-            return 3 if line.startswith("ERROR denied") else 1
+            return 3 if line.startswith("ERROR denied") else 4 if line.startswith("ERROR unsupported") else 1
         show(line)
     log("the speech service went away")
     return 1
@@ -775,12 +790,15 @@ def local_or_ask(argv):
     here; otherwise ask the service."""
     def show(line):
         print(line, flush=True)
+    if argv == ["remove"] and sgspeech.model_packaged():
+        log(PACKAGED_MESSAGE)
+        return 4
     if os.access(sgspeech.MODEL_DIR, os.W_OK) or (
             not os.path.exists(sgspeech.MODEL_DIR) and os.environ.get("SG_SPEECH_DIR")):
         os.makedirs(sgspeech.MODEL_DIR, exist_ok=True)
         try:
             if argv == ["download"]:
-                fetch_model(lambda d, t: show("PROGRESS %d %d" % (d, t)))
+                fetch_model(lambda d, t: show("PROGRESS %d %d" % (d, t)), skip_if_packaged=True)
             else:
                 remove_model()
         except OSError as e:
@@ -831,6 +849,10 @@ def main():
     if mode == "--status":
         print(read_status())
         print("SIZE %d" % sgspeech.TOTAL_BYTES)
+        if sgspeech.model_installed():
+            # packaged: dpkg's (sg-speech-model-parakeet); downloaded: sg-speechd's
+            print("SOURCE %s %s" % (("packaged", sgspeech.packaged_path()) if sgspeech.model_packaged()
+                                    else ("downloaded", sgspeech.download_path())))
         return 0
     if mode == "--download":
         return local_or_ask(["download"])

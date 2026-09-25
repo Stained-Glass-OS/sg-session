@@ -1,3 +1,14 @@
+sg-session (0.1.0-21) unstable; urgency=medium
+
+  * Voice typing: the speech model packaged as sg-speech-model-parakeet
+    (/usr/share/stained-glass-speech) is preferred when complete; --status
+    reports it installed (SOURCE packaged); --download has nothing to do;
+    --remove and sg-speechd refuse it (dpkg owns it). build-deb.sh's own
+    fetch_model still fetches.
+  * Gate: test/dictate-test.py covers it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 11:23:32 -0700
+
 sg-session (0.1.0-20) unstable; urgency=medium
 
   * sg-settingsctl: the native half of Settings (sg-shell's sg-settings),

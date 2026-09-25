@@ -139,6 +139,67 @@ with tempfile.TemporaryDirectory(dir="/var/tmp") as d:
     p.wait(timeout=30)
     check("sg-speechd: malformed requests are refused", reply == ["ERROR invalid malformed request"], repr(reply))
 
+# ---- the packaged model (sg-speech-model-parakeet) --------------------------------------
+# /usr/share/stained-glass-speech/<model> is dpkg's: preferred when complete,
+# reported as installed, never removed or downloaded over; build-deb.sh's own
+# fetch still fetches.
+with tempfile.TemporaryDirectory(dir="/var/tmp") as pkg, tempfile.TemporaryDirectory(dir="/var/tmp") as dl:
+    penv = dict(os.environ, SG_SPEECH_LIB=SPEECH, SG_SPEECH_DIR=dl, SG_SPEECH_PACKAGED_DIR=pkg,
+                https_proxy="http://127.0.0.1:9", HTTPS_PROXY="http://127.0.0.1:9", no_proxy="")
+    dictate = [sys.executable, os.path.join(SPEECH, "sg-dictate")]
+
+    def run(*args):
+        r = subprocess.run(dictate + list(args), env=penv, capture_output=True, text=True, timeout=120)
+        return r.returncode, r.stdout, r.stderr
+
+    rc, out, _ = run("--status")
+    check("no model anywhere: missing", out.startswith("MODEL missing"), out)
+    mdir = os.path.join(pkg, sgspeech.MODEL_NAME)
+    os.makedirs(mdir)
+    open(os.path.join(mdir, "vocab.txt"), "w").write("x 0\n")
+    rc, out, _ = run("--status")
+    check("a packaged model without its stamp is not installed", out.startswith("MODEL missing"), out)
+    open(os.path.join(mdir, ".verified"), "w").write("ok\n")
+    rc, out, _ = run("--status")
+    check("the packaged model is installed", out.startswith("MODEL installed"), out)
+    check("...and --status says it is the package's", ("SOURCE packaged " + mdir) in out, out)
+    got = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import sgspeech; "
+                          "print(sgspeech.model_path())", SPEECH], env=penv, capture_output=True,
+                         text=True).stdout.strip()
+    check("model_path() prefers the package", got.rstrip("/") == mdir, got)
+    rc, out, err = run("--remove")
+    check("--remove refuses the packaged model, saying why",
+          rc == 4 and "sg-speech-model-parakeet" in err and os.path.exists(os.path.join(mdir, ".verified")),
+          "rc %d: %s" % (rc, err))
+    lines = serve(["remove"], {"SG_SPEECH_DIR": dl, "SG_SPEECH_PACKAGED_DIR": pkg,
+                               "SG_WINE_GROUP": mine})
+    check("sg-speechd refuses to remove it too (or denies a non-administrator)",
+          lines[-1:] and (lines[-1].startswith("ERROR unsupported") or lines[-1].startswith("ERROR denied"))
+          and os.path.exists(os.path.join(mdir, ".verified")), repr(lines))
+    rc, out, err = run("--download")
+    check("--download with the package installed: nothing to fetch, no network",
+          rc == 0 and not os.path.exists(os.path.join(dl, sgspeech.MODEL_NAME)), "rc %d %s %s" % (rc, out, err))
+    lines = serve(["download"], {"SG_SPEECH_DIR": dl, "SG_SPEECH_PACKAGED_DIR": pkg, "SG_WINE_GROUP": mine})
+    check("sg-speechd: download with the package installed is done at once", lines[-1:] == ["OK"], repr(lines))
+    # build-deb.sh's call (runpy, fetch_model(progress)) must really fetch: an
+    # empty mirror makes it fail rather than return as if done.
+    code = ("import runpy, sys, time\n"
+            "time.sleep = lambda s: None\n"
+            "g = runpy.run_path(sys.argv[1], run_name='sg_image')\n"
+            "try:\n    g['fetch_model'](lambda d, t: None)\nexcept OSError as e:\n    print('FETCHED-AND-FAILED', e)\n"
+            "else:\n    print('RETURNED')\n")
+    mirror = tempfile.mkdtemp(dir="/var/tmp")
+    got = subprocess.run([sys.executable, "-c", code, os.path.join(SPEECH, "sg-dictate")],
+                         env=dict(penv, SG_SPEECH_MIRROR=mirror), capture_output=True, text=True,
+                         timeout=120).stdout
+    os.rmdir(mirror)
+    check("build-deb.sh's fetch_model still fetches with the package installed", "FETCHED-AND-FAILED" in got, got)
+    os.unlink(os.path.join(mdir, ".verified"))
+    got = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import sgspeech; "
+                          "print(sgspeech.model_path())", SPEECH], env=penv, capture_output=True,
+                         text=True).stdout.strip()
+    check("without the package, the download is used", got.startswith(dl), got)
+
 # A model file list that does not pin every file would let a download be
 # anything: each must have a size and a SHA-256.
 check("every model file is pinned by size and SHA-256",

@@ -19,6 +19,9 @@ import numpy as np
 
 SAMPLE_RATE = 16000
 MODEL_DIR = os.environ.get("SG_SPEECH_DIR", "/var/lib/stained-glass-speech")
+# The model as a Debian package (sg-speech-model-parakeet, built by sg-image's
+# speech-model/build-deb.sh): read-only, dpkg's. Preferred when complete.
+PACKAGED_DIR = os.environ.get("SG_SPEECH_PACKAGED_DIR", "/usr/share/stained-glass-speech")
 MODEL_NAME = "parakeet-tdt-0.6b-v3-int8"
 
 # What sg-speechd downloads: pinned revisions, checked by SHA-256. The weights
@@ -43,14 +46,35 @@ FILES = [
 TOTAL_BYTES = sum(f[2] for f in FILES)
 
 
-def model_path(name=""):
+def download_path(name=""):
+    """Where sg-speechd downloads the model to (and removes it from)."""
     return os.path.join(MODEL_DIR, MODEL_NAME, name)
 
 
+def packaged_path(name=""):
+    """Where the sg-speech-model-parakeet package puts it."""
+    return os.path.join(PACKAGED_DIR, MODEL_NAME, name)
+
+
+def model_packaged():
+    """The packaged model is there and complete (its stamp is packaged too)."""
+    return os.path.exists(packaged_path(".verified"))
+
+
+def model_downloaded():
+    """sg-speechd has verified every file and written the stamp; a
+    half-downloaded model is not installed."""
+    return os.path.exists(download_path(".verified"))
+
+
+def model_path(name=""):
+    """The model to load: the package's when it is installed, else the
+    download."""
+    return packaged_path(name) if model_packaged() else download_path(name)
+
+
 def model_installed():
-    """The model is installed when sg-speechd has verified every file and
-    written the stamp; a half-downloaded model is not."""
-    return os.path.exists(model_path(".verified"))
+    return model_packaged() or model_downloaded()
 
 
 class _Quiet:

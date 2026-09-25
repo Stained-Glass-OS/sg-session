@@ -826,7 +826,18 @@ Speech Recognition. Explorer's Win+H runs `sg-dictate.exe /toggle` (wine-sg
   as onnx-asr does. Debian's onnxruntime prints ~570 lines of "Schema error"
   when it makes its first session: harmless, and `_Quiet` keeps them off
   stderr.
-- **The model is downloaded, never packaged.** `sg-speechd.socket`
+- **The packaged model comes first.** sg-image's `speech-model/build-deb.sh`
+  makes `sg-speech-model-parakeet` (the files, `NOTICE` and the `.verified`
+  stamp under `/usr/share/stained-glass-speech/parakeet-tdt-0.6b-v3-int8/`).
+  When that stamp exists, `model_path()` is there and `model_installed()` is
+  true; `--status` adds `SOURCE packaged|downloaded <dir>`; `--download` (and
+  sg-speechd's) has nothing to do; `--remove` refuses (exit 4; sg-speechd
+  `ERROR unsupported`), naming the package -- dpkg owns it. **`fetch_model`
+  skips only when asked** (`skip_if_packaged=True`, as `--download` and
+  sg-speechd ask): build-deb.sh calls it plain to fill its cache, which must
+  really fetch whatever the build machine has installed.
+  `SG_SPEECH_PACKAGED_DIR` moves it for the gate.
+- **Otherwise the model is downloaded.** `sg-speechd.socket`
   (`/run/stained-glass-speech/speechd.sock`, 0666, `Accept=yes`) runs
   `sg-dictate --serve` as root per request: members of `sgwine` (anyone with
   a Windows session) may `download`, an `sg-admins` member may `remove`.
