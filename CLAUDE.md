@@ -1119,9 +1119,20 @@ Speech Recognition. Explorer's Win+H runs `sg-dictate.exe /toggle` (wine-sg
   program, so it re-launches itself as `sg-dictate --bridge wine <itself>
   --bridged /toggle` (as sg-netctl's bridge). Down: JSON lines, `{"cmd":
   "start", "continuous", "spoken", "auto", "fillers", "numbers", "fresh",
-  "mic", "tail"}`, `stop` (what was said is still typed), `cancel`,
-  `preload`, `unload`, `quit`. Up: `STATE loading|listening|idle|nomodel|nomic
-  ...|error ...`, `LEVEL 0-100` (10 a second), `TEXT <JSON string>`.
+  "mic", "tail", "language", "partials"}`, `stop` (what was said is still
+  typed), `cancel`, `preload`, `unload`, `quit`. Up: `STATE
+  loading|listening|idle|nomodel|nomic ...|error ...`, `LEVEL 0-100` (10 a
+  second), `PARTIAL <JSON string>` (the utterance so far: shown, never typed;
+  `""` clears it), `TEXT <JSON string>` (the final, which replaces the
+  partial), `CMD delete|undo` (spoken commands the toolbar carries out).
+- **Partial results while speaking.** While the VAD is in speech, the
+  utterance so far is recognised again every 0.5 s of new speech (the first
+  after 0.4 s) -- or every twice what the last partial took, so a slow or busy
+  machine gets fewer, never a backlog. Partials share the recogniser thread
+  with finals and are one slot deep (only the newest is kept); a partial of
+  an utterance that has meanwhile finished (a serial number per utterance)
+  is dropped, so none arrives after its final. Cost measured: 0.1 s for 0.4 s
+  of speech, ~0.9 s for 11 s. `--listen --partials` prints them on stderr.
 - **Audio** is `parec` (PipeWire's Pulse server) at 16 kHz mono, else
   `pw-record --raw`. Audio heard while the model loads is kept (up to a
   minute), so the first words after Win+H are not lost. Utterances end after
@@ -1132,7 +1143,26 @@ Speech Recognition. Explorer's Win+H runs `sg-dictate.exe /toggle` (wine-sg
   itself; spoken marks ("comma", "period", "question mark", "new line", "new
   paragraph", quotes, brackets...) replace whatever the model put around them;
   fillers (um, uh, er, hmm...) go; spoken numbers of two words or more, or ten
-  and over, become digits. `join` puts a space between utterances, none after
+  and over, become digits (English only).
+- **Languages**: English, German, French, Spanish tables
+  (`SPOKEN_PUNCTUATION_BY_LANG`, `FILLERS_BY_LANG`, `COMMANDS_BY_LANG`),
+  chosen by Control Panel's Language (`en-US`, `de-DE`, `fr-FR`, `es-ES`;
+  `--language` on the command line); `auto` guesses each utterance's language
+  from frequent words, the tables' phrases and letters (`detect_language`,
+  English when in doubt). Phrases match with or without accents, hyphens or
+  spaces ("linea", "point virgule"). German quotes are „...“ (so “ closes),
+  French puts a space before ? ! : ; and inside « », Spanish gets its ¿/¡
+  opener added to a sentence that lacks it. "Punkt"/"point"/"punto" are
+  marks only as whole words (the model sometimes glues German words:
+  "Testpunkt" stays).
+- **Spoken commands** (`command()`): an utterance that is *only* "delete
+  that"/"scratch that", "undo that", "stop listening" (and "das löschen",
+  "rückgängig machen", "Diktat beenden"; "efface ça", "annuler", "arrête
+  d'écouter"; "borra eso", "deshacer", "deja de escuchar"...) is a command,
+  never text, under the spoken-punctuation setting. `delete` and `undo` go to
+  the toolbar (`CMD`); `stop` stops listening (`STATE idle stopped`).
+- **espeak-ng for the gates**: its German "Komma" is heard as "Toma" (say
+  "Kommar"); its French "point" is rarely heard ("virgule" is). `join` puts a space between utterances, none after
   a line break or before punctuation; the toolbar sends the character before
   the caret (`tail`) when the focus is an Edit or RichEdit.
 - **Privacy:** nothing heard is written anywhere or logged (the log says
@@ -1150,8 +1180,15 @@ Speech Recognition. Explorer's Win+H runs `sg-dictate.exe /toggle` (wine-sg
   fails it) and `make test-dictate` (`test/dictate-e2e.sh`: espeak-ng speech
   through the real model -- words, spoken marks, no fillers, digits, two
   utterances split by a pause, `--once`; skips 77 without the model, which it
-  downloads to `~/.cache` when it can). sg-shell's `test/dictate-check.sh` is
-  the Windows side, and runs this engine too when a model is at hand.
+  downloads to `~/.cache` when it can) -- plus German/French/Spanish marks
+  (and `auto` on German), partial results that grow on a long sentence
+  (`--listen --partials`), and "delete that" as a command. dictate-test.py
+  also runs the real `Dictation` with a stand-in recogniser and VAD: partials
+  before the final and never after it, exactly one final, none when not
+  asked, German marks and "Das löschen"/"Diktat beenden" as commands. Seen
+  red: German table removed (6), partials sent as TEXT (3), no partials (2),
+  no commands (1), language ignored (21). sg-shell's `test/dictate-check.sh`
+  is the Windows side, and runs this engine too when a model is at hand.
 - **Measured** (i7-8086K, 8 threads): model load 2 s and ~0.7 GB resident
   (1.3 GB with onnxruntime's weight pre-packing, now off); recognition at
   ~0.08 x real time (3.3 s of speech in 0.3 s); the VAD while listening

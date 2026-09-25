@@ -390,20 +390,169 @@ class Segmenter:
 
 # ---- turning what was said into what to type -------------------------------------
 
-FILLERS = ["um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "hmm", "hm", "mm", "mhm"]
+# The model is multilingual (25 European languages) and punctuates by itself;
+# what it cannot know is which words were said *as* marks or commands. The
+# tables below are per language: English, German, French, Spanish. Control
+# Panel > Speech's Language (en-US, de-DE, fr-FR, es-ES) picks one; "auto"
+# guesses each utterance's language from its words (`detect_language`).
+
+LANGUAGES = ("en", "de", "fr", "es")
+
+FILLERS_BY_LANG = {
+    "en": ["um", "umm", "uh", "uhh", "uhm", "er", "erm", "ah", "hmm", "hm", "mm", "mhm"],
+    "de": ["äh", "ääh", "ähm", "öh", "öhm", "hm", "hmm", "mhm", "mm"],
+    "fr": ["euh", "euuh", "heu", "hum", "hmm", "mh", "mm"],
+    "es": ["eh", "ehm", "em", "emm", "hmm", "mm", "mmm"],
+}
+FILLERS = FILLERS_BY_LANG["en"]
 
 # Longest first. "new line" and "new paragraph" become line breaks.
-SPOKEN_PUNCTUATION = [
-    ("new paragraph", "\n\n"), ("next paragraph", "\n\n"),
-    ("new line", "\n"), ("next line", "\n"),
-    ("question mark", "?"), ("exclamation mark", "!"), ("exclamation point", "!"),
-    ("full stop", "."), ("period", "."), ("comma", ","),
-    ("semicolon", ";"), ("semi colon", ";"), ("colon", ":"),
-    ("open parenthesis", "("), ("close parenthesis", ")"),
-    ("open parentheses", "("), ("close parentheses", ")"),
-    ("open quote", "“"), ("close quote", "”"),
-    ("ellipsis", "…"), ("hyphen", "-"), ("dash", " – "),
-]
+SPOKEN_PUNCTUATION_BY_LANG = {
+    "en": [
+        ("new paragraph", "\n\n"), ("next paragraph", "\n\n"),
+        ("new line", "\n"), ("next line", "\n"),
+        ("question mark", "?"), ("exclamation mark", "!"), ("exclamation point", "!"),
+        ("full stop", "."), ("period", "."), ("comma", ","),
+        ("semicolon", ";"), ("semi colon", ";"), ("colon", ":"),
+        ("open parenthesis", "("), ("close parenthesis", ")"),
+        ("open parentheses", "("), ("close parentheses", ")"),
+        ("open quote", "“"), ("close quote", "”"),
+        ("ellipsis", "…"), ("hyphen", "-"), ("dash", " – "),
+    ],
+    "de": [
+        ("neuer absatz", "\n\n"), ("nächster absatz", "\n\n"),
+        ("neue zeile", "\n"), ("nächste zeile", "\n"), ("zeilenumbruch", "\n"),
+        ("fragezeichen", "?"), ("ausrufezeichen", "!"), ("ausrufungszeichen", "!"),
+        ("auslassungspunkte", "…"), ("doppelpunkt", ":"), ("semikolon", ";"),
+        ("strichpunkt", ";"), ("punkt", "."), ("komma", ","),
+        ("klammer auf", "("), ("klammer zu", ")"),
+        ("anführungszeichen unten", "„"), ("anführungszeichen oben", "“"),
+        ("anführungszeichen auf", "„"), ("anführungszeichen zu", "“"),
+        ("bindestrich", "-"), ("gedankenstrich", " – "),
+    ],
+    "fr": [
+        ("nouveau paragraphe", "\n\n"), ("point à la ligne", ".\n"),
+        ("retour à la ligne", "\n"), ("nouvelle ligne", "\n"), ("à la ligne", "\n"),
+        ("point d'interrogation", "?"), ("point d'exclamation", "!"),
+        ("points de suspension", "…"), ("point-virgule", ";"), ("deux-points", ":"),
+        ("point final", "."), ("virgule", ","), ("point", "."),
+        ("ouvrez la parenthèse", "("), ("fermez la parenthèse", ")"),
+        ("ouvrir la parenthèse", "("), ("fermer la parenthèse", ")"),
+        ("ouvrez les guillemets", "«"), ("fermez les guillemets", "»"),
+        ("ouvrir les guillemets", "«"), ("fermer les guillemets", "»"),
+        ("trait d'union", "-"), ("tiret", " – "),
+    ],
+    "es": [
+        ("nuevo párrafo", "\n\n"), ("punto y aparte", ".\n"), ("punto y seguido", "."),
+        ("punto y coma", ";"), ("nueva línea", "\n"), ("siguiente línea", "\n"),
+        ("abrir interrogación", "¿"), ("cerrar interrogación", "?"),
+        ("signo de interrogación", "?"),
+        ("abrir exclamación", "¡"), ("cerrar exclamación", "!"),
+        ("signo de exclamación", "!"),
+        ("puntos suspensivos", "…"), ("dos puntos", ":"), ("punto final", "."),
+        ("coma", ","), ("punto", "."),
+        ("abrir paréntesis", "("), ("cerrar paréntesis", ")"),
+        ("abrir comillas", "“"), ("cerrar comillas", "”"),
+        ("guion", "-"), ("raya", " – "),
+    ],
+}
+SPOKEN_PUNCTUATION = SPOKEN_PUNCTUATION_BY_LANG["en"]
+
+# Marks that open and close, per language: German closes a quotation with
+# the mark English opens one with.
+_OPENERS = {"en": "(“", "de": "(„", "fr": "(«", "es": "(“¿¡"}
+_CLOSERS = {"en": ")”", "de": ")“", "fr": ")»", "es": ")”"}
+
+# Spoken commands: the whole utterance, nothing else, is the command.
+#   delete: take back what was typed last; undo: the program's Undo (Ctrl+Z);
+#   stop: stop listening.
+COMMANDS_BY_LANG = {
+    "en": [("delete that", "delete"), ("scratch that", "delete"), ("undo that", "undo"),
+           ("undo", "undo"), ("stop listening", "stop"), ("stop dictation", "stop"),
+           ("stop voice typing", "stop")],
+    "de": [("das löschen", "delete"), ("lösche das", "delete"), ("lösch das", "delete"),
+           ("rückgängig machen", "undo"), ("das rückgängig machen", "undo"), ("rückgängig", "undo"),
+           ("zuhören beenden", "stop"), ("hör auf zuzuhören", "stop"), ("diktat beenden", "stop")],
+    "fr": [("efface ça", "delete"), ("effacer ça", "delete"), ("supprime ça", "delete"),
+           ("supprimer ça", "delete"), ("annule ça", "undo"), ("annuler ça", "undo"),
+           ("annuler", "undo"), ("arrête d'écouter", "stop"), ("arrêter l'écoute", "stop"),
+           ("arrête la dictée", "stop"), ("arrêter la dictée", "stop")],
+    "es": [("borra eso", "delete"), ("borrar eso", "delete"), ("elimina eso", "delete"),
+           ("eliminar eso", "delete"), ("deshacer eso", "undo"), ("deshaz eso", "undo"),
+           ("deshacer", "undo"), ("deja de escuchar", "stop"), ("dejar de escuchar", "stop"),
+           ("detener dictado", "stop"), ("detén el dictado", "stop")],
+}
+
+# A few frequent words that belong to one language more than the others,
+# for "auto".
+_STOPWORDS = {
+    "en": "the and is to of i you it that this what are was with for have not we be".split(),
+    "de": "der die das und ist ich nicht ein eine wir es zu sie mit auf auch wie dir bin sind".split(),
+    "fr": "le les et est je un une des pas que vous nous ce ceci à du au sont avec pour oui".split(),
+    "es": "el los las y es que un una no por esto estás hola con para sí muy está son del".split(),
+}
+_LETTERS = {"de": "äöüß", "fr": "çèêëîïôœùû", "es": "ñ¿¡áíóú"}
+
+_ACCENTS = {"a": "aáàâä", "e": "eéèêë", "i": "iíìîï", "o": "oóòôö", "u": "uúùûü",
+            "c": "cç", "n": "nñ"}
+
+
+def language_code(language):
+    """"de-DE" -> "de"; anything unknown (or "auto") -> "" (detect)."""
+    code = (language or "en").lower().split("-")[0].split("_")[0]
+    return code if code in LANGUAGES else ""
+
+
+def detect_language(text):
+    """The language of what was said, from its words and letters, when the
+    user chose "Detect automatically". English when in doubt."""
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    score = dict.fromkeys(LANGUAGES, 0.0)
+    for lang in LANGUAGES:
+        stop = set(_STOPWORDS[lang])
+        score[lang] += sum(1 for w in words if w in stop)
+        low = " " + " ".join(words) + " "
+        for phrase, _ in SPOKEN_PUNCTUATION_BY_LANG[lang] + COMMANDS_BY_LANG[lang]:
+            if " " + phrase + " " in low:
+                score[lang] += 2
+        for ch in _LETTERS.get(lang, ""):
+            score[lang] += 0.5 * text.lower().count(ch)
+    best = max(LANGUAGES, key=lambda k: (score[k], k == "en"))
+    return best if score[best] > score["en"] else "en"
+
+
+def _phrase_pattern(phrase):
+    """A spoken phrase as a pattern: any accents or none, hyphens or spaces,
+    either apostrophe -- the model writes "linea" and "línea" alike."""
+    out = []
+    for word in re.split(r"[\s-]+", phrase):
+        w = ""
+        for ch in word:
+            base = next((b for b, v in _ACCENTS.items() if ch in v), None)
+            if base:
+                w += "[" + _ACCENTS[base] + "]"
+            elif ch in "'’":
+                w += "['’]\\s*"
+            else:
+                w += re.escape(ch)
+        out.append(w)
+    return r"[\s-]+".join(out)
+
+
+def command(text, language="en"):
+    """"delete", "undo" or "stop" when the utterance is nothing but a
+    spoken command in `language` ("" or "auto": any of them); else None."""
+    said = re.sub(r"[^\w'’\s-]", " ", text).strip().lower()
+    said = re.sub(r"\s+", " ", said)
+    if not said:
+        return None
+    lang = language_code(language)
+    for code in ([lang] if lang else LANGUAGES):
+        for phrase, what in COMMANDS_BY_LANG[code]:
+            if re.fullmatch(_phrase_pattern(phrase), said, flags=re.I):
+                return what
+    return None
+
 
 _UNITS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -474,49 +623,86 @@ def _numbers(text):
 
 
 def postprocess(text, spoken_punctuation=True, auto_punctuation=True,
-                remove_fillers=True, numbers=True):
+                remove_fillers=True, numbers=True, language="en"):
     """The recogniser's text as it should be typed. Empty when there is
-    nothing worth typing (only a filler, say)."""
+    nothing worth typing (only a filler, say). `language` is Control Panel's
+    (en-US, de-DE, fr-FR, es-ES) or "auto"."""
+    lang = language_code(language) or detect_language(text)
+    openers, closers = _OPENERS[lang], _CLOSERS[lang]
     t = " " + text.strip() + " "
     if remove_fillers:
-        pat = r"(?i)(?<![\w'])(?:" + "|".join(FILLERS) + r")(?![\w'])[,.]?"
+        pat = r"(?i)(?<![\w'])(?:" + "|".join(map(re.escape, FILLERS_BY_LANG[lang])) + r")(?![\w'])[,.]?"
         t = re.sub(pat, " ", t)
         t = re.sub(r"^\s*[,.;:]+", " ", t)  # "Um, so" left ", so"
     if not auto_punctuation:
         # The model punctuates by itself; without that, keep only what was
         # dictated (and apostrophes, which belong to the words).
-        t = re.sub(r"[.,!?;:](?=\s|$)", "", t)
+        t = re.sub(r"[.,!?;:¿¡](?=\s|$)", "", t)
+        t = re.sub(r"(?<=\s)[¿¡]", "", t)
     dictated = False  # a mark said aloud is worth typing on its own
     if spoken_punctuation:
-        for phrase, sym in SPOKEN_PUNCTUATION:
-            words = r"\s+".join(phrase.split())
+        for phrase, sym in SPOKEN_PUNCTUATION_BY_LANG[lang]:
+            words = _phrase_pattern(phrase)
             # The model often punctuates around a spoken mark ("Hello, period."):
             # the dictated mark replaces what it put either side.
             pat = r"[,.;:]?\s*(?<![\w'])" + words + r"(?![\w'])"
-            if "\n" in sym or sym in ".,?!;:\u2026":
-                # ...including a "?" or "!" it guessed for a mark said aloud.
-                t, n = re.subn(r"[?!]?" + pat + r"[.,!?;:]?", lambda m, s=sym: s, t, flags=re.I)
-            elif sym in "(\u201c":
-                t, n = re.subn(pat, " " + sym, t, flags=re.I)
+            if "\n" in sym or sym in ".,?!;:…":
+                # ...including a "?" or "!" it guessed for a mark said aloud
+                # (and Spanish's "¿" it may have put before one).
+                t, n = re.subn(r"[¿¡]?[?!]?" + pat + r"[.,!?;:]?", lambda m, s=sym: s, t, flags=re.I)
+            elif sym.strip() and sym.strip() in openers:
+                t, n = re.subn(pat + r"[.,;:]?", " " + sym, t, flags=re.I)
             else:
                 t, n = re.subn(pat, sym, t, flags=re.I)
             dictated = dictated or n > 0
-    if numbers:
+    if numbers and lang == "en":
         t = _numbers(t)
     # Tidy: no space before closing marks, one space between words, none
     # around line breaks, a capital after the end of a sentence.
-    t = re.sub(r"[ \t]+([.,!?;:)”…])", r"\1", t)
-    t = re.sub(r"([(“])[ \t]+", r"\1", t)
-    t = re.sub(r"([.,!?;:])(?=[A-Za-z])", r"\1 ", t)
+    cl = re.escape(closers + "…")
+    op = re.escape(openers)
+    t = re.sub(r"[ \t]+([.,!?;:" + cl + "])", r"\1", t)
+    t = re.sub(r"([" + op + r"])[ \t]+", r"\1", t)
+    t = re.sub(r"([.,!?;:])(?=[^\W\d_])", r"\1 ", t)
     t = re.sub(r"[ \t]*\n[ \t]*", "\n", t)
     t = re.sub(r"[ \t]{2,}", " ", t)
     t = re.sub(r"([.,!?;:])(?:[.,;:])+", r"\1", t)
+    if lang == "es":
+        t = _spanish_openers(t)
     t = t.strip(" \t")
     if auto_punctuation or spoken_punctuation:
-        t = re.sub(r"(^|[.!?]\s+|\n)([a-z])", lambda m: m.group(1) + m.group(2).upper(), t)
+        t = re.sub(r"(^|[.!?]\s+|\n)([" + op + r"\"]?)([^\W\d_])",
+                   lambda m: m.group(1) + m.group(2) + m.group(3).upper(), t)
+    if lang == "fr":
+        # French typography: a space before the tall marks and inside « ».
+        t = re.sub(r"(?<=[^\s\n])([?!;:»])", r" \1", t)
+        t = re.sub(r"«(?=[^\s\n])", "« ", t)
     if not re.search(r"[\w\n]", t) and not dictated:
         return ""
     return t
+
+
+def _spanish_openers(t):
+    """Spanish opens a question or exclamation too: put "¿"/"¡" at the start
+    of a sentence that ends in "?"/"!" without one."""
+    out, start = [], 0
+    for m in re.finditer(r"[?!]+", t):
+        end = m.end()
+        sentence = t[start:end]
+        mark = m.group(0)[0]
+        opener = "¿" if mark == "?" else "¡"
+        if opener not in sentence:
+            lead = len(sentence) - len(sentence.lstrip(" \n"))
+            # the sentence starts after the last end of sentence inside it
+            k = max(sentence.rfind(c, 0, len(sentence) - len(m.group(0))) for c in ".\n")
+            k = max(k + 1, lead)
+            while k < len(sentence) and sentence[k] in " \n":
+                k += 1
+            sentence = sentence[:k] + opener + sentence[k:]
+        out.append(sentence)
+        start = end
+    out.append(t[start:])
+    return "".join(out)
 
 
 def join(previous_tail, text):

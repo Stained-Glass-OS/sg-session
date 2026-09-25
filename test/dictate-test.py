@@ -72,6 +72,65 @@ check("filler removal off keeps them", got.lower().startswith("um"), repr(got))
 got = post("Twenty three.", numbers=False)
 check("number formatting off keeps words", got == "Twenty three.", repr(got))
 
+# ---- other languages: German, French, Spanish -----------------------------------------
+LANG_CASES = [
+    # (language setting, what the model heard, what is typed)
+    ("de-DE", "Hallo Welt Komma das ist ein Test Punkt", "Hallo Welt, das ist ein Test."),
+    ("de-DE", "Wie geht es dir Fragezeichen neue Zeile gut Ausrufezeichen", "Wie geht es dir?\nGut!"),
+    ("de-DE", "Äh, ich glaube, ähm, ja Punkt", "Ich glaube, ja."),
+    ("de-DE", "Erstens neuer Absatz zweitens Doppelpunkt drei", "Erstens\n\nZweitens: drei"),
+    ("de-DE", "Er sagte Anführungszeichen unten hallo Anführungszeichen oben und ging Punkt",
+     "Er sagte „hallo“ und ging."),
+    ("de-DE", "Hallo, Welt. Komma. Das ist ein Test. Punkt.", "Hallo, Welt, Das ist ein Test."),
+    ("fr-FR", "Bonjour tout le monde virgule ceci est un test point", "Bonjour tout le monde, ceci est un test."),
+    ("fr-FR", "Comment ça va point d'interrogation à la ligne très bien point d'exclamation",
+     "Comment ça va ?\nTrès bien !"),
+    ("fr-FR", "Euh je pense que oui point à la ligne à demain", "Je pense que oui.\nÀ demain"),
+    ("fr-FR", "Il a dit ouvrez les guillemets bonjour fermez les guillemets point",
+     "Il a dit « bonjour »."),
+    ("fr-FR", "Trois choses deux-points une, deux point-virgule trois", "Trois choses : une, deux ; trois"),
+    ("es-ES", "Hola a todos coma esto es una prueba punto", "Hola a todos, esto es una prueba."),
+    ("es-ES", "Cómo estás signo de interrogación nueva línea muy bien signo de exclamación",
+     "¿Cómo estás?\n¡Muy bien!"),
+    ("es-ES", "Eh, creo que sí punto y aparte nos vemos", "Creo que sí.\nNos vemos"),
+    ("es-ES", "Hola a todos. ¿Cómo estás? Signo de interrogación.", "Hola a todos. ¿Cómo estás?"),
+    ("es-ES", "Primero nuevo parrafo segundo", "Primero\n\nSegundo"),  # no accent, as the model may write it
+]
+for lang, heard, typed in LANG_CASES:
+    got = post(heard, language=lang)
+    check("postprocess %s %r" % (lang, heard), got == typed, "got %r, want %r" % (got, typed))
+check("English marks are not German ones", post("Hallo comma Welt", language="de-DE") == "Hallo comma Welt",
+      repr(post("Hallo comma Welt", language="de-DE")))
+got = post("Seite twenty three", language="de-DE")
+check("numbers are English only", got == "Seite twenty three", repr(got))
+check("German fillers only in German", post("Äh, hello.", language="en-US") == "Äh, hello.",
+      repr(post("Äh, hello.", language="en-US")))
+
+D = sgspeech.detect_language
+for text, lang in [("Hallo Welt, das ist ein Test und ich bin hier.", "de"),
+                   ("Bonjour, je pense que c'est une bonne idée pour nous.", "fr"),
+                   ("Hola, creo que esto es una prueba muy buena.", "es"),
+                   ("Hello, this is what we have for the test.", "en"),
+                   ("Okay.", "en")]:
+    check("detect_language %r is %s" % (text, lang), D(text) == lang, D(text))
+got = post("Hallo Welt Komma das ist ein Test Punkt", language="auto")
+check("auto: German marks in German speech", got == "Hallo Welt, das ist ein Test.", repr(got))
+got = post("Comment ça va point d'interrogation", language="auto")
+check("auto: French marks in French speech", got == "Comment ça va ?", repr(got))
+
+C = sgspeech.command
+for text, lang, what in [("Delete that.", "en-US", "delete"), ("Scratch that", "en-US", "delete"),
+                         ("Undo that.", "en-US", "undo"), ("Stop listening.", "en-US", "stop"),
+                         ("Das löschen.", "de-DE", "delete"), ("Rückgängig machen.", "de-DE", "undo"),
+                         ("Diktat beenden.", "de-DE", "stop"),
+                         ("Efface ça !", "fr-FR", "delete"), ("Annuler.", "fr-FR", "undo"),
+                         ("Arrête d'écouter.", "fr-FR", "stop"),
+                         ("Borra eso.", "es-ES", "delete"), ("Deshacer.", "es-ES", "undo"),
+                         ("Deja de escuchar.", "es-ES", "stop"), ("Efface ça.", "auto", "delete"),
+                         ("Delete that file.", "en-US", None), ("I said delete that", "en-US", None),
+                         ("Das löschen.", "en-US", None)]:
+    check("command %r (%s) is %s" % (text, lang, what), C(text, lang) == what, repr(C(text, lang)))
+
 J = sgspeech.join
 check("join: a space between sentences", J(".", "Next.") == " Next.")
 check("join: none at the start", J("", "First.") == "First.")
@@ -217,6 +276,104 @@ _code = open(os.path.join(_here, "..", "speech", "sgspeech.py")).read()
 _default = re.search(r'MODEL_DIR = os.environ.get\("SG_SPEECH_DIR", "([^"]+)"\)', _code).group(1)
 check("the model directory is sg-speechd's StateDirectory", _default == "/var/lib/" + _state,
       "%s vs /var/lib/%s" % (_default, _state))
+
+# ---- the engine: partial results while speaking, commands -------------------------------
+# A stand-in recogniser (text grows with the audio) and VAD (loud = speech)
+# behind the real Dictation, Segmenter and microphone path (a WAV at real
+# time): partials come while speaking, are never the final, and the final
+# comes once, after them.
+def engine_run(wav_segments, opts, words):
+    import importlib.machinery
+    import importlib.util
+    import threading
+    import wave
+    import numpy as np
+    loader = importlib.machinery.SourceFileLoader("sgdictate", os.path.join(SPEECH, "sg-dictate"))
+    spec = importlib.util.spec_from_loader("sgdictate", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+
+    class Rec:
+        calls = 0
+
+        def transcribe(self, audio):
+            Rec.calls += 1
+            if words is not None:
+                return words(audio)
+            n = int(len(audio) / 16000 / 0.25)
+            return " ".join("word%d" % i for i in range(n)) + "."
+
+    class Vad:
+        def reset(self):
+            pass
+
+        def __call__(self, frame):
+            return 0.9 if float(np.abs(frame).mean()) > 0.01 else 0.0
+
+    d = tempfile.mkdtemp(dir="/var/tmp")
+    path = os.path.join(d, "a.wav")
+    pcm = b""
+    for kind, secs in wav_segments:
+        t = np.arange(int(16000 * secs)) / 16000
+        a = 0.3 * np.sin(2 * np.pi * 220 * t) if kind == "speech" else np.zeros(len(t))
+        pcm += (a * 32767).astype("<i2").tobytes()
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(pcm)
+    os.environ["SG_DICTATE_AUDIO_FILE"] = path
+    lines, done = [], threading.Event()
+
+    def emit(line):
+        lines.append((time.monotonic(), line))
+        if line.startswith("STATE idle"):
+            done.set()
+
+    eng = mod.Dictation(emit)
+    eng.rec, eng.vad = Rec(), Vad()
+    eng.seg = sgspeech.Segmenter(eng.vad)
+    eng.model_ready.set()
+    eng.start(opts)
+    done.wait(sum(s for _, s in wav_segments) + 15)
+    eng.quit()
+    del os.environ["SG_DICTATE_AUDIO_FILE"]
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
+    return [line for _, line in lines], Rec.calls
+
+
+import time  # noqa: E402
+
+lines, calls = engine_run([("silence", 0.3), ("speech", 3.0), ("silence", 1.5)],
+                          {"continuous": False, "partials": True, "language": "en-US"}, None)
+kinds = [ln.split(" ", 1)[0] for ln in lines if not ln.startswith("LEVEL")]
+partials = [json.loads(ln[8:]) for ln in lines if ln.startswith("PARTIAL ")]
+texts = [json.loads(ln[5:]) for ln in lines if ln.startswith("TEXT ")]
+check("engine: partial results while speaking (3 s: at least 4)", len([p for p in partials if p]) >= 4,
+      repr(kinds))
+check("engine: partials come before the final, never after it",
+      "TEXT" in kinds and "PARTIAL" not in kinds[kinds.index("TEXT"):], repr(kinds))
+check("engine: exactly one final", len(texts) == 1, repr(texts))
+check("engine: partials grow towards the final",
+      len(partials) >= 2 and len(partials[-1]) >= len(partials[0]) and texts and
+      texts[0].startswith(partials[0].rstrip(".")), repr((partials, texts)))
+check("engine: listening ends after the utterance (not continuous)", kinds[-1:] == ["STATE"], repr(kinds))
+
+lines, _ = engine_run([("speech", 2.0), ("silence", 1.5)],
+                      {"continuous": False, "partials": False}, None)
+check("engine: no partials when the toolbar does not want them",
+      not any(ln.startswith("PARTIAL") for ln in lines) and any(ln.startswith("TEXT") for ln in lines),
+      repr(lines))
+
+said = iter(["Hallo Welt Komma das ist gut Punkt", "Das löschen.", "Diktat beenden."])
+lines, _ = engine_run([("speech", 1.0), ("silence", 1.2), ("speech", 0.8), ("silence", 1.2),
+                       ("speech", 0.8), ("silence", 1.2), ("speech", 1.0), ("silence", 1.0)],
+                      {"continuous": True, "partials": False, "language": "de-DE"},
+                      lambda audio: next(said, "Noch mehr."))
+got = [ln for ln in lines if ln.startswith(("TEXT", "CMD", "STATE idle"))]
+check("engine: German marks, then \"Das löschen\" is a command, \"Diktat beenden\" stops",
+      got == ['TEXT "Hallo Welt, das ist gut."', "CMD delete", "STATE idle stopped"], repr(got))
 
 print("dictate-test: %s" % ("OK" if not FAILS else "%d FAILED" % FAILS))
 sys.exit(1 if FAILS else 0)

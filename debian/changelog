@@ -1,3 +1,17 @@
+sg-session (0.1.0-27) unstable; urgency=medium
+
+  * Voice typing: partial results while speaking (PARTIAL over the bridge,
+    shown by the toolbar, never typed; the final replaces them), bounded to
+    twice their own cost; --listen --partials.
+  * Spoken punctuation, filler words and commands in German, French and
+    Spanish (the start request's language, or auto-detected per utterance);
+    spoken commands "delete that", "undo that", "stop listening" in all four.
+  * Gates: dictate-test.py (per-language rules, detection, commands, the
+    engine's partial protocol with a stand-in recogniser), dictate-e2e.sh
+    (de/fr/es marks and partials through the real model).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 12:27:36 -0700
+
 sg-session (0.1.0-26) unstable; urgency=medium
 
   * sg-sysinfo: Disk Management's New Simple Volume, Delete, Extend and

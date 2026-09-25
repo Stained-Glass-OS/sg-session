@@ -8,8 +8,10 @@
 # over its standard handles, as sg-netctl's bridge does.
 #
 #   sg-dictate --transcribe-file WAV...   print what was said (the gate's mode)
-#   sg-dictate --listen [--once] [--seconds N]
+#   sg-dictate --listen [--once] [--seconds N] [--partials]
 #                                         dictate from the microphone to stdout
+#                                         (--partials: the partial results on stderr)
+#   --language en-US|de-DE|fr-FR|es-ES|auto  the text rules' language (default en-US)
 #   sg-dictate --bridge PROGRAM [ARGS]    serve the dictation toolbar
 #   sg-dictate --mics [--out FILE]        MIC <name>\t<description>, DEFAULT <name>
 #   sg-dictate --meter FILE [--device D] [--seconds N]
@@ -164,9 +166,16 @@ class Mic:
 class Dictation:
     """Listens, cuts speech into utterances, recognises them in order, and
     hands each one's text to `emit`. Loads the model on a thread at once, so
-    audio captured while it loads is not lost."""
+    audio captured while it loads is not lost.
+
+    While someone speaks, the utterance so far is recognised again every
+    PARTIAL_EVERY seconds of new audio (or less often, when that takes long)
+    and sent as PARTIAL: the toolbar shows it, and never types it. The
+    utterance's final TEXT replaces it."""
 
     NO_SPEECH_TIMEOUT = {False: 8.0, True: 120.0}  # seconds; continuous or not
+    PARTIAL_EVERY = 0.5     # seconds of new speech between partial results
+    PARTIAL_FIRST = 0.4     # speech heard before the first one
 
     def __init__(self, emit):
         self.emit = emit
@@ -184,6 +193,12 @@ class Dictation:
         self.level_at = 0.0
         self.levels = []
         self.loading = False
+        self.serial = 0         # utterances finished so far: a partial of an older one is stale
+        self.partial_job = None  # (serial, audio, opts): the newest utterance-so-far to show
+        self.partial_at = 0     # samples of the utterance when the last partial was asked for
+        self.partial_cost = 0.0  # seconds the last partial took, to keep partials cheap
+        self.partial_shown = False
+        self.last_tail = ""     # the tail before the last text typed, for "delete that"
         threading.Thread(target=self._recognise, daemon=True).start()
 
     def preload(self):
@@ -299,26 +314,54 @@ class Dictation:
 
     def _segment(self, samples):
         for utt in self.seg.push(samples):
-            self.utterances.put((utt, dict(self.opts)))
+            self._utterance_done(utt)
             self.heard_at = time.monotonic()
             if not self.opts.get("continuous", True):
                 # One utterance, as Windows' voice typing without continuous
                 # dictation: stop listening once the speaker pauses.
                 self._finish_locked(None, flush=False)
                 return
+        self._maybe_partial()
+
+    def _utterance_done(self, audio):
+        self.serial += 1
+        self.partial_job = None
+        self.partial_at = 0
+        self.utterances.put((audio, dict(self.opts)))
+
+    def _maybe_partial(self):
+        """Ask for a partial result of the utterance so far, when enough new
+        speech has been heard since the last one. Bounded: the interval grows
+        to twice what recognising took, so a slow machine is never behind."""
+        if not self.opts.get("partials", True) or not self.seg or not self.seg.in_speech:
+            return
+        n = sum(len(f) for f in self.seg.speech)
+        every = max(self.PARTIAL_EVERY, 2 * self.partial_cost) * sgspeech.SAMPLE_RATE
+        first = self.PARTIAL_FIRST * sgspeech.SAMPLE_RATE
+        if n < first or n - self.partial_at < (every if self.partial_at else first):
+            return
+        self.partial_at = n
+        import numpy as np
+        pending = self.partial_job is not None
+        self.partial_job = (self.serial, np.concatenate(self.seg.speech), dict(self.opts))
+        if not pending:
+            self.utterances.put(("partial", None))
 
     def _finish_locked(self, why, flush=True):
         tail = self.seg.flush() if (flush and self.seg) else None
         if self.seg and not flush:
             self.seg.reset()
         if tail is not None:
-            self.utterances.put((tail, dict(self.opts)))
+            self._utterance_done(tail)
         self._stop_locked()
         self.utterances.put(("idle", why))
 
     def _stop_locked(self):
         self.listening = False
         self.backlog = []
+        self.serial += 1        # whatever partial is in flight is stale now
+        self.partial_job = None
+        self.partial_at = 0
         if self.mic:
             self.mic.stop()
             self.mic = None
@@ -333,6 +376,7 @@ class Dictation:
                 if self.seg:
                     self.seg.reset()
                 self._stop_locked()
+                self._clear_partial_locked()
                 self.emit("STATE idle")
                 return
             if not self.model_ready.is_set():
@@ -349,7 +393,12 @@ class Dictation:
         while True:
             item, extra = self.utterances.get()
             if isinstance(item, str) and item == "idle":
+                with self.lock:
+                    self._clear_partial_locked()
                 self.emit("STATE idle" + (" " + extra if extra else ""))
+                continue
+            if isinstance(item, str) and item == "partial":
+                self._partial()
                 continue
             if isinstance(item, str) and item == "backlog":
                 backlog, opts = extra
@@ -366,6 +415,44 @@ class Dictation:
                 continue
             self._type(item, extra)
 
+    def _clear_partial_locked(self):
+        if self.partial_shown:
+            self.partial_shown = False
+            self.emit("PARTIAL \"\"")
+
+    def _postprocess(self, raw, opts):
+        return sgspeech.postprocess(
+            raw, spoken_punctuation=opts.get("spoken", True),
+            auto_punctuation=opts.get("auto", True),
+            remove_fillers=opts.get("fillers", True), numbers=opts.get("numbers", True),
+            language=opts.get("language", "en-US"))
+
+    def _partial(self):
+        """Recognise the utterance so far and show it, unless it has been
+        finished (or listening stopped) meanwhile: then the final text, or
+        nothing, is what counts."""
+        with self.lock:
+            job, self.partial_job = self.partial_job, None
+        if not job or not self.rec:
+            return
+        serial, audio, opts = job
+        t = time.monotonic()
+        try:
+            raw = self.rec.transcribe(audio)
+        except Exception as e:  # noqa: BLE001 -- a partial is only a preview
+            log("partial recognition failed: %s" % e)
+            return
+        took = time.monotonic() - t
+        text = self._postprocess(raw, opts) if raw else ""
+        if os.environ.get("SG_DICTATE_TIMING"):
+            log("partial: %.2fs of audio in %.2fs" % (len(audio) / sgspeech.SAMPLE_RATE, took))
+        with self.lock:
+            self.partial_cost = took
+            if serial != self.serial or not text:
+                return
+            self.partial_shown = True
+            self.emit("PARTIAL " + json.dumps(text, ensure_ascii=False))
+
     def _type(self, audio, opts):
         t = time.monotonic()
         try:
@@ -374,18 +461,36 @@ class Dictation:
             log("recognition failed: %s" % e)
             self.emit("STATE error recognition failed")
             return
-        text = sgspeech.postprocess(
-            raw, spoken_punctuation=opts.get("spoken", True),
-            auto_punctuation=opts.get("auto", True),
-            remove_fillers=opts.get("fillers", True), numbers=opts.get("numbers", True))
         took = time.monotonic() - t
         if os.environ.get("SG_DICTATE_TIMING"):
             log("recognised %.2fs of audio in %.2fs" % (len(audio) / sgspeech.SAMPLE_RATE, took))
-        if not text:
+        what = sgspeech.command(raw, opts.get("language", "en-US")) if opts.get("spoken", True) else None
+        if what:
+            # "Delete that", "Das löschen", "Efface ça", "Borra eso"...: a
+            # command, never text. The toolbar does delete/undo; stop is ours.
+            with self.lock:
+                self._clear_partial_locked()
+                if what == "delete":
+                    self.tail = self.last_tail
+                if what == "stop":
+                    if self.listening:
+                        if self.seg:
+                            self.seg.reset()
+                        self._stop_locked()
+                        self.utterances.put(("idle", "stopped"))
+                    return
+            self.emit("CMD " + what)
             return
+        text = self._postprocess(raw, opts)
         with self.lock:
+            if not text:
+                self._clear_partial_locked()
+                return
+            self.last_tail = self.tail
             text = sgspeech.join(self.tail, text)
             self.tail = text[-1:]
+            # the final replaces the partial: the toolbar clears it on TEXT
+            self.partial_shown = False
         self.emit("TEXT " + json.dumps(text, ensure_ascii=False))
 
     def quit(self):
@@ -398,7 +503,7 @@ class Dictation:
 def bridge(program):
     """Run the dictation toolbar with pipes as its standard handles. It sends
     one JSON object a line ({"cmd": "start", ...}, "stop", "cancel", "quit");
-    this answers with STATE/LEVEL/TEXT lines whenever there is news. Ends
+    this answers with STATE/LEVEL/PARTIAL/TEXT/CMD lines whenever there is news. Ends
     when the program does."""
     down_r, down_w = os.pipe()
     up_r, up_w = os.pipe()
@@ -478,7 +583,8 @@ def transcribe_files(paths, raw, post):
         text = rec.transcribe(audio)
         took = time.monotonic() - t
         if not raw:
-            text = sgspeech.postprocess(text, **post)
+            what = sgspeech.command(text, post.get("language", "en")) if post["spoken_punctuation"] else None
+            text = "<command %s>" % what if what else sgspeech.postprocess(text, **post)
         if os.environ.get("SG_DICTATE_TIMING"):
             log("%s: %.2fs of audio in %.2fs" % (p, len(audio) / sgspeech.SAMPLE_RATE, took))
         print(json.dumps(text, ensure_ascii=False) if len(paths) == 1 else
@@ -486,15 +592,21 @@ def transcribe_files(paths, raw, post):
     return 0
 
 
-def listen(post, continuous=True, seconds=None):
+def listen(post, continuous=True, seconds=None, show_partials=False):
     """Dictate from the microphone to stdout until Ctrl+C, `seconds` pass,
-    or (not continuous) the speaker pauses."""
+    or (not continuous) the speaker pauses. `show_partials`: the partial
+    results too, on stderr ("partial: <JSON>")."""
     done = threading.Event()
 
     def emit(line):
         if line.startswith("TEXT "):
             sys.stdout.write(json.loads(line[5:]))
             sys.stdout.flush()
+        elif line.startswith("PARTIAL ") and show_partials:
+            # What the toolbar would show while the speaker is still talking.
+            print("partial: " + line[8:], file=sys.stderr, flush=True)
+        elif line.startswith("CMD "):
+            log("command " + line[4:])
         elif line.startswith("STATE "):
             log(line[6:])
             if line.startswith("STATE idle") or line.startswith("STATE no") or \
@@ -810,11 +922,17 @@ def local_or_ask(argv):
 
 def main():
     args = sys.argv[1:]
+    language = "en-US"
+    if "--language" in args:
+        i = args.index("--language")
+        language = args[i + 1] if i + 1 < len(args) else "en-US"
+        args = args[:i] + args[i + 2:]
     post = {"spoken_punctuation": "--no-spoken-punctuation" not in args,
             "auto_punctuation": "--no-auto-punctuation" not in args,
             "remove_fillers": "--keep-fillers" not in args,
-            "numbers": "--no-numbers" not in args}
-    flags = [a for a in args if a.startswith("--no-") or a == "--keep-fillers"]
+            "numbers": "--no-numbers" not in args,
+            "language": language}
+    flags = [a for a in args if a.startswith("--no-") or a in ("--keep-fillers", "--partials")]
     rest = [a for a in args if a not in flags]
     mode = rest[0] if rest else "--help"
     if mode == "--bridge" and len(rest) > 1:
@@ -825,8 +943,10 @@ def main():
     if mode == "--listen":
         seconds = float(rest[rest.index("--seconds") + 1]) if "--seconds" in rest else None
         return listen({"spoken": post["spoken_punctuation"], "auto": post["auto_punctuation"],
-                       "fillers": post["remove_fillers"], "numbers": post["numbers"]},
-                      continuous="--once" not in rest, seconds=seconds)
+                       "fillers": post["remove_fillers"], "numbers": post["numbers"],
+                       "language": language, "partials": "--no-partials" not in args},
+                      continuous="--once" not in rest, seconds=seconds,
+                      show_partials="--partials" in args)
     if mode == "--mics":
         # --out FILE: for a Windows program, which cannot read our stdout.
         mics, default = list_mics()

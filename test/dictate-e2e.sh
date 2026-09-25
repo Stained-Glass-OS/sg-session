@@ -98,6 +98,49 @@ t=$(SG_DICTATE_AUDIO_FILE="$work/words.wav" timeout 60 "$DICTATE" --listen --onc
 case "$(printf '%s' "$t" | tr 'A-Z' 'a-z')" in *hello*) pass "--once stops after the utterance: $t" ;;
     *) fail "--once: $t" ;; esac
 
+# Spoken punctuation in German, French and Spanish (Control Panel's
+# language, --language here). espeak-ng's German "Komma" is heard as "Toma";
+# "Kommar" is what it says recognisably.
+sayv() { espeak-ng -v "$1" -s 120 -w "$work/$2.wav" "$3"; }
+sayv de de "Das ist gut, Kommar, und das auch, Punkt"
+sayv fr-fr fr "Merci beaucoup, virgule, à bientôt"
+sayv es es "Creo que sí, signo de exclamación, nuevo párrafo, nos vemos mañana, punto"
+for l in de:de-DE fr:fr-FR es:es-ES de:auto; do
+    f=${l%%:*}; lang=${l#*:}
+    t=$("$DICTATE" --transcribe-file "$work/$f.wav" --language "$lang" 2>/dev/null)
+    case "$f:$t" in
+        de:'"Das ist gut, und das auch."') pass "German ($lang): Komma and Punkt are marks: $t" ;;
+        fr:*'beaucoup, à bientôt'*) case "$t" in *[Vv]irgule*) fail "French ($lang): $t" ;;
+                                        *) pass "French ($lang): virgule is a comma: $t" ;; esac ;;
+        es:*'¡Creo que sí!\n\nNos vemos mañana."') pass "Spanish ($lang): exclamation (both marks), paragraph, punto: $t" ;;
+        *) fail "$f ($lang): $t" ;;
+    esac
+done
+t=$("$DICTATE" --transcribe-file "$work/de.wav" --language en-US 2>/dev/null)
+case "$t" in *Punkt*) pass "German marks are not applied as English: $t" ;; *) fail "en-US on German: $t" ;; esac
+
+# Partial results while speaking: a long sentence at real time into the VAD
+# (the interval grows to twice what a partial costs, so a busy machine gets fewer),
+# --partials shows what the toolbar would. Several come before the final,
+# they grow, and none is typed.
+say long "this is a much longer sentence that keeps going for a while so that the partial results have time to show up before the speaker stops"
+t=$(SG_DICTATE_AUDIO_FILE="$work/long.wav" timeout 120 "$DICTATE" --listen --once --partials 2>"$work/partial.log")
+n=$(grep -c '^partial: ' "$work/partial.log")
+printf '      %s partials, last: %s\n' "$n" "$(grep '^partial: ' "$work/partial.log" | tail -1)"
+[ "$n" -ge 3 ] && pass "partial results while speaking ($n; fewer on a loaded machine, by design)" || fail "only $n partial results"
+first=$(grep '^partial: ' "$work/partial.log" | head -1 | wc -c)
+last=$(grep '^partial: ' "$work/partial.log" | tail -1 | wc -c)
+[ "$last" -gt "$first" ] && pass "the partial text grows ($first -> $last bytes)" || fail "partials did not grow"
+case "$(printf '%s' "$t" | tr 'A-Z' 'a-z')" in *"longer sentence"*"speaker stops"*) pass "the final text is typed once: $t" ;;
+    *) fail "final: $t" ;; esac
+t=$(SG_DICTATE_AUDIO_FILE="$work/long.wav" timeout 120 "$DICTATE" --listen --once --partials --no-partials 2>"$work/partial.log")
+[ "$(grep -c '^partial: ' "$work/partial.log")" = 0 ] && pass "--no-partials: none" || fail "partials despite --no-partials"
+
+# A spoken command is a command, not text.
+say del-en "delete that"
+t=$("$DICTATE" --transcribe-file "$work/del-en.wav" 2>/dev/null)
+[ "$t" = '"<command delete>"' ] && pass "\"delete that\" is a command" || fail "delete that: $t"
+
 [ $fails = 0 ] && { echo "dictate-e2e: OK"; exit 0; }
 echo "dictate-e2e: $fails FAILED"
 exit 1
