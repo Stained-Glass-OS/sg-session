@@ -414,6 +414,11 @@ test-oobe: greeter
 test-login: greeter
 	@sh test/login-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
+# The profile service plants Windows' Send to items once per profile (needs root).
+.PHONY: test-profile
+test-profile:
+	sudo sh test/profile-sendto-test.sh
+
 # Disk Management's partition changes for real, on a loop device only (needs sudo).
 .PHONY: test-diskops
 test-diskops:

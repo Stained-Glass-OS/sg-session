@@ -59,4 +59,22 @@ runuser -u "$user" -- sh -c 'umask 077; cd "$1" && exec mkdir -p \
     Desktop Documents Downloads Music Pictures Videos Favorites Links \
     Contacts Searches "Saved Games"' sg-profile-create "$profile" 2>/dev/null ||
     sg_log "WARNING: could not create the standard folders in $user's profile"
+
+# Send to: the items Windows' Default profile brings -- "Compressed (zipped)
+# Folder" (wine-sg's shell32 runs the .ZFSendToTarget type's sendto command,
+# which sg-shell's sg-zip registers), "Desktop (create shortcut)" and
+# "Documents". Empty files, as on Windows: their extensions say what they do.
+# Once per profile (a marker in AppData\Local), so an item the user deleted
+# stays deleted; profiles made before this get them at their next login.
+# shellcheck disable=SC2016 # $1 is the inner shell's, deliberately
+runuser -u "$user" -- sh -c 'umask 077; cd "$1" || exit 1
+    mark="AppData/Local/Stained Glass/sendto-defaults"
+    [ -e "$mark" ] && exit 0
+    d="AppData/Roaming/Microsoft/Windows/SendTo"
+    mkdir -p "$d" "AppData/Local/Stained Glass" || exit 1
+    for f in "Compressed (zipped) Folder.ZFSendToTarget" "Desktop (create shortcut).DeskLink" "Documents.mydocs"; do
+        [ -e "$d/$f" ] || : > "$d/$f" || exit 1
+    done
+    : > "$mark"' sg-profile-create "$profile" 2>/dev/null ||
+    sg_log "WARNING: could not create the Send to items in $user's profile"
 exit 0

@@ -1,3 +1,14 @@
+sg-session (0.1.0-28) unstable; urgency=medium
+
+  * sg-profile-create: each profile gets Windows' Send to items once --
+    Compressed (zipped) Folder, Desktop (create shortcut), Documents -- as
+    the empty .ZFSendToTarget/.DeskLink/.mydocs files wine-sg's shell32
+    (0156) acts on; existing profiles get them at their next login, and an
+    item the user deleted is not put back.
+  * test/profile-sendto-test.sh (make test-profile).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 14:20:00 -0700
+
 sg-session (0.1.0-27) unstable; urgency=medium
 
   * Voice typing: partial results while speaking (PARTIAL over the bridge,

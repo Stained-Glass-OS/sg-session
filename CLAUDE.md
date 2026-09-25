@@ -225,6 +225,15 @@ user owns can be steered with a symlink. A user cannot do this themselves:
 PowerShell falls into ConstrainedLanguage mode (it probes `%TEMP%` for
 AppLocker).
 
+It also plants the **Send to** items Windows' Default profile has, as empty
+files whose extension says what they do (wine-sg 0156 reads them):
+`Compressed (zipped) Folder.ZFSendToTarget` (sg-shell's zip reg gives that
+type a `sendto` command), `Desktop (create shortcut).DeskLink`,
+`Documents.mydocs` -- **once per profile** (marker
+`AppData\Local\Stained Glass\sendto-defaults`), so a profile made before
+gets them at its next login and an item the user deleted stays deleted. Gate:
+`make test-profile` (root; a second account, default `sgconf`).
+
 ## The per-user process agent (sg-procagent)
 
 `sg-procagent` (native C, `procagent/`) runs **as each session user**, launched
