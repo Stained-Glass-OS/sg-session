@@ -149,6 +149,13 @@ static void from_wizard( char *line, void *ctx )
         /* The window exists and takes input: a real readiness signal for
          * anything waiting on it -- the install gate, remote support. */
         logmsg( oobe ? "oobe ready" : "setup ready" );
+        /* The login screen script waits on this to know the first-run
+         * setup is really up (and falls back to the login screen if not). */
+        if (oobe && getenv( "SG_OOBE_READY" ))
+        {
+            FILE *f = fopen( getenv( "SG_OOBE_READY" ), "w" );
+            if (f) fclose( f );
+        }
         return;
     }
     if (!oobe && !strcmp( line, "TRY" ))

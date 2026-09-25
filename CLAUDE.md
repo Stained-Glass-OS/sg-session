@@ -572,6 +572,15 @@ compositor; whatever happens it then exits, and greetd starts it again: the
 login screen (with the keyboard just chosen), or the first-run setup again if
 it did not finish. `SG_OOBE=0` skips it.
 
+**It never keeps the machine from its login screen**: it is not shown
+without its service's socket; if its window has not appeared within
+`SG_OOBE_TIMEOUT` (300 s; the bridge touches `SG_OOBE_READY` on the
+wizard's HELLO) it is stopped; after three runs that did not finish this
+boot shows the login screen (a per-boot count in /tmp). The marker stays, so
+the next boot offers it again. `test/oobe-fallback-test.sh` (in `make lint`,
+stand-ins, no Wine): ready, hang, crash loop, no socket; the version without
+these fails three of four.
+
 Pages (`setup/sg-oobe.c`, our own drawing: a stained-glass backdrop, a card
 with the page's picture and Basics / Network / Account / Services on the left,
 the page on the right, purple buttons): **region** ("Let's start with region.

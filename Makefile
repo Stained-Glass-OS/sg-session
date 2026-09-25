@@ -185,8 +185,9 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
 	@python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
+	@sh test/oobe-fallback-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

@@ -41,15 +41,44 @@ fi
 # Whatever happens, this greeter then ends: greetd starts it again, and it
 # shows the login screen (with the keyboard just chosen) or, if the first-run
 # setup did not finish, the first-run setup again. SG_OOBE=0 skips it.
+#
+# It must never keep the machine from its login screen: without its service
+# (the socket) it is not shown; if its window has not appeared within
+# SG_OOBE_TIMEOUT seconds (300) it is stopped; and after three tries that did
+# not finish, this boot shows the login screen instead (a per-boot count in
+# /tmp, a tmpfs). The marker stays, so the next boot offers it again.
 OOBE_PENDING="${SG_OOBE_PENDING:-/etc/stained-glass/oobe.pending}"
-if [ -f "$OOBE_PENDING" ] && [ "${SG_OOBE:-1}" != 0 ] \
-        && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-oobe64.exe" ]; then
-    systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" --oobe \
-        "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-oobe64.exe"
+OOBE_SOCK="${SG_OOBED_SOCK:-/run/stained-glass-oobe/oobed.sock}"
+OOBE_TRIES="${TMPDIR:-/tmp}/sg-oobe-tries.$(id -u)"
+if [ -f "$OOBE_PENDING" ] && [ "${SG_OOBE:-1}" != 0 ] && [ -S "$OOBE_SOCK" ] \
+        && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-oobe64.exe" ] \
+        && [ "$(cat "$OOBE_TRIES" 2>/dev/null || echo 0)" -lt 3 ]; then
+    echo $(( $(cat "$OOBE_TRIES" 2>/dev/null || echo 0) + 1 )) > "$OOBE_TRIES"
+    ready="${TMPDIR:-/tmp}/sg-oobe-ready.$(id -u)"
+    rm -f "$ready"
+    SG_OOBE_READY="$ready" SG_OOBED_SOCK="$OOBE_SOCK" systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -- \
+        "$LIBEXEC/sg-setup-bridge" --oobe "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-oobe64.exe" &
+    pid=$!
+    waited=0
+    while [ ! -e "$ready" ] && kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -ge "${SG_OOBE_TIMEOUT:-300}" ]; then
+            echo "sg-login-ui: the first-run setup did not appear in ${SG_OOBE_TIMEOUT:-300}s; showing the login screen" \
+                | systemd-cat -t sg-oobe
+            echo 3 > "$OOBE_TRIES"
+            kill "$pid" 2>/dev/null
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "$pid"
+    rm -f "$ready"
     # A crash loop must not hammer the machine: greetd restarts us at once.
     [ -f "$OOBE_PENDING" ] && sleep 2
     exit 0
 fi
+[ -f "$OOBE_PENDING" ] && [ -f "$OOBE_TRIES" ] && \
+    echo "sg-login-ui: the first-run setup did not finish; the login screen instead, this boot" | systemd-cat -t sg-oobe
 
 # Wine prefers its Wayland driver whenever WAYLAND_DISPLAY is set, and the
 # compositor always sets it; the greeter is drawn through XWayland like the
