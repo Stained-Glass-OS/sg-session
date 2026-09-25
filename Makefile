@@ -34,6 +34,8 @@ all:
 install: d3d-probe greeter token-probe procagent rdp
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
+	@# Python, so not in BINS (which lint checks as sh).
+	install -m 0755 bin/sg-netctl $(BINDIR)
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
 	@# the package must still build on a machine without mingw, and the gate
 	@# reports "not built" rather than failing.
@@ -128,6 +130,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
+	    systemd/sg-netd.socket systemd/sg-netd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
@@ -136,6 +139,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 systemd/user-runtime-dir@.service.d/50-stained-glass-drives.conf \
 	    $(UNITDIR)/user-runtime-dir@.service.d/
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
+	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
+	install -m 0644 config/polkit/50-stained-glass-network.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
@@ -145,6 +150,8 @@ lint:
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
+	@python3 test/netctl-test.py
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \

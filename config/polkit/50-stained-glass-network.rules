@@ -1,0 +1,18 @@
+// Stained Glass OS -- who may drive NetworkManager directly (sg-session).
+//
+// Administrators (sg-admins) may change anything, as on Windows. Everyone
+// else may look and scan, but not change: joining a Wi-Fi network goes
+// through sg-netd (sg-netctl), which lets any signed-in user join, disconnect
+// and forget Wi-Fi and lets only administrators change an adapter's addresses
+// or DNS. Handing ordinary users NetworkManager itself would not keep that
+// line -- a profile of their own ("modify.own") may be any type, with any
+// static address, and "network-control" disconnects any adapter.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") != 0)
+        return polkit.Result.NOT_HANDLED;
+    if (subject.isInGroup("sg-admins"))
+        return polkit.Result.YES;
+    if (action.id == "org.freedesktop.NetworkManager.wifi.scan" && subject.local && subject.active)
+        return polkit.Result.YES;
+    return polkit.Result.NO;
+});

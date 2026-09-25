@@ -1,0 +1,18 @@
+[Unit]
+Description=Stained Glass network settings request
+CollectMode=inactive-or-failed
+After=NetworkManager.service
+
+[Service]
+ExecStart=/usr/bin/sg-netctl --serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutSec=120
+# It talks to NetworkManager over D-Bus and writes Wi-Fi profiles; nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/NetworkManager/system-connections
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

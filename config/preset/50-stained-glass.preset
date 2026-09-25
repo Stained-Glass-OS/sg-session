@@ -3,3 +3,4 @@
 # presets after the package's own scripts, and Debian's default enables all.
 disable sg-rdpd.service
 enable sg-netmountd.socket
+enable sg-netd.socket

@@ -47,6 +47,7 @@ separately.
 | `systemd/sg-wineserver.service` | runs the machine-level server before greetd |
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
+| `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
 environment variables — `SG_LIB`, `SG_BIN`, `SG_ROOT`, `SG_PREFIX`, `SG_STATE`,
@@ -419,6 +420,94 @@ everything again.
   `make install-test` boots the stick in QEMU, drives Setup through the VM's
   keyboard onto a blank disk, restarts, and runs the boot gate on the
   installed disk as the new owner.
+
+## Network settings: sg-netctl and sg-netd
+
+The image runs **NetworkManager** (wired DHCP out of the box, Wi-Fi), feeding
+systemd-resolved (which the DC and member roles configure). `bin/sg-netctl`
+(Python, `/usr/bin/sg-netctl`) is the one backend for everything Windows-side
+that shows or changes network settings: sg-shell's Network Connections
+(`ncpa.cpl`) and taskbar network flyout today, `netsh`/`ipconfig` in wine-sg
+next.
+
+- **As a user it asks sg-netd**: `sg-netd.socket`
+  (`/run/stained-glass-net/netd.sock`, 0666, `Accept=yes`) runs
+  `sg-netctl --serve` as root per connection, which takes the caller's uid
+  from `SO_PEERCRED` and decides, as Windows does: **anyone with a Windows
+  session** (group `sgwine`; sg-admins; root) may list adapters, scan, join,
+  disconnect and forget Wi-Fi and switch the Wi-Fi radio; **changing an
+  adapter's addresses, DNS, or enabling/disabling/renewing/releasing it needs
+  an administrator** (`sg-admins`). System accounts get nothing. As root it
+  does the work itself.
+- **polkit holds NetworkManager to the same line**
+  (`config/polkit/50-stained-glass-network.rules`): sg-admins may do anything
+  with nmcli; everyone else may only scan. Letting ordinary users drive NM
+  would not keep the line -- a "modify.own" profile can be any type with any
+  static address. The VM gate checks both halves.
+- **The Wi-Fi key never touches a command line.** It arrives on stdin
+  (`--password-stdin`) or in the request's `secret` field, and sg-netd writes
+  the profile as a keyfile itself (0600 root,
+  `/etc/NetworkManager/system-connections/sg-wifi-<uuid>.nmconnection`, the
+  SSID as its exact bytes) and loads it. A network that cannot be joined is
+  not remembered.
+- **Wine gives a native program started from a GUI process no stdio**
+  (`fork_and_exec` closes stdin/stdout when there is no inherited console), and
+  Wine has no AF_UNIX. So a Windows program re-launches itself as
+  `sg-netctl --bridge wine <itself> --bridged ...`: the bridge starts it with
+  pipes as its standard handles and answers each request. sg-shell's
+  `src/sg-netclient.h` is the client side.
+
+**Interface** (stable; netsh/ipconfig will be built on it):
+
+```
+sg-netctl whoami                                   USER <name> / ADMIN yes|no
+sg-netctl adapters [DEVICE]                        per adapter, a block:
+    ADAPTER <dev>  TYPE ethernet|wifi|...  STATE connected|disconnected|connecting|unavailable|unmanaged
+    MAC <aa:bb:..>  MTU <n>  [SPEED <Mb/s>]  RX-BYTES <n>  TX-BYTES <n>  DRIVER <name>
+    [CONNECTION <profile name>  CONNECTION-UUID <uuid>  AUTOCONNECT yes|no
+     IPV4-METHOD auto|manual|disabled  IPV4-DNS-AUTO yes|no  IPV6-METHOD auto|manual|disabled|...]
+    IPV4-ADDRESS <a.b.c.d/p>*  [IPV4-GATEWAY <a>]  IPV4-DNS <a>*  DNS-SUFFIX <domain>*
+    [DHCP4-SERVER <a>  DHCP4-LEASE-TIME <s>  DHCP4-EXPIRES <epoch>  DHCP4-OBTAINED <epoch>]
+    IPV6-ADDRESS <addr/p>*  [IPV6-GATEWAY <a>]  IPV6-DNS <a>*  [SSID-HEX <hex>  SSID <text>]
+    END
+sg-netctl ipv4 DEV dhcp [--dns auto|A[,B,C]]                     (admin)
+sg-netctl ipv4 DEV static A.B.C.D/P [--gateway G] [--dns A[,B,C]] (admin; no --dns: none)
+sg-netctl ipv6 DEV auto|disabled | static ADDR/P [--gateway G] [--dns ...]   (admin)
+sg-netctl dns DEV auto|A[,B,C]                                   (admin)
+sg-netctl enable|disable|renew|release DEV                       (admin)
+sg-netctl wifi scan [--rescan]
+    WIFI <signal>\t<open|wpa-psk|sae|enterprise|wep>\t<in-use yes|no>\t<saved yes|no>\t<ssid hex>\t<ssid text>
+sg-netctl wifi connect (--ssid TEXT | --ssid-hex HEX) [--hidden] [--security open|wpa-psk|sae]
+                       [--no-autoconnect] [--password-stdin] [--device DEV]   -> CONNECTED <dev>
+sg-netctl wifi disconnect [DEV]                                  -> DISCONNECTED <dev>
+sg-netctl wifi forget (--ssid TEXT | --ssid-hex HEX)             -> FORGOTTEN <n>
+sg-netctl wifi saved      SAVED <uuid>\t<autoconnect yes|no>\t<ssid hex>\t<ssid text>
+sg-netctl wifi radio on|off|status                               -> RADIO enabled|disabled
+```
+
+The last line of every answer is `OK` or `ERROR <kind> <message>`, kind one
+of `denied` (exit 3), `invalid` (2), `notfound`, `auth` (a wrong Wi-Fi key),
+`unsupported` (enterprise/WEP Wi-Fi), `failed` (1). Inputs are validated
+before NetworkManager hears of them: adapter names, addresses (no network,
+broadcast, multicast or loopback address; the gateway on the subnet), one to
+three DNS servers, WPA2 keys of 8-63 printable characters, SSIDs of 1-32
+bytes. A fixed address has fixed DNS (or none), as on Windows. Bridge and
+socket requests are one JSON line, `{"argv": [...], "secret": "..."}`.
+
+- **nmcli leaves DHCP4 out of `device show`** unless asked by field
+  (`-f GENERAL,IP4,DHCP4,IP6`), and puts a `Hint:` line after the `Error:`
+  line: the error is the `Error:` line.
+- **`sg-dc-provision` pins the DC's address**: if DHCP gave it, the adapter
+  gets it as a fixed address (same prefix, gateway, upstream DNS) through
+  sg-netctl before provisioning.
+- **Gates:** `test/netctl-test.py` (in `make lint`; a stand-in nmcli: who may
+  do what over the real socket protocol, validation before NetworkManager, the
+  key on no command line and 0600, failed joins not remembered, the bridge);
+  sg-image's `make net-test` (real NetworkManager in a VM: DHCP on two NICs,
+  static and back as an administrator, refusals for a standard user through
+  sg-netd and through nmcli, and Wi-Fi over mac80211_hwsim against an access
+  point of the test's own: wrong key, join, a DHCP lease and traffic over the
+  air, disconnect, rejoin with the saved key, forget, the radio).
 
 ## Domain controller role (D2)
 

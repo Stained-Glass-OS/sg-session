@@ -1,0 +1,892 @@
+#!/usr/bin/python3
+# sg-netctl -- network settings for Stained Glass OS: adapters, IPv4/IPv6 and
+# DNS, Wi-Fi. The one backend behind Network Connections (ncpa.cpl), the
+# taskbar's network flyout, and (later) netsh and ipconfig.
+#
+#   sg-netctl COMMAND [ARGS]          as a user: asks sg-netd (the socket);
+#                                     as root: does it directly
+#   sg-netctl --serve                 sg-netd itself: one request on the
+#                                     socket it was started on (sg-netd@.service)
+#   sg-netctl --bridge PROGRAM [ARGS] runs PROGRAM with pipes as its stdin and
+#                                     stdout and serves its requests: how a
+#                                     Windows program reaches this (Wine gives a
+#                                     native program no stdio of a GUI parent)
+#
+# NetworkManager does the work. Who may do what is decided here, from the
+# requesting process's uid (SO_PEERCRED), as Windows decides it:
+#   - anyone with a Windows session (group sgwine) may see adapters, scan for and join Wi-Fi networks,
+#     disconnect, forget a network and turn the Wi-Fi radio on or off;
+#   - changing an adapter's addresses, DNS, or enabling/disabling/renewing it
+#     needs an administrator (a member of sg-admins).
+# polkit (50-stained-glass-network.rules) holds NetworkManager itself to the
+# same line, so nmcli is no way round it.
+#
+# Commands (the interface is documented in sg-session's CLAUDE.md):
+#   whoami
+#   adapters [DEVICE]
+#   ipv4 DEVICE dhcp [--dns auto|ADDR[,ADDR...]]
+#   ipv4 DEVICE static ADDRESS/PREFIX [--gateway ADDR] [--dns ADDR[,ADDR...]]
+#   ipv6 DEVICE auto|disabled [--dns auto|ADDR[,...]]
+#   ipv6 DEVICE static ADDRESS/PREFIX [--gateway ADDR] [--dns ADDR[,...]]
+#   dns DEVICE auto|ADDR[,ADDR...]
+#   enable DEVICE | disable DEVICE | renew DEVICE | release DEVICE
+#   wifi scan [--rescan]
+#   wifi connect (--ssid TEXT | --ssid-hex HEX) [--hidden] [--security open|wpa-psk|sae]
+#                [--no-autoconnect] [--password-stdin] [--device DEVICE]
+#   wifi disconnect [DEVICE]
+#   wifi forget (--ssid TEXT | --ssid-hex HEX)
+#   wifi saved
+#   wifi radio on|off|status
+#
+# Output: lines, then a last line "OK" or "ERROR <kind> <message>", kind one
+# of denied, invalid, notfound, auth, unsupported, failed. Exit status 0 on
+# OK, 3 denied, 2 invalid, 1 anything else.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import grp
+import ipaddress
+import json
+import os
+import pwd
+import re
+import socket
+import struct
+import subprocess
+import sys
+import syslog
+import tempfile
+import time
+import uuid
+
+SOCKET = os.environ.get("SG_NETD_SOCKET", "/run/stained-glass-net/netd.sock")
+ADMIN_GROUP = os.environ.get("SG_ADMIN_GROUP", "sg-admins")
+USER_GROUP = os.environ.get("SG_WINE_GROUP", "sgwine")
+NM_DIR = os.environ.get("SG_NM_DIR", "/etc/NetworkManager/system-connections")
+MAX_REQUEST = 65536
+EXIT = {"denied": 3, "invalid": 2}
+
+ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release"}
+USER_COMMANDS = {"whoami", "adapters", "wifi"}
+
+
+class Fail(Exception):
+    def __init__(self, kind, message, detail=""):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+        self.detail = detail or message
+
+
+def clean(text):
+    """One line of display text: control characters out."""
+    return "".join(c if c.isprintable() else "?" for c in text)
+
+
+# --- NetworkManager -----------------------------------------------------------
+
+def nmcli(*args, check=True, timeout=60):
+    env = dict(os.environ, LC_ALL="C", LANG="C")
+    try:
+        r = subprocess.run(["nmcli", "-t", "-e", "yes", *args], capture_output=True, text=True,
+                           timeout=timeout, env=env, stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise Fail("failed", "NetworkManager is not installed")
+    except subprocess.TimeoutExpired:
+        raise Fail("failed", "NetworkManager did not answer in time")
+    if check and r.returncode != 0:
+        # The reason is the "Error:" line; NetworkManager may add hints after it.
+        lines = [l for l in r.stderr.strip().splitlines() if l.strip()] or ["nmcli failed"]
+        msg = next((l for l in lines if l.startswith("Error:")), lines[0])
+        raise Fail("failed", clean(msg.removeprefix("Error: ")), r.stderr)
+    return r
+
+
+def split_terse(line):
+    """Split one line of nmcli -t -e yes output on unescaped colons."""
+    fields, cur, esc = [], [], False
+    for c in line:
+        if esc:
+            cur.append(c)
+            esc = False
+        elif c == "\\":
+            esc = True
+        elif c == ":":
+            fields.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+    fields.append("".join(cur))
+    return fields
+
+
+def key_value_lines(text):
+    """nmcli -t 'show' output: FIELD:value lines (value may hold escaped colons)."""
+    out = []
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        out.append((k, "".join(split_terse(v)) if "\\" in v else v))
+    return out
+
+
+def devices():
+    r = nmcli("-f", "DEVICE,TYPE,STATE,CON-UUID", "device", "status")
+    devs = []
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) < 4 or f[1] in ("loopback", "wifi-p2p", "bridge-port") or f[0] == "lo":
+            continue
+        devs.append({"device": f[0], "type": f[1], "state": f[2], "uuid": f[3]})
+    return devs
+
+
+def device(name):
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name or ""):
+        raise Fail("invalid", "not an adapter name: %s" % clean(name or ""))
+    for d in devices():
+        if d["device"] == name:
+            return d
+    raise Fail("notfound", "no adapter called %s" % name)
+
+
+def connection_fields(uuid_, fields):
+    r = nmcli("-f", ",".join(fields), "connection", "show", "uuid", uuid_, check=False)
+    return dict(key_value_lines(r.stdout)) if r.returncode == 0 else {}
+
+
+def sysfs(dev, name):
+    try:
+        with open("/sys/class/net/%s/%s" % (dev, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def state_word(state):
+    """NetworkManager's device state, as one word."""
+    s = state.strip()
+    if s[:1].isdigit() and "(" in s:  # "100 (connected)"
+        s = s[s.find("(") + 1:s.rfind(")")]
+    for word in ("connected", "disconnected", "unavailable", "unmanaged"):
+        if s == word or s.startswith(word + " "):
+            return word
+    if s.startswith(("connecting", "deactivating", "prepare", "config", "need-auth", "ip-", "secondaries")):
+        return "connecting"
+    return s.split(" ", 1)[0] or "unknown"
+
+
+def show_adapter(d, emit):
+    dev = d["device"]
+    # DHCP4 only when asked for by name: the default field set leaves it out.
+    info = key_value_lines(nmcli("-f", "GENERAL,IP4,DHCP4,IP6", "device", "show", dev).stdout)
+    get = lambda k: [v for kk, v in info if kk == k or kk.startswith(k + "[")]
+    one = lambda k: (get(k) or [""])[0]
+    emit("ADAPTER %s" % dev)
+    emit("TYPE %s" % d["type"])
+    emit("STATE %s" % state_word(one("GENERAL.STATE") or d["state"]))
+    emit("MAC %s" % one("GENERAL.HWADDR").lower())
+    emit("MTU %s" % one("GENERAL.MTU"))
+    speed = sysfs(dev, "speed")
+    if speed.isdigit() and int(speed) > 0:
+        emit("SPEED %s" % speed)
+    emit("RX-BYTES %s" % (sysfs(dev, "statistics/rx_bytes") or "0"))
+    emit("TX-BYTES %s" % (sysfs(dev, "statistics/tx_bytes") or "0"))
+    emit("DRIVER %s" % clean(os.path.basename(os.path.realpath("/sys/class/net/%s/device/driver" % dev))
+                             if os.path.exists("/sys/class/net/%s/device/driver" % dev) else ""))
+    con = one("GENERAL.CONNECTION")
+    if con and con != "--":
+        emit("CONNECTION %s" % clean(con))
+    uuid_ = d["uuid"] if d["uuid"] and d["uuid"] != "--" else ""
+    if uuid_:
+        emit("CONNECTION-UUID %s" % uuid_)
+        c = connection_fields(uuid_, ["connection.autoconnect", "ipv4.method", "ipv4.ignore-auto-dns",
+                                      "ipv6.method", "ipv6.ignore-auto-dns", "802-11-wireless.ssid"])
+        emit("AUTOCONNECT %s" % c.get("connection.autoconnect", ""))
+        emit("IPV4-METHOD %s" % c.get("ipv4.method", ""))
+        emit("IPV4-DNS-AUTO %s" % ("no" if c.get("ipv4.ignore-auto-dns") == "yes" else "yes"))
+        emit("IPV6-METHOD %s" % c.get("ipv6.method", ""))
+    for a in get("IP4.ADDRESS"):
+        emit("IPV4-ADDRESS %s" % a)
+    gw = one("IP4.GATEWAY")
+    if gw and gw != "--":
+        emit("IPV4-GATEWAY %s" % gw)
+    for a in get("IP4.DNS"):
+        emit("IPV4-DNS %s" % a)
+    for a in get("IP4.DOMAIN"):
+        emit("DNS-SUFFIX %s" % clean(a))
+    opts = {}
+    for o in get("DHCP4.OPTION"):
+        k, _, v = o.partition(" = ")
+        opts[k.strip()] = v.strip()
+    if opts:
+        emit("DHCP4-SERVER %s" % opts.get("dhcp_server_identifier", ""))
+        emit("DHCP4-LEASE-TIME %s" % opts.get("dhcp_lease_time", ""))
+        if opts.get("expiry", "").isdigit():
+            exp = int(opts["expiry"])
+            emit("DHCP4-EXPIRES %d" % exp)
+            if opts.get("dhcp_lease_time", "").isdigit():
+                emit("DHCP4-OBTAINED %d" % (exp - int(opts["dhcp_lease_time"])))
+    for a in get("IP6.ADDRESS"):
+        emit("IPV6-ADDRESS %s" % a)
+    gw6 = one("IP6.GATEWAY")
+    if gw6 and gw6 != "--":
+        emit("IPV6-GATEWAY %s" % gw6)
+    for a in get("IP6.DNS"):
+        emit("IPV6-DNS %s" % a)
+    if d["type"] == "wifi" and uuid_:
+        ssid = active_ssid(dev)
+        if ssid is not None:
+            emit("SSID-HEX %s" % ssid.hex())
+            emit("SSID %s" % clean(ssid.decode("utf-8", "replace")))
+    emit("END")
+
+
+def active_ssid(dev):
+    r = nmcli("-f", "ACTIVE,SSID-HEX", "device", "wifi", "list", "ifname", dev, "--rescan", "no", check=False)
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) >= 2 and f[0] == "yes" and f[1]:
+            try:
+                return bytes.fromhex(f[1])
+            except ValueError:
+                return None
+    return None
+
+
+# --- input validation -----------------------------------------------------------
+
+def parse_iface(text, version):
+    try:
+        i = ipaddress.ip_interface(text)
+    except ValueError:
+        raise Fail("invalid", "not an IPv%d address with a prefix length: %s" % (version, clean(text)))
+    if i.version != version or "/" not in text:
+        raise Fail("invalid", "not an IPv%d address with a prefix length: %s" % (version, clean(text)))
+    a = i.ip
+    if a.is_multicast or a.is_unspecified or a.is_loopback or (version == 4 and a == i.network.broadcast_address
+                                                               and i.network.prefixlen < 31):
+        raise Fail("invalid", "%s cannot be an adapter's address" % a)
+    if version == 4 and i.network.prefixlen < 31 and a == i.network.network_address:
+        raise Fail("invalid", "%s is the network's own address, not a host's" % a)
+    return i
+
+
+def parse_addr(text, version=None, what="address"):
+    try:
+        a = ipaddress.ip_address(text)
+    except ValueError:
+        raise Fail("invalid", "not an IP %s: %s" % (what, clean(text)))
+    if version and a.version != version:
+        raise Fail("invalid", "not an IPv%d %s: %s" % (version, what, clean(text)))
+    if a.is_multicast or a.is_unspecified:
+        raise Fail("invalid", "%s cannot be a %s" % (a, what))
+    return a
+
+
+def parse_dns(text):
+    if text == "auto":
+        return None
+    addrs = [parse_addr(x, what="DNS server") for x in text.split(",") if x]
+    if not addrs or len(addrs) > 3:
+        raise Fail("invalid", "give one to three DNS servers, separated by commas")
+    return addrs
+
+
+def ssid_from(args):
+    if args.get("ssid-hex") is not None:
+        if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}){1,32}", args["ssid-hex"]):
+            raise Fail("invalid", "not an SSID in hex")
+        return bytes.fromhex(args["ssid-hex"])
+    if args.get("ssid") is not None:
+        b = args["ssid"].encode("utf-8", "surrogateescape")
+        if not 1 <= len(b) <= 32 or b"\0" in b:
+            raise Fail("invalid", "a network name is 1 to 32 bytes")
+        return b
+    raise Fail("invalid", "give --ssid or --ssid-hex")
+
+
+def check_psk(pw, security):
+    if security == "wpa-psk":
+        if re.fullmatch(r"[0-9A-Fa-f]{64}", pw):
+            return
+        if not 8 <= len(pw) <= 63 or any(not (32 <= ord(c) <= 126) for c in pw):
+            raise Fail("invalid", "a WPA2 network security key is 8 to 63 printable characters")
+    elif security == "sae":
+        if not 1 <= len(pw) <= 128 or any(ord(c) < 32 or ord(c) == 127 for c in pw):
+            raise Fail("invalid", "not a usable WPA3 password")
+
+
+def parse_opts(argv, flags, valued):
+    """Positional arguments and --options; unknown options are an error."""
+    pos, opts, i = [], {}, 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("--"):
+            name = a[2:]
+            if name in flags:
+                opts[name] = True
+            elif name in valued:
+                if i + 1 >= len(argv):
+                    raise Fail("invalid", "%s needs a value" % a)
+                opts[name] = argv[i + 1]
+                i += 1
+            else:
+                raise Fail("invalid", "unknown option %s" % clean(a))
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+# --- adapters: addresses, DNS, state (administrators) ---------------------------
+
+def profile_for(d, create=True):
+    """The connection profile that configures this adapter."""
+    if d["uuid"] and d["uuid"] != "--":
+        return d["uuid"]
+    r = nmcli("-f", "UUID,TYPE,DEVICE", "connection", "show", check=False)
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) >= 3 and f[2] == d["device"]:
+            return f[0]
+    # an inactive profile bound to this interface
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) >= 2 and f[1] == "802-3-ethernet":
+            c = connection_fields(f[0], ["connection.interface-name"])
+            if c.get("connection.interface-name") == d["device"]:
+                return f[0]
+    if not create or d["type"] != "ethernet":
+        raise Fail("notfound", "%s has no connection to configure; connect it first" % d["device"])
+    new = str(uuid.uuid4())
+    nmcli("connection", "add", "type", "ethernet", "ifname", d["device"], "con-name", d["device"], "uuid", new)
+    return new
+
+
+def dns_settings(family, dns):
+    """None: the DHCP server's DNS servers; a list: exactly these."""
+    if dns is None:
+        return [family + ".dns", "", family + ".ignore-auto-dns", "no"]
+    return [family + ".dns", ",".join(str(a) for a in dns), family + ".ignore-auto-dns", "yes"]
+
+
+def activate(uuid_, dev):
+    nmcli("--wait", "45", "connection", "up", "uuid", uuid_, "ifname", dev, timeout=60)
+
+
+def cmd_ipv(version, pos, opts, emit):
+    fam = "ipv4" if version == 4 else "ipv6"
+    if len(pos) < 2:
+        raise Fail("invalid", "usage: %s DEVICE dhcp|static ..." % fam)
+    d = device(pos[0])
+    mode = pos[1]
+    dns = parse_dns(opts["dns"]) if "dns" in opts else None
+    for a in dns or []:
+        if a.version != version:
+            raise Fail("invalid", "IPv%d settings take IPv%d DNS servers" % (version, version))
+    if mode in ("dhcp", "auto"):
+        if len(pos) != 2 or "gateway" in opts:
+            raise Fail("invalid", "an automatic address takes no address or gateway")
+        settings = [fam + ".method", "auto", fam + ".addresses", "", fam + ".gateway", ""]
+        settings += dns_settings(fam, dns)  # None: the DHCP server's DNS
+    elif mode == "disabled" and version == 6:
+        if len(pos) != 2 or opts:
+            raise Fail("invalid", "usage: ipv6 DEVICE disabled")
+        settings = [fam + ".method", "disabled", fam + ".addresses", "", fam + ".gateway", "",
+                    fam + ".dns", ""]
+    elif mode == "static":
+        if len(pos) != 3:
+            raise Fail("invalid", "usage: %s DEVICE static ADDRESS/PREFIX [--gateway ADDR]" % fam)
+        if opts.get("dns") == "auto":
+            raise Fail("invalid", "an adapter with a fixed address needs fixed DNS servers")
+        iface = parse_iface(pos[2], version)
+        settings = [fam + ".method", "manual", fam + ".addresses", str(iface)]
+        if opts.get("gateway"):
+            gw = parse_addr(opts["gateway"], version, "gateway")
+            if version == 4 and gw not in iface.network:
+                raise Fail("invalid", "the default gateway %s is not on the network %s" % (gw, iface.network))
+            if gw == iface.ip:
+                raise Fail("invalid", "the default gateway cannot be the adapter's own address")
+            settings += [fam + ".gateway", str(gw)]
+        else:
+            settings += [fam + ".gateway", ""]
+        # A fixed address has fixed DNS servers (or none), as on Windows.
+        settings += dns_settings(fam, dns or [])
+    else:
+        raise Fail("invalid", "unknown mode %s" % clean(mode))
+    uuid_ = profile_for(d)
+    nmcli("connection", "modify", "uuid", uuid_, *settings)
+    activate(uuid_, d["device"])
+    log("%s of %s set to %s" % (fam, d["device"], mode))
+    show_adapter(device(d["device"]), emit)
+
+
+def cmd_dns(pos, opts, emit):
+    if len(pos) != 2:
+        raise Fail("invalid", "usage: dns DEVICE auto|ADDR[,ADDR...]")
+    d = device(pos[0])
+    dns = parse_dns(pos[1])
+    uuid_ = profile_for(d)
+    c = connection_fields(uuid_, ["ipv4.method"])
+    if dns is None and c.get("ipv4.method") == "manual":
+        raise Fail("invalid", "an adapter with a fixed address needs fixed DNS servers")
+    v4 = [a for a in dns or [] if a.version == 4]
+    v6 = [a for a in dns or [] if a.version == 6]
+    settings = dns_settings("ipv4", None if dns is None else v4)
+    if dns is None or v6:
+        settings += dns_settings("ipv6", None if dns is None else v6)
+    nmcli("connection", "modify", "uuid", uuid_, *settings)
+    activate(uuid_, d["device"])
+    log("DNS of %s set to %s" % (d["device"], pos[1]))
+    show_adapter(device(d["device"]), emit)
+
+
+def cmd_state(cmd, pos, emit):
+    if len(pos) != 1:
+        raise Fail("invalid", "usage: %s DEVICE" % cmd)
+    d = device(pos[0])
+    dev = d["device"]
+    if cmd == "disable":
+        nmcli("device", "set", dev, "autoconnect", "no")
+        if state_word(d["state"]) != "disconnected":
+            nmcli("device", "disconnect", dev, check=False)
+    elif cmd == "enable":
+        nmcli("device", "set", dev, "autoconnect", "yes")
+        nmcli("--wait", "45", "device", "connect", dev, timeout=60)
+    elif cmd == "release":
+        nmcli("device", "disconnect", dev)
+    elif cmd == "renew":
+        activate(profile_for(d, create=False), dev)
+    log("%s %s" % (cmd, dev))
+    show_adapter(device(dev), emit)
+
+
+# --- Wi-Fi (everyone signed in) --------------------------------------------------
+
+def security_of(sec):
+    s = sec.upper()
+    if not s.strip() or s.strip() == "--":
+        return "open"
+    if "802.1X" in s or "EAP" in s:
+        return "enterprise"
+    if "SAE" in s or "WPA3" in s:
+        return "sae" if "WPA2" not in s else "wpa-psk"
+    if "WPA" in s:
+        return "wpa-psk"
+    if "WEP" in s:
+        return "wep"
+    return "unknown"
+
+
+def scan(rescan):
+    r = nmcli("-f", "IN-USE,SSID-HEX,SIGNAL,SECURITY,DEVICE", "device", "wifi", "list",
+              "--rescan", "yes" if rescan else "auto", check=False, timeout=45)
+    nets = {}
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) < 5 or not f[1]:
+            continue  # hidden networks have no name to show
+        try:
+            ssid = bytes.fromhex(f[1])
+        except ValueError:
+            continue
+        sig = int(f[2]) if f[2].isdigit() else 0
+        n = nets.setdefault(ssid, {"signal": 0, "security": security_of(f[3]), "inuse": False, "device": f[4]})
+        n["signal"] = max(n["signal"], sig)
+        n["inuse"] = n["inuse"] or f[0].strip() == "*"
+    return nets
+
+
+def saved_wifi():
+    """Saved Wi-Fi profiles: [(uuid, name, ssid bytes, autoconnect)]. The SSID
+    comes from NetworkManager's D-Bus settings, as bytes: nmcli prints it as
+    text, which is lossy for a name that is not UTF-8."""
+    r = nmcli("-f", "UUID,TYPE,NAME,DBUS-PATH", "connection", "show")
+    out = []
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) < 4 or f[1] != "802-11-wireless" or not f[3].startswith("/org/freedesktop/NetworkManager/"):
+            continue
+        b = subprocess.run(["busctl", "--system", "--json=short", "call", "org.freedesktop.NetworkManager", f[3],
+                            "org.freedesktop.NetworkManager.Settings.Connection", "GetSettings"],
+                           capture_output=True, text=True, timeout=20)
+        try:
+            settings = json.loads(b.stdout)["data"][0]
+            ssid = bytes(settings["802-11-wireless"]["ssid"]["data"])
+            auto = settings.get("connection", {}).get("autoconnect", {}).get("data", True)
+        except (ValueError, KeyError, IndexError, TypeError):
+            continue
+        out.append((f[0], f[2], ssid, bool(auto)))
+    return out
+
+
+def wifi_devices():
+    return [d for d in devices() if d["type"] == "wifi"]
+
+
+def keyfile_escape(value):
+    out = []
+    for c in value:
+        if c == "\\":
+            out.append("\\\\")
+        elif c == " ":
+            out.append("\\s")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def write_profile(ssid, security, psk, hidden, autoconnect, uuid_):
+    name = "Wi-Fi " + "".join(c if c.isprintable() and c not in "\\/" else "_"
+                              for c in ssid.decode("utf-8", "replace"))
+    lines = ["[connection]", "id=" + keyfile_escape(name), "uuid=" + uuid_, "type=wifi",
+             "autoconnect=" + ("true" if autoconnect else "false"), "",
+             "[wifi]", "mode=infrastructure", "ssid=" + "".join("%d;" % b for b in ssid),
+             "hidden=" + ("true" if hidden else "false"), ""]
+    if security in ("wpa-psk", "sae"):
+        lines += ["[wifi-security]", "key-mgmt=" + security, "psk=" + keyfile_escape(psk), ""]
+    lines += ["[ipv4]", "method=auto", "", "[ipv6]", "method=auto", "addr-gen-mode=default", ""]
+    path = os.path.join(NM_DIR, "sg-wifi-%s.nmconnection" % uuid_)
+    os.makedirs(NM_DIR, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=NM_DIR, prefix=".sg-wifi-")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(lines))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def wifi_connect(opts, secret, emit):
+    ssid = ssid_from(opts)
+    hidden = bool(opts.get("hidden"))
+    radios = wifi_devices()
+    if not radios:
+        raise Fail("notfound", "this computer has no Wi-Fi adapter")
+    dev = opts.get("device") or radios[0]["device"]
+    if dev not in [d["device"] for d in radios]:
+        raise Fail("notfound", "%s is not a Wi-Fi adapter" % clean(dev))
+    security = opts.get("security")
+    if security is None:
+        nets = scan(False)
+        if ssid not in nets:
+            nets = scan(True)
+        if ssid in nets:
+            security = nets[ssid]["security"]
+        elif hidden:
+            security = "wpa-psk" if secret else "open"
+        else:
+            raise Fail("notfound", "the network %s is not in range" % clean(ssid.decode("utf-8", "replace")))
+    if security not in ("open", "wpa-psk", "sae"):
+        raise Fail("unsupported", "connecting to %s networks is not supported yet" % security)
+    saved = [s for s in saved_wifi() if s[2] == ssid]
+    if saved and secret is None:
+        # A network this computer already knows: its saved key.
+        try:
+            activate(saved[0][0], dev)
+        except Fail as e:
+            raise Fail("auth", "could not connect to the saved network: %s" % e.message)
+        log("joined saved network on %s" % dev)
+        emit("CONNECTED %s" % dev)
+        return
+    if security != "open":
+        if secret is None:
+            raise Fail("auth", "this network needs a security key")
+        check_psk(secret, security)
+    uuid_ = saved[0][0] if saved else str(uuid.uuid4())
+    old = None
+    path = os.path.join(NM_DIR, "sg-wifi-%s.nmconnection" % uuid_)
+    if saved and os.path.exists(path):
+        with open(path) as f:
+            old = f.read()
+    write_profile(ssid, security, secret or "", hidden, not opts.get("no-autoconnect"), uuid_)
+    nmcli("connection", "load", path)
+    try:
+        activate(uuid_, dev)
+    except Fail as e:
+        # A network that could not be joined is not remembered, as on Windows.
+        if old is None:
+            nmcli("connection", "delete", "uuid", uuid_, check=False)
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        else:
+            with open(path, "w") as f:
+                f.write(old)
+            nmcli("connection", "load", path, check=False)
+        m = e.detail.lower()
+        if any(w in m for w in ("secrets", "supplicant", "802-1x", "802.1x", "no secrets", "timeout", "auth")):
+            raise Fail("auth", "the network security key isn't correct")
+        raise
+    log("joined a network on %s" % dev)
+    emit("CONNECTED %s" % dev)
+
+
+def cmd_wifi(pos, opts, secret, emit):
+    if not pos:
+        raise Fail("invalid", "usage: wifi scan|connect|disconnect|forget|saved|radio")
+    sub = pos[0]
+    if sub == "scan":
+        saved = {s[2] for s in saved_wifi()}
+        for ssid, n in sorted(scan(bool(opts.get("rescan"))).items(), key=lambda kv: -kv[1]["signal"]):
+            emit("WIFI %d\t%s\t%s\t%s\t%s\t%s" % (n["signal"], n["security"], "yes" if n["inuse"] else "no",
+                                                "yes" if ssid in saved else "no", ssid.hex(),
+                                                clean(ssid.decode("utf-8", "replace"))))
+    elif sub == "connect":
+        wifi_connect(opts, secret, emit)
+    elif sub == "disconnect":
+        targets = [pos[1]] if len(pos) > 1 else [d["device"] for d in wifi_devices()
+                                                   if state_word(d["state"]) != "disconnected"]
+        for t in targets:
+            if t not in [d["device"] for d in wifi_devices()]:
+                raise Fail("notfound", "%s is not a Wi-Fi adapter" % clean(t))
+            nmcli("device", "disconnect", t)
+            emit("DISCONNECTED %s" % t)
+    elif sub == "forget":
+        ssid = ssid_from(opts)
+        gone = 0
+        for u, _, s, _ in saved_wifi():
+            if s == ssid:
+                nmcli("connection", "delete", "uuid", u)
+                gone += 1
+        if not gone:
+            raise Fail("notfound", "no saved network by that name")
+        emit("FORGOTTEN %d" % gone)
+    elif sub == "saved":
+        for u, name, ssid, auto in saved_wifi():
+            emit("SAVED %s\t%s\t%s\t%s" % (u, "yes" if auto else "no", ssid.hex(),
+                                          clean(ssid.decode("utf-8", "replace"))))
+    elif sub == "radio":
+        if len(pos) != 2 or pos[1] not in ("on", "off", "status"):
+            raise Fail("invalid", "usage: wifi radio on|off|status")
+        if pos[1] != "status":
+            nmcli("radio", "wifi", pos[1])
+        emit("RADIO %s" % nmcli("radio", "wifi").stdout.strip())
+    else:
+        raise Fail("invalid", "unknown wifi command %s" % clean(sub))
+
+
+# --- requests -------------------------------------------------------------------
+
+def log(msg):
+    syslog.syslog(syslog.LOG_INFO, msg)
+
+
+def in_group(uid, group):
+    try:
+        pw = pwd.getpwuid(uid)
+        gid = grp.getgrnam(group).gr_gid
+    except KeyError:
+        return False
+    return gid in os.getgrouplist(pw.pw_name, pw.pw_gid)
+
+
+def is_admin(uid):
+    return uid == 0 or in_group(uid, ADMIN_GROUP)
+
+
+def may_use(uid):
+    """Who is a person at this computer: an account with a Windows session
+    (the sgwine group -- local users, the live session's, domain users once
+    they sign in), an administrator, or root. Not system accounts."""
+    return uid == 0 or in_group(uid, USER_GROUP) or in_group(uid, ADMIN_GROUP)
+
+
+WIFI_FLAGS = {"hidden", "no-autoconnect", "password-stdin", "rescan"}
+WIFI_VALUED = {"ssid", "ssid-hex", "security", "device"}
+
+
+def run(argv, secret, uid, emit):
+    """One request: argv from the caller, the secret (Wi-Fi key) if any."""
+    if not argv:
+        raise Fail("invalid", "no command")
+    cmd = argv[0]
+    if cmd not in ADMIN_COMMANDS | USER_COMMANDS:
+        raise Fail("invalid", "unknown command %s" % clean(cmd))
+    if not may_use(uid):
+        raise Fail("denied", "this account may not change network settings")
+    if cmd in ADMIN_COMMANDS and not is_admin(uid):
+        raise Fail("denied", "changing an adapter's settings needs an administrator")
+    if cmd == "whoami":
+        try:
+            name = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            name = str(uid)
+        emit("USER %s" % clean(name))
+        emit("ADMIN %s" % ("yes" if is_admin(uid) else "no"))
+    elif cmd == "adapters":
+        want = argv[1] if len(argv) > 1 else None
+        for d in devices():
+            if want is None or d["device"] == want:
+                show_adapter(d, emit)
+        if want and want not in [d["device"] for d in devices()]:
+            raise Fail("notfound", "no adapter called %s" % clean(want))
+    elif cmd in ("ipv4", "ipv6"):
+        pos, opts = parse_opts(argv[1:], set(), {"gateway", "dns"})
+        cmd_ipv(4 if cmd == "ipv4" else 6, pos, opts, emit)
+    elif cmd == "dns":
+        pos, opts = parse_opts(argv[1:], set(), set())
+        cmd_dns(pos, opts, emit)
+    elif cmd in ("enable", "disable", "renew", "release"):
+        pos, _ = parse_opts(argv[1:], set(), set())
+        cmd_state(cmd, pos, emit)
+    elif cmd == "wifi":
+        pos, opts = parse_opts(argv[1:], WIFI_FLAGS, WIFI_VALUED)
+        cmd_wifi(pos, opts, secret, emit)
+
+
+def answer(argv, secret, uid, emit):
+    """Run a request; the last line says how it went. Returns the exit status."""
+    try:
+        run(argv, secret, uid, emit)
+    except Fail as e:
+        emit("ERROR %s %s" % (e.kind, clean(e.message)))
+        return EXIT.get(e.kind, 1)
+    except Exception as e:  # never leave a caller without an answer
+        log("internal error: %r" % e)
+        emit("ERROR failed internal error")
+        return 1
+    emit("OK")
+    return 0
+
+
+def serve():
+    """sg-netd: one request on the socket (stdin), from the peer's uid."""
+    syslog.openlog("sg-netd")
+    s = socket.socket(fileno=0)
+    pid, uid, gid = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                     struct.calcsize("3i")))
+    s.settimeout(30)
+    data = b""
+    while b"\n" not in data and len(data) < MAX_REQUEST:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    s.settimeout(None)
+    out = s.makefile("w", encoding="utf-8", newline="\n")
+
+    def emit(line):
+        out.write(line + "\n")
+        out.flush()
+
+    try:
+        req = json.loads(data.split(b"\n", 1)[0].decode("utf-8", "surrogateescape"))
+        argv = req["argv"]
+        secret = req.get("secret")
+        if not isinstance(argv, list) or not all(isinstance(a, str) and len(a) <= 256 for a in argv) or \
+           len(argv) > 32 or (secret is not None and (not isinstance(secret, str) or len(secret) > 256)):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        emit("ERROR invalid malformed request")
+        return 2
+    if argv and argv[0] not in ("whoami", "adapters") and not (argv[:2] in (["wifi", "scan"], ["wifi", "saved"])):
+        log("uid %d: %s" % (uid, " ".join(clean(a) for a in argv[:3])))
+    return answer(argv, secret, uid, emit)
+
+
+def request(argv, secret, emit):
+    """Ask sg-netd, or as root do it here. Returns the exit status."""
+    if os.geteuid() == 0:
+        syslog.openlog("sg-netctl")
+        return answer(argv, secret, 0, emit)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCKET)
+    except OSError as e:
+        emit("ERROR failed the network settings service is not running (%s)" % e.strerror)
+        return 1
+    s.sendall((json.dumps({"argv": argv, "secret": secret}) + "\n").encode("utf-8", "surrogateescape"))
+    status = 1
+    for line in s.makefile("r", encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        emit(line)
+        if line == "OK":
+            status = 0
+        elif line.startswith("ERROR "):
+            status = EXIT.get(line.split(" ", 2)[1], 1)
+    s.close()
+    return status
+
+
+def bridge(program):
+    """Run a Windows program with pipes as its stdin/stdout, and answer each
+    request it writes: one JSON line in, the answer's lines back. Ends when
+    the program does -- not at end of file, which a wineserver the program
+    started (and that inherited the pipe) could hold off indefinitely."""
+    import select
+    syslog.openlog("sg-netctl-bridge")
+    down_r, down_w = os.pipe()
+    up_r, up_w = os.pipe()
+    child = subprocess.Popen(program, stdin=down_r, stdout=up_w, close_fds=True)
+    os.close(down_r)
+    os.close(up_w)
+    to_child = os.fdopen(down_w, "w", encoding="utf-8", newline="\n")
+    pending = b""
+
+    def emit(text):
+        to_child.write(text + "\n")
+        to_child.flush()
+
+    while True:
+        ready, _, _ = select.select([up_r], [], [], 1.0)
+        if not ready:
+            if child.poll() is not None:
+                break
+            continue
+        chunk = os.read(up_r, 65536)
+        if not chunk:
+            break
+        pending += chunk
+        if len(pending) > MAX_REQUEST and b"\n" not in pending:
+            pending = b""
+        while b"\n" in pending:
+            raw, pending = pending.split(b"\n", 1)
+            line = raw.decode("utf-8", "surrogateescape").strip("\r")
+            if not line.startswith("{"):
+                continue  # Wine or the program may write other things to stdout
+            try:
+                req = json.loads(line)
+                argv, secret = req["argv"], req.get("secret")
+                if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                emit("ERROR invalid malformed request")
+                continue
+            try:
+                request(argv, secret, emit)
+            except BrokenPipeError:
+                return child.wait()
+    return child.wait()
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--serve"]:
+        return serve()
+    if args[:1] == ["--bridge"]:
+        if len(args) < 2:
+            print("usage: sg-netctl --bridge PROGRAM [ARGS...]", file=sys.stderr)
+            return 2
+        return bridge(args[1:])
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__ if __doc__ else "see sg-session CLAUDE.md", file=sys.stderr)
+        print("usage: sg-netctl whoami|adapters|ipv4|ipv6|dns|enable|disable|renew|release|wifi ...",
+              file=sys.stderr)
+        return 2
+    secret = None
+    if "--password-stdin" in args:
+        secret = sys.stdin.readline().rstrip("\r\n")
+    return request(args, secret, lambda line: print(line, flush=True))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

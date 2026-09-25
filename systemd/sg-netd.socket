@@ -1,0 +1,18 @@
+# Network settings (sg-netd): any local user may ask; sg-netctl --serve decides
+# what each may do from the caller's uid (SO_PEERCRED) -- joining Wi-Fi for
+# everyone, adapter settings for administrators, as on Windows. The Network
+# Connections window, the taskbar's network flyout and sg-netctl ask here.
+[Unit]
+Description=Stained Glass network settings socket
+
+[Socket]
+ListenStream=/run/stained-glass-net/netd.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0666
+DirectoryMode=0755
+Accept=yes
+MaxConnections=32
+
+[Install]
+WantedBy=sockets.target

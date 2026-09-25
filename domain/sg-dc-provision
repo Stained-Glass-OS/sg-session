@@ -68,6 +68,23 @@ fi
 
 log "realm $REALM, domain $DOMAIN, host $HOST.$DNSDOMAIN at $ADDR${FORWARDER:+, forwarding to $FORWARDER}"
 
+# A domain controller keeps its address: every member's DNS points at it. If
+# DHCP gave it, make it the adapter's fixed address now (NetworkManager, via
+# sg-netctl), with the same prefix, gateway and upstream DNS -- as Windows
+# asks for a static address before a server is promoted. Best effort: a
+# machine NetworkManager does not manage keeps what it has, with a warning.
+DEV=$(ip -4 -o addr show | awk -v a="$ADDR" 'index($4, a "/") == 1 {print $2; exit}')
+PFX=$(ip -4 -o addr show | awk -v a="$ADDR" 'index($4, a "/") == 1 {sub(/.*\//, "", $4); print $4; exit}')
+if [ -n "$DEV" ] && command -v sg-netctl >/dev/null 2>&1 && \
+   sg-netctl adapters "$DEV" 2>/dev/null | grep -qx 'IPV4-METHOD auto'; then
+    GW=$(ip -4 route show default dev "$DEV" 2>/dev/null | awk '{print $3; exit}')
+    if sg-netctl ipv4 "$DEV" static "$ADDR/$PFX" ${GW:+--gateway "$GW"} ${FORWARDER:+--dns "$FORWARDER"} >/dev/null; then
+        log "$ADDR/$PFX is now the fixed address of $DEV"
+    else
+        log "warning: could not make $ADDR a fixed address; give $DEV a static address or a DHCP reservation"
+    fi
+fi
+
 # A workstation's Samba pieces must not run beside the directory's own.
 systemctl disable --now smbd nmbd winbind >/dev/null 2>&1 || true
 systemctl unmask samba-ad-dc >/dev/null 2>&1 || true

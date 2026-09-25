@@ -139,6 +139,8 @@ fi
 # `explorer /desktop`); the shell's own explorer then found it taken, exited
 # 0 at once, and the supervisor below took that for a sign-out -- the desktop
 # stayed up, but with nothing watching it.
+#   - the network icon in the notification area (sg-netflyout), if sg-shell
+#     and sg-netctl are installed.
 #   - the Start menu, if sg-shell is installed: a persistent listener that
 #     explorer's Start button toggles (wine-sg patch 0012). Best-effort: a
 #     session without it still has Wine's built-in Start menu. Its output
@@ -147,6 +149,7 @@ fi
 #     then the GPOs'), one after another, hidden; Windows does not wait for
 #     them either.
 _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
+_sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 (
     _w=0
     while [ "$_w" -lt 120 ] && ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; do
@@ -155,6 +158,12 @@ _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
     if [ -f "$_sgstart" ]; then
         sg_log "starting the Start menu (sg-start)"
         wine "$_sgstart" &
+    fi
+    # The taskbar's network icon (sg-shell's sg-netflyout): it re-launches
+    # itself through sg-netctl's bridge to reach the network settings service.
+    if [ -f "$_sgnet" ] && command -v sg-netctl >/dev/null 2>&1; then
+        sg_log "starting the network icon (sg-netflyout)"
+        wine "$_sgnet" &
     fi
     if [ -r "$_netdir/logon-script" ]; then
         cd / && while IFS= read -r _script; do
