@@ -1,3 +1,15 @@
+sg-session (0.1.0-24) unstable; urgency=medium
+
+  * The first-run setup (OOBE) at an installed machine's first boot, in the
+    login screen's place: region, keyboard (and a second layout), network,
+    the owner's account when there is none, privacy (no diagnostic data),
+    an optional web browser. sg-oobed (root, only while pending) validates
+    and applies; each user's HKCU gets the choices at first sign-in.
+  * Every compositor gets the keyboard from /etc/default/keyboard.
+  * Gate: make test-oobe.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 11:49:56 -0700
+
 sg-session (0.1.0-23) unstable; urgency=medium
 
   * The lock screen shows the picture chosen in Settings > Personalization >
