@@ -36,6 +36,11 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl $(BINDIR)
+	@# Voice typing: the engine (sgspeech.py) and its command. The model is
+	@# downloaded per machine by sg-speechd, never packaged.
+	install -m 0755 speech/sg-dictate $(BINDIR)
+	install -d $(LIBDIR)/speech
+	install -m 0644 speech/sgspeech.py $(LIBDIR)/speech/
 	@# The D3D probe, when a cross-compiler is available. Optional on purpose:
 	@# the package must still build on a machine without mingw, and the gate
 	@# reports "not built" rather than failing.
@@ -132,6 +137,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
+    systemd/sg-speechd.socket systemd/sg-speechd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
@@ -153,6 +159,8 @@ lint:
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
+	@python3 test/dictate-test.py
 	@sh test/drivers-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
@@ -163,6 +171,12 @@ lint:
 	fi
 
 test: lint test-session
+
+# Voice typing with the real model: espeak-ng speech through --transcribe-file
+# and the microphone path. Skips (77) without the model or espeak-ng; set
+# SG_SPEECH_MODEL to a downloaded model directory.
+test-dictate:
+	@sh test/dictate-e2e.sh
 
 # The real gate: start a headless compositor on this machine, run the session
 # inside it, and let sg-session-check decide. Exits non-zero on failure.

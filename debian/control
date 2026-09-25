@@ -14,6 +14,7 @@ Package: sg-session
 Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}, libpam-runtime, systemd-repart, e2fsprogs, openssl,
 Recommends: sg-shell,
+         python3-numpy, python3-onnxruntime, pulseaudio-utils,
          wine-sg | wine,
          sg-compositor | cage,
          xwayland,

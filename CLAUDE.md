@@ -48,6 +48,7 @@ separately.
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
+| `speech/sg-dictate`, `speech/sgspeech.py` | voice typing's engine, its bridge, and sg-speechd, the model download (see below) |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
 environment variables — `SG_LIB`, `SG_BIN`, `SG_ROOT`, `SG_PREFIX`, `SG_STATE`,
@@ -630,6 +631,78 @@ socket requests are one JSON line, `{"argv": [...], "secret": "..."}`.
   sg-netd and through nmcli, and Wi-Fi over mac80211_hwsim against an access
   point of the test's own: wrong key, join, a DHCP lease and traffic over the
   air, disconnect, rejoin with the saved key, forget, the radio).
+
+## Voice typing: sg-dictate (Win+H)
+
+`speech/sg-dictate` (Python, `/usr/bin/sg-dictate`) and `speech/sgspeech.py`
+(`/usr/lib/stained-glass/speech/`) are voice typing's engine: **NVIDIA
+Parakeet TDT 0.6B v3** (int8 ONNX, CC BY 4.0 -- the Control Panel page
+carries the attribution) on the CPU through Debian's `python3-onnxruntime`,
+with **Silero VAD v5** (MIT) finding where speech starts and stops. The
+Windows side is sg-shell's `sg-dictate.exe` (the toolbar) and Control Panel >
+Speech Recognition. Explorer's Win+H runs `sg-dictate.exe /toggle` (wine-sg
+0092), found through App Paths.
+
+- **Our own decoder, not onnx-asr.** Debian does not package onnx-asr, so
+  `sgspeech.py` does NeMo's 128-band log-mel (checked against onnx-asr's
+  filterbank to 3e-8) and TDT greedy decoding itself; it transcribes exactly
+  as onnx-asr does. Debian's onnxruntime prints ~570 lines of "Schema error"
+  when it makes its first session: harmless, and `_Quiet` keeps them off
+  stderr.
+- **The model is downloaded, never packaged.** `sg-speechd.socket`
+  (`/run/stained-glass-speech/speechd.sock`, 0666, `Accept=yes`) runs
+  `sg-dictate --serve` as root per request: members of `sgwine` (anyone with
+  a Windows session) may `download`, an `sg-admins` member may `remove`.
+  Files come from pinned revisions (Hugging Face `istupakov/parakeet-tdt-0.6b-v3-onnx`
+  at `8f23f0c`, silero-vad `v5.1.2`), each checked against its size and
+  SHA-256 in `sgspeech.FILES`, resumed with HTTP ranges, into
+  `/var/lib/stained-glass-speech/parakeet-tdt-0.6b-v3-int8/` (`.verified`
+  when complete; 642 MB). Progress goes to `status` there (`STATE`, `DONE`,
+  `TOTAL`, `MESSAGE`), which the Control Panel reads. **Not under
+  `/var/lib/stained-glass`**: that belongs to the SYSTEM account, which could
+  swap the directory for a link under root's feet.
+- **The bridge.** Wine gives the toolbar no AF_UNIX and no pipes to a native
+  program, so it re-launches itself as `sg-dictate --bridge wine <itself>
+  --bridged /toggle` (as sg-netctl's bridge). Down: JSON lines, `{"cmd":
+  "start", "continuous", "spoken", "auto", "fillers", "numbers", "fresh",
+  "mic", "tail"}`, `stop` (what was said is still typed), `cancel`,
+  `preload`, `unload`, `quit`. Up: `STATE loading|listening|idle|nomodel|nomic
+  ...|error ...`, `LEVEL 0-100` (10 a second), `TEXT <JSON string>`.
+- **Audio** is `parec` (PipeWire's Pulse server) at 16 kHz mono, else
+  `pw-record --raw`. Audio heard while the model loads is kept (up to a
+  minute), so the first words after Win+H are not lost. Utterances end after
+  700 ms below the VAD's lower threshold, and are cut at 20 s. Not
+  continuous: listening stops after the first utterance, or 8 s of silence;
+  continuous: after 120 s of silence.
+- **Text rules** (`postprocess`): the model punctuates and capitalises by
+  itself; spoken marks ("comma", "period", "question mark", "new line", "new
+  paragraph", quotes, brackets...) replace whatever the model put around them;
+  fillers (um, uh, er, hmm...) go; spoken numbers of two words or more, or ten
+  and over, become digits. `join` puts a space between utterances, none after
+  a line break or before punctuation; the toolbar sends the character before
+  the caret (`tail`) when the focus is an Edit or RichEdit.
+- **Privacy:** nothing heard is written anywhere or logged (the log says
+  "recognised 3.3s of audio in 0.25s", never what); the only network access
+  is sg-speechd's download.
+- **Other modes:** `--transcribe-file WAV...` (the gate's), `--listen
+  [--once] [--seconds N]`, `--mics [--out FILE]`, `--meter FILE` (Test
+  microphone: `LEVEL n` in FILE until `FILE.stop`), `--status`,
+  `--download`, `--remove`. `SG_SPEECH_DIR`, `SG_SPEECH_MODEL` (a model
+  directory, skipping the machine's), `SG_DICTATE_AUDIO_FILE` (a WAV instead
+  of the microphone, at real time) and `SG_SPEECH_MIRROR` (a local directory
+  to download from; ignored as root) exist for the gates.
+- **Gates:** `test/dictate-test.py` (in `make lint`: text rules, the mel
+  bank, who sg-speechd lets do what -- a mutant that lets everyone download
+  fails it) and `make test-dictate` (`test/dictate-e2e.sh`: espeak-ng speech
+  through the real model -- words, spoken marks, no fillers, digits, two
+  utterances split by a pause, `--once`; skips 77 without the model, which it
+  downloads to `~/.cache` when it can). sg-shell's `test/dictate-check.sh` is
+  the Windows side, and runs this engine too when a model is at hand.
+- **Measured** (i7-8086K, 8 threads): model load 2 s and ~0.7 GB resident
+  (1.3 GB with onnxruntime's weight pre-packing, now off); recognition at
+  ~0.08 x real time (3.3 s of speech in 0.3 s); the VAD while listening
+  0.5% of one core. The engine lives while the bar is open; the hold-to-talk
+  listener unloads the model after 5 minutes unused.
 
 ## Domain controller role (D2)
 

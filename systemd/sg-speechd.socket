@@ -1,0 +1,18 @@
+# Voice typing's model installer (sg-speechd): any local user may ask;
+# sg-dictate --serve decides from the caller's uid (SO_PEERCRED) -- installing
+# the speech model for anyone with a Windows session, removing it for
+# administrators. Control Panel > Speech asks here, through sg-dictate.
+[Unit]
+Description=Stained Glass speech model socket
+
+[Socket]
+ListenStream=/run/stained-glass-speech/speechd.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0666
+DirectoryMode=0755
+Accept=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

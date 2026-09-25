@@ -9,3 +9,4 @@ debian/debhelper-build-stamp
 
 # Cross-compiled probe binaries, rebuilt by `make d3d-probe`.
 /build/
+__pycache__/

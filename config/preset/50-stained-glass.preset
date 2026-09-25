@@ -8,3 +8,5 @@ enable sg-netd.socket
 enable sg-live.service
 # Runs only while Setup's third-party drivers request is pending.
 enable sg-drivers.service
+# Voice typing's model installer: the socket everywhere, a service per request.
+enable sg-speechd.socket

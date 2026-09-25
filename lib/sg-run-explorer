@@ -141,6 +141,9 @@ fi
 # stayed up, but with nothing watching it.
 #   - the network icon in the notification area (sg-netflyout), if sg-shell
 #     and sg-netctl are installed.
+#   - voice typing's hold-to-talk listener (sg-dictate /background), if
+#     sg-shell and sg-dictate are installed; it exits at once unless the user
+#     turned hold-to-talk on (Control Panel > Speech Recognition).
 #   - the Start menu, if sg-shell is installed: a persistent listener that
 #     explorer's Start button toggles (wine-sg patch 0012). Best-effort: a
 #     session without it still has Wine's built-in Start menu. Its output
@@ -150,6 +153,7 @@ fi
 #     them either.
 _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
 _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
+_sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
 (
     _w=0
     while [ "$_w" -lt 120 ] && ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; do
@@ -164,6 +168,9 @@ _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
     if [ -f "$_sgnet" ] && command -v sg-netctl >/dev/null 2>&1; then
         sg_log "starting the network icon (sg-netflyout)"
         wine "$_sgnet" &
+    fi
+    if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
+        wine "$_sgdictate" /background &
     fi
     if [ -r "$_netdir/logon-script" ]; then
         cd / && while IFS= read -r _script; do

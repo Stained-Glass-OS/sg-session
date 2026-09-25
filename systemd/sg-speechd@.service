@@ -1,0 +1,31 @@
+[Unit]
+Description=Stained Glass speech model request
+CollectMode=inactive-or-failed
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/sg-dictate --serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+# A 640 MB download on a slow line; it carries on if the asker goes away.
+TimeoutSec=6h
+# The model is machine-wide and read by every user: root-owned, outside
+# /var/lib/stained-glass (which the SYSTEM account owns, and could otherwise
+# point somewhere else under root's feet).
+StateDirectory=stained-glass-speech
+StateDirectoryMode=0755
+UMask=0022
+# It downloads over HTTPS into its own directory; nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+SystemCallArchitectures=native
