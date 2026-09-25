@@ -18,7 +18,7 @@ import sys
 import numpy as np
 
 SAMPLE_RATE = 16000
-MODEL_DIR = os.environ.get("SG_SPEECH_DIR", "/var/lib/stained-glass/speech")
+MODEL_DIR = os.environ.get("SG_SPEECH_DIR", "/var/lib/stained-glass-speech")
 MODEL_NAME = "parakeet-tdt-0.6b-v3-int8"
 
 # What sg-speechd downloads: pinned revisions, checked by SHA-256. The weights

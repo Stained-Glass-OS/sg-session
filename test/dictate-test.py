@@ -10,6 +10,7 @@
 import grp
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -142,6 +143,17 @@ check("every model file is pinned by size and SHA-256",
       all(size > 0 and len(sha) == 64 for _, _, size, sha in sgspeech.FILES))
 check("model files come from pinned revisions",
       all("/resolve/main/" not in url and "/master/" not in url for _, url, _, _ in sgspeech.FILES))
+
+# sg-speechd may write only its StateDirectory (ProtectSystem=strict): the
+# model directory the code defaults to must be that one, or the service
+# cannot write a byte on a real machine (every other check here overrides it).
+_here = os.path.dirname(os.path.abspath(__file__))
+_unit = open(os.path.join(_here, "..", "systemd", "sg-speechd@.service")).read()
+_state = re.search(r"^StateDirectory=(\S+)", _unit, re.M).group(1)
+_code = open(os.path.join(_here, "..", "speech", "sgspeech.py")).read()
+_default = re.search(r'MODEL_DIR = os.environ.get\("SG_SPEECH_DIR", "([^"]+)"\)', _code).group(1)
+check("the model directory is sg-speechd's StateDirectory", _default == "/var/lib/" + _state,
+      "%s vs /var/lib/%s" % (_default, _state))
 
 print("dictate-test: %s" % ("OK" if not FAILS else "%d FAILED" % FAILS))
 sys.exit(1 if FAILS else 0)
