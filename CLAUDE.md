@@ -48,6 +48,7 @@ separately.
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
+| `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
 | `speech/sg-dictate`, `speech/sgspeech.py` | voice typing's engine, its bridge, and sg-speechd, the model download (see below) |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
@@ -631,6 +632,133 @@ socket requests are one JSON line, `{"argv": [...], "secret": "..."}`.
   sg-netd and through nmcli, and Wi-Fi over mac80211_hwsim against an access
   point of the test's own: wrong key, join, a DHCP lease and traffic over the
   air, disconnect, rejoin with the saved key, forget, the radio).
+
+## The administrative tools' Linux side: sg-sysinfo and sg-sysinfod
+
+`bin/sg-sysinfo` (Python, stdlib only, `/usr/bin/sg-sysinfo`) is what
+sg-shell's administrative tools (Device Manager, Disk Management, Event
+Viewer's "Stained Glass" log, Services' Linux view, Computer Management's
+Local Users and Groups and Shared Folders, System Information, Resource
+Monitor, Disk Cleanup) know about the Linux machine under Wine. Same shape as
+sg-netctl: a Windows program re-launches itself as `sg-sysinfo --bridge wine
+<itself> --bridged ...` and writes one JSON line per request
+(`{"argv": [...]}`); answers are lines, the last `OK` or `ERROR <kind>
+<message>` (kinds and exit codes as sg-netctl: `denied` 3, `invalid` 2,
+`notfound`, `unsupported`, `failed` 1).
+
+- **Readable things are answered in-process**, as the caller: devices,
+  disks, units, users, groups, shares, processes, connections, system,
+  the user's own cleanup categories. Only what needs root goes to
+  **sg-sysinfod** (`sg-sysinfod.socket`, `/run/stained-glass-sysinfo/sysinfod.sock`,
+  0666, `Accept=yes`, `sg-sysinfo --serve` as root per connection), which
+  decides from `SO_PEERCRED`: anyone with a Windows session (sgwine,
+  sg-admins, SYSTEM, root) may read the journal and the system cleanup sizes;
+  `sessions`, `openfiles`, `clean-system`, `mount`, `unmount`, `letter`,
+  `format` need an administrator (sg-admins, SYSTEM, root). Other accounts get
+  nothing. Root, or a member of `systemd-journal`/`adm`, reads the journal
+  directly.
+- **The journal shows only Stained Glass**: entries whose unit
+  (`_SYSTEMD_UNIT`, or a session's `_SYSTEMD_USER_UNIT`) or
+  `SYSLOG_IDENTIFIER` starts `sg-`, filtered in the service whatever the
+  caller asked; `--unit` must itself be `sg-*`. Newest first.
+- **Disk changes refuse** the system disk (one holding `/`, `/boot`,
+  `/boot/efi`, `/efi`, `/usr`, `/var`, `/home`, swap, or the Wine prefix)
+  for `format`; a volume that is mounted, has a letter, holds other volumes or
+  is an ESP; unmounting a system or swap volume; letters other than D:-Y:,
+  a letter in use, a letter for an unmounted volume. **C: and Z: are never
+  touched.** Mounts go to `/media/stained-glass/<label>` (FAT/exFAT/NTFS
+  group-writable by sgwine, since Windows programs open files as their own
+  uid). A letter is a symlink in the prefix's `dosdevices`, owned like the
+  directory. The service has no mount namespace (no PrivateTmp) so mounts are
+  the machine's.
+
+**Interface** (stable; blocks end with `END`, `*` = repeated):
+
+```
+whoami        USER <name>  ADMIN yes|no
+system        OS-NAME OS-VERSION OS-BUILD KERNEL HOSTNAME DOMAIN MANUFACTURER MODEL SYSTEM-TYPE
+              BIOS-VENDOR BIOS-VERSION BIOS-DATE BOARD-VENDOR BOARD-NAME BOARD-VERSION BOOT-MODE UEFI|Legacy
+              SECURE-BOOT on|off|unsupported CPU CPU-CORES CPU-THREADS CPU-MHZ MEMORY-TOTAL MEMORY-AVAILABLE
+              SWAP-TOTAL (bytes) TIMEZONE LOCALE UPTIME (s) VIRTUALIZATION GPU* BOOT-DEVICE   (no blocks)
+devices       DEVICE <pci:SLOT|usb:N|net:IF|block:N|sound:cardN|input:inputN|monitor:CONN|cpu:N|power:N>
+              CLASS display|net|disk|cdrom|sound|usb|hid|keyboard|mouse|camera|bluetooth|processor|system|
+                    storage-controller|printer|battery|monitor|other
+              NAME [VENDOR] [VENDOR-ID 0x..] [PRODUCT-ID 0x..] [SUBSYSTEM-NAME] BUS SUBSYSTEM SYSFS [DEVNODE]
+              [LOCATION] [DRIVER] [MODULE] [MODULE-VERSION|-SRCVERSION|-FILE|-LICENSE|-AUTHOR|-DESCRIPTION]
+              IFACE* [MAC] [SIZE] [SPEED] [SOUND-CARD] [CAPACITY] [VIRTUAL yes|no] STATUS ok|nodriver
+              [PROBLEM <text>] [SG-DRIVER <packages sg-drivers would install>] [SG-DRIVER-NOTE] [PARENT <id>]  END
+disks         DISK <name> PATH TYPE disk|cdrom SIZE [MODEL VENDOR SERIAL TRANSPORT] ROTATIONAL REMOVABLE
+                          READONLY PTTYPE gpt|dos|none SYSTEM yes|no  END
+              PART <name> PATH DISK NUMBER START SIZE (bytes) [FSTYPE] [INNER-FSTYPE] [LABEL UUID PARTTYPE
+                          PARTTYPENAME PARTLABEL] MOUNT* [FSSIZE FSUSED FSAVAIL] [FLAGS esp boot swap system]
+                          LETTER <X:>*  END           (after their DISK, in disk order)
+              FREE <disk> START SIZE  END            (unallocated, >= 2 MiB)
+              MAP <X:>\t<target>                     (a letter on no local volume: network, tmpfs, missing)
+units         UNIT <id> DESCRIPTION LOAD ACTIVE SUB UNIT-FILE-STATE MAIN-PID SINCE (epoch) [PATH]  END
+              (sg-* plus greetd, NetworkManager, systemd-resolved, cups, samba-ad-dc/smbd/nmbd/winbind if present)
+journal [--unit sg-U]* [--since EPOCH] [--until EPOCH] [--priority 0-7] [--lines N<=5000] [--after-cursor C]
+              E\t<usec>\t<priority>\t<unit>\t<identifier>\t<pid>\t<cursor>\t<message>   (\\ \t \n \r escaped)
+users         USER <name> UID FULL-NAME HOME SHELL GROUPS ADMIN WINDOWS DISABLED yes|no|unknown
+                          SYSTEM-ACCOUNT [DESCRIPTION]  END   (uid 1000-59999 and SYSTEM)
+groups        GROUP <name> GID MEMBERS [WINDOWS-NAME Administrators|Users] [DESCRIPTION]  END
+shares        SHARE <name> PATH COMMENT READONLY GUEST PRINTABLE [USERSHARE yes]  END
+              (ERROR unsupported "Samba is not installed" without it)
+sessions      SESSION <id> USER MACHINE PROTOCOL ENCRYPTED  END           (admin)
+openfiles     OPENFILE <path> USER SHARE MODE  END                        (admin)
+processes     PROCESS <pid> PPID NAME [COMMAND] USER CPU-TICKS CLOCK-TICKS RSS THREADS STATE
+                          [READ-BYTES WRITE-BYTES]  END
+connections   CONN\t<tcp|tcp6|udp|udp6>\t<local>\t<remote>\t<state>\t<pid|->\t<uid>
+cleanup       CATEGORY <id> NAME SCOPE user|system SIZE DESCRIPTION  END
+              user: recycle-bin thumbnails wine-downloads; system (via the service):
+              update-cache old-logs archived-journal crash-reports
+clean ID...   CLEANED <id> <bytes>*        (system categories: admin)
+mount PART                 MOUNTED <part> <dir>          (admin)
+unmount PART               UNMOUNTED <part>              (admin)
+letter PART X:|none        REMOVED <X:>* LETTER <X:>     (admin)
+format PART ntfs|exfat|fat32|ext4 [--label L]  FORMATTED <part> <fs>   (admin)
+```
+
+- **Names**: PCI names from udev's hwdb data (`/run/udev/data`), else
+  `pci.ids`; the bracketed marketing name wins ("GA102 [GeForce RTX 3090]"
+  is "NVIDIA GeForce RTX 3090"), with the maker in front as Device Manager
+  shows it. USB: the device's own strings, then hwdb, then `usb.ids`.
+  Monitors: the EDID's name descriptor. Keyboards and mice: udev's
+  `ID_INPUT_*`, else the evdev capabilities (containers have no udev data).
+- **"No driver"**: a display, network, sound, storage, USB, Bluetooth,
+  camera or printer device with no bound kernel driver is `STATUS nodriver`.
+  `SG-DRIVER` is what `sg-drivers --list` recommends for that PCI slot and
+  is not yet installed (dpkg), so Device Manager can offer it -- also on a
+  device that works on the open driver (nouveau, r8169).
+- **Drive letters** come from `$WINEPREFIX` (else `SG_PREFIX`, default
+  `/var/lib/stained-glass/prefix`) `dosdevices/x:` links, mapped to the
+  volume whose mount point is the longest prefix of the target **and** that
+  really holds it (same `st_dev`), so C: (drive_c) and Z: (`/`) sit on the
+  root partition and a network drive under `/run` is a `MAP` line.
+- **Test overrides**: `SG_SYSINFO_SOCKET`, `SG_SYSFS`, `SG_PROCFS`,
+  `SG_UDEV_DATA`, `SG_PCI_IDS`, `SG_USB_IDS`, `SG_OS_RELEASE`,
+  `SG_PASSWD_FILE`/`SG_GROUP_FILE`/`SG_SHADOW_FILE`, `SG_VAR`, `SG_MEDIA_DIR`,
+  and a command per tool, `SG_<TOOL>` (`LSBLK`, `JOURNALCTL`, `SYSTEMCTL`,
+  `TESTPARM`, `SMBD`, `SMBSTATUS`, `NET`, `MODINFO`, `DETECT_VIRT`,
+  `DPKG_QUERY`, `MOUNT`, `UMOUNT`, `MKFS_NTFS|EXFAT|FAT32|EXT4`, `DRIVERS`);
+  an empty value means "not installed". Setting `SG_JOURNALCTL` also reads
+  the journal directly (no socket).
+- **Gate: `test/sysinfo-test.py`** (in `make lint`): a fake sysfs (a VM's
+  bochs display with its module, an NVIDIA card with no driver and
+  sg-drivers' recommendation, virtio network with eth0, a disk, a monitor
+  with an EDID, a keyboard without udev), fake lsblk/journalctl/systemctl/
+  testparm/smbstatus/mount/mkfs, and the real socket protocol: journal only
+  sg-*, escaped, newest first, a non-sg unit refused, non-session accounts
+  denied; every disk change and system cleanup refused to a standard user;
+  format refused on the system disk and a mounted volume; C:/Z: kept; the
+  bridge. Seen red against mutants: no journal filter, no admin check, no
+  system-disk check, no `st_dev` check. Checked for real on the dev box
+  (i7/RTX 3090/Realtek: display, network, disks with sizes) and through a
+  real root socket (`systemd-socket-activate --inetd`) with real accounts: a
+  non-session account denied, an sgwine member reading the journal and
+  refused `format`, SYSTEM refused unmounting `/`.
+- **Not yet**: resizing, creating or deleting partitions (sg-install's
+  partitioner is root-only and live-boot-only; Disk Management's New/Delete
+  would reuse it through here); SMART health; per-device enable/disable.
 
 ## Voice typing: sg-dictate (Win+H)
 

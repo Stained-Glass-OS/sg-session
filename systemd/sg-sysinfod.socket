@@ -1,0 +1,20 @@
+# The administrative tools' system information (sg-sysinfod): any local user
+# may ask; sg-sysinfo --serve decides what each may do from the caller's uid
+# (SO_PEERCRED) -- the Stained Glass journal for anyone with a Windows
+# session, disk changes, Samba sessions and system cleanup for
+# administrators. Event Viewer, Disk Management, Computer Management and Disk
+# Cleanup ask here through sg-sysinfo.
+[Unit]
+Description=Stained Glass system information socket
+
+[Socket]
+ListenStream=/run/stained-glass-sysinfo/sysinfod.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0666
+DirectoryMode=0755
+Accept=yes
+MaxConnections=32
+
+[Install]
+WantedBy=sockets.target

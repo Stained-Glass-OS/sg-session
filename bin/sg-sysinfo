@@ -1,0 +1,1951 @@
+#!/usr/bin/python3
+# sg-sysinfo -- what the Windows administrative tools show about the Linux
+# side of a Stained Glass OS machine: devices (Device Manager), disks and
+# volumes (Disk Management), the systemd units behind Stained Glass (Services),
+# the Stained Glass journal (Event Viewer), local accounts and groups and Samba
+# shares (Computer Management), a hardware and OS summary (System
+# Information), processes and connections (Resource Monitor), and what can be
+# cleaned up (Disk Cleanup).
+#
+#   sg-sysinfo COMMAND [ARGS]          answers itself what any user may read;
+#                                      asks sg-sysinfod (the socket) for the rest
+#   sg-sysinfo --serve                 sg-sysinfod itself: one request on the
+#                                      socket it was started on (sg-sysinfod@.service)
+#   sg-sysinfo --bridge PROGRAM [ARGS] runs PROGRAM with pipes as its stdin and
+#                                      stdout and serves its requests: how a
+#                                      Windows program reaches this (Wine gives a
+#                                      native program no stdio of a GUI parent,
+#                                      and a Windows program no AF_UNIX)
+#
+# Who may do what is decided by sg-sysinfod from the caller's uid
+# (SO_PEERCRED), as Windows decides it: anyone with a Windows session (group
+# sgwine; sg-admins; SYSTEM; root) may read the Stained Glass journal, as any
+# user may read Windows' System log; mounting, unmounting, drive letters,
+# formatting, Samba sessions and system-wide cleanup need an administrator
+# (sg-admins, SYSTEM, root). Other accounts get nothing from the socket.
+#
+# Commands (the interface is documented in sg-session's CLAUDE.md):
+#   whoami | system | devices | disks | units | users | groups | shares
+#   sessions | openfiles                                (administrators)
+#   journal [--unit U]... [--since EPOCH] [--until EPOCH] [--priority MAX]
+#           [--lines N] [--after-cursor C]
+#   processes | connections
+#   cleanup | clean ID...
+#   mount PART | unmount PART | letter PART X:|none     (administrators)
+#   format PART ntfs|exfat|fat32|ext4 [--label L]      (administrators)
+#
+# Output: lines -- "KEY value", one block per object ending "END" -- then a
+# last line "OK" or "ERROR <kind> <message>", kind one of denied, invalid,
+# notfound, unsupported, failed. Exit status 0 on OK, 3 denied, 2 invalid,
+# 1 anything else.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import grp
+import json
+import os
+import pwd
+import re
+import shutil
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import syslog
+import time
+
+SOCKET = os.environ.get("SG_SYSINFO_SOCKET", "/run/stained-glass-sysinfo/sysinfod.sock")
+ADMIN_GROUP = os.environ.get("SG_ADMIN_GROUP", "sg-admins")
+SYSTEM_USER = os.environ.get("SG_SYSTEM_USER", "sgsystem")
+USER_GROUP = os.environ.get("SG_WINE_GROUP", "sgwine")
+SYSFS = os.environ.get("SG_SYSFS", "/sys")
+PROCFS = os.environ.get("SG_PROCFS", "/proc")
+UDEV_DATA = os.environ.get("SG_UDEV_DATA", "/run/udev/data")
+PCI_IDS = os.environ.get("SG_PCI_IDS", "")
+USB_IDS = os.environ.get("SG_USB_IDS", "")
+OS_RELEASE = os.environ.get("SG_OS_RELEASE", "/etc/os-release")
+PASSWD_FILE = os.environ.get("SG_PASSWD_FILE", "/etc/passwd")
+GROUP_FILE = os.environ.get("SG_GROUP_FILE", "/etc/group")
+SHADOW_FILE = os.environ.get("SG_SHADOW_FILE", "/etc/shadow")
+MEDIA_DIR = os.environ.get("SG_MEDIA_DIR", "/media/stained-glass")
+MAX_REQUEST = 65536
+EXIT = {"denied": 3, "invalid": 2}
+SBIN = ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+
+
+def tool(env, name):
+    """The command for a tool: SG_<env> overrides (an empty value: absent)."""
+    over = os.environ.get("SG_" + env)
+    if over is not None:
+        return over.split() if over else None
+    found = shutil.which(name)
+    if not found:
+        for d in SBIN:
+            if os.access(os.path.join(d, name), os.X_OK):
+                found = os.path.join(d, name)
+                break
+    return [found] if found else None
+
+
+def prefix_dir():
+    return os.environ.get("WINEPREFIX") or os.environ.get("SG_PREFIX") or "/var/lib/stained-glass/prefix"
+
+
+class Fail(Exception):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+
+
+def clean(text):
+    """One line of text, safe to print."""
+    return re.sub(r"[\x00-\x1f\x7f]", " ", str(text)).strip()
+
+
+def esc(text):
+    """A journal message on one field: backslash, tab and line ends escaped."""
+    return str(text).replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+
+
+def read(path, default=""):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return default
+
+
+def run_cmd(argv, timeout=30, check=False):
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+                           env=dict(os.environ, LC_ALL="C"))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        if check:
+            raise Fail("failed", "%s: %s" % (os.path.basename(argv[0]), e))
+        return None
+    if check and p.returncode != 0:
+        err = p.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise Fail("failed", "%s: %s" % (os.path.basename(argv[0]), err[-1] if err else "exit %d" % p.returncode))
+    return p
+
+
+# --- who --------------------------------------------------------------------------
+
+def in_group(uid, group):
+    try:
+        pw = pwd.getpwuid(uid)
+        gid = grp.getgrnam(group).gr_gid
+    except KeyError:
+        return False
+    return gid in os.getgrouplist(pw.pw_name, pw.pw_gid)
+
+
+def is_system(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name == SYSTEM_USER
+    except KeyError:
+        return False
+
+
+def is_admin(uid):
+    return uid == 0 or in_group(uid, ADMIN_GROUP) or is_system(uid)
+
+
+def may_use(uid):
+    """A person at this computer: an account with a Windows session, an
+    administrator, SYSTEM or root. Not other system accounts."""
+    return uid == 0 or in_group(uid, USER_GROUP) or in_group(uid, ADMIN_GROUP) or is_system(uid)
+
+
+def user_name(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return str(uid)
+
+
+# --- system ----------------------------------------------------------------------
+
+def os_release():
+    out = {}
+    for line in read(OS_RELEASE).splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k] = v.strip().strip('"')
+    return out
+
+
+def cpuinfo():
+    cpus, cur = [], {}
+    for line in read(os.path.join(PROCFS, "cpuinfo")).splitlines() + [""]:
+        if not line.strip():
+            if cur:
+                cpus.append(cur)
+            cur = {}
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            cur[k.strip()] = v.strip()
+    return cpus
+
+
+def meminfo():
+    out = {}
+    for line in read(os.path.join(PROCFS, "meminfo")).splitlines():
+        m = re.match(r"(\w+):\s+(\d+)(?: kB)?", line)
+        if m:
+            out[m.group(1)] = int(m.group(2)) * (1024 if line.endswith("kB") else 1)
+    return out
+
+
+def dmi(name):
+    v = read(os.path.join(SYSFS, "class/dmi/id", name))
+    return "" if v in ("", "To Be Filled By O.E.M.", "Default string", "Not Specified", "System Product Name") else v
+
+
+def secure_boot():
+    efivars = os.path.join(SYSFS, "firmware/efi/efivars")
+    if not os.path.isdir(os.path.join(SYSFS, "firmware/efi")):
+        return "unsupported"
+    try:
+        with open(os.path.join(efivars, "SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"), "rb") as f:
+            data = f.read()
+        return "on" if len(data) >= 5 and data[4] == 1 else "off"
+    except OSError:
+        return "off"
+
+
+def gpu_names():
+    out = []
+    for d in sorted(os.listdir(os.path.join(SYSFS, "bus/pci/devices")) if os.path.isdir(
+            os.path.join(SYSFS, "bus/pci/devices")) else []):
+        p = os.path.join(SYSFS, "bus/pci/devices", d)
+        if read(os.path.join(p, "class")).startswith("0x03"):
+            out.append(pci_name(p, d)[1])
+    return out
+
+
+def mount_source(target):
+    best, src = "", ""
+    for line in read(os.path.join(PROCFS, "self/mounts")).splitlines():
+        f = line.split()
+        if len(f) >= 2:
+            mp = f[1].replace("\\040", " ")
+            if (target == mp or target.startswith(mp.rstrip("/") + "/")) and len(mp) >= len(best):
+                best, src = mp, f[0]
+    return src
+
+
+def cmd_system(emit):
+    rel = os_release()
+    name = rel.get("PRETTY_NAME") or rel.get("NAME") or "Linux"
+    if "stained" not in name.lower():
+        name = "Stained Glass OS (%s)" % name
+    emit("OS-NAME %s" % clean(name))
+    emit("OS-VERSION %s" % clean(rel.get("VERSION_ID") or rel.get("VERSION") or ""))
+    emit("OS-BUILD %s" % clean(rel.get("BUILD_ID") or rel.get("VERSION_CODENAME") or ""))
+    u = os.uname()
+    emit("KERNEL %s %s" % (u.sysname, u.release))
+    emit("HOSTNAME %s" % clean(u.nodename))
+    dom = ""
+    try:
+        fq = socket.getfqdn()
+        if "." in fq and fq.split(".", 1)[0] == u.nodename.split(".")[0]:
+            dom = fq.split(".", 1)[1]
+    except OSError:
+        pass
+    emit("DOMAIN %s" % clean(dom or "WORKGROUP"))
+    emit("MANUFACTURER %s" % clean(dmi("sys_vendor")))
+    emit("MODEL %s" % clean(dmi("product_name")))
+    emit("SYSTEM-TYPE %s" % {"x86_64": "x64-based PC", "aarch64": "ARM64-based PC"}.get(u.machine, u.machine))
+    emit("BIOS-VENDOR %s" % clean(dmi("bios_vendor")))
+    emit("BIOS-VERSION %s" % clean(dmi("bios_version")))
+    emit("BIOS-DATE %s" % clean(dmi("bios_date")))
+    emit("BOARD-VENDOR %s" % clean(dmi("board_vendor")))
+    emit("BOARD-NAME %s" % clean(dmi("board_name")))
+    emit("BOARD-VERSION %s" % clean(dmi("board_version")))
+    emit("BOOT-MODE %s" % ("UEFI" if os.path.isdir(os.path.join(SYSFS, "firmware/efi")) else "Legacy"))
+    emit("SECURE-BOOT %s" % secure_boot())
+    cpus = cpuinfo()
+    if cpus:
+        c = cpus[0]
+        emit("CPU %s" % clean(c.get("model name") or c.get("Hardware") or c.get("cpu model") or "Processor"))
+        cores = {(x.get("physical id", "0"), x.get("core id", str(i))) for i, x in enumerate(cpus)}
+        emit("CPU-CORES %d" % len(cores))
+        emit("CPU-THREADS %d" % len(cpus))
+        mhz = read(os.path.join(SYSFS, "devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"))
+        emit("CPU-MHZ %d" % (int(mhz) // 1000 if mhz.isdigit() else int(float(c.get("cpu MHz", "0") or 0))))
+    m = meminfo()
+    emit("MEMORY-TOTAL %d" % m.get("MemTotal", 0))
+    emit("MEMORY-AVAILABLE %d" % m.get("MemAvailable", 0))
+    emit("SWAP-TOTAL %d" % m.get("SwapTotal", 0))
+    tz = ""
+    try:
+        tz = os.readlink("/etc/localtime").split("zoneinfo/", 1)[-1]
+    except OSError:
+        tz = read("/etc/timezone")
+    emit("TIMEZONE %s" % clean(tz or "UTC"))
+    loc = os.environ.get("LANG", "")
+    for line in read("/etc/default/locale").splitlines():
+        if line.startswith("LANG="):
+            loc = line.split("=", 1)[1].strip('"')
+    emit("LOCALE %s" % clean(loc or "C"))
+    up = read(os.path.join(PROCFS, "uptime")).split()
+    emit("UPTIME %d" % (int(float(up[0])) if up else 0))
+    virt = tool("DETECT_VIRT", "systemd-detect-virt")
+    v = run_cmd(virt, timeout=5) if virt else None
+    emit("VIRTUALIZATION %s" % (clean(v.stdout.decode()) if v and v.stdout.strip() else "none"))
+    for g in gpu_names():
+        emit("GPU %s" % clean(g))
+    emit("BOOT-DEVICE %s" % clean(mount_source("/")))
+
+
+# --- devices -------------------------------------------------------------------
+
+_IDS = {}
+
+
+def ids_db(kind):
+    """pci.ids / usb.ids: {vendor: (name, {device: name, (device, subv, subd): name})}"""
+    if kind in _IDS:
+        return _IDS[kind]
+    over = PCI_IDS if kind == "pci" else USB_IDS
+    paths = [over] if over else ["/usr/share/misc/%s.ids" % kind, "/usr/share/hwdata/%s.ids" % kind,
+                                 "/usr/share/%s.ids" % kind]
+    db = {}
+    for p in paths:
+        if not p or not os.path.exists(p):
+            continue
+        vend = dev = None
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                if line.startswith("C "):
+                    break  # the class list follows the devices
+                if not line.startswith("\t"):
+                    parts = line.rstrip("\n").split(None, 1)
+                    if len(parts) == 2 and re.fullmatch(r"[0-9a-fA-F]{4}", parts[0]):
+                        vend = parts[0].lower()
+                        db[vend] = (parts[1], {})
+                        dev = None
+                    else:
+                        vend = None
+                elif vend and line.startswith("\t\t"):
+                    parts = line.strip().split(None, 2)
+                    if dev and len(parts) == 3:
+                        db[vend][1][(dev, parts[0].lower(), parts[1].lower())] = parts[2]
+                elif vend:
+                    parts = line.strip().split(None, 1)
+                    if len(parts) == 2:
+                        dev = parts[0].lower()
+                        db[vend][1][dev] = parts[1]
+        break
+    _IDS[kind] = db
+    return db
+
+
+def udev_props(key):
+    out = {}
+    for line in read(os.path.join(UDEV_DATA, key)).splitlines():
+        if line.startswith("E:") and "=" in line:
+            k, v = line[2:].split("=", 1)
+            out[k] = v
+    return out
+
+
+def udev_key(path, subsystem):
+    dev = read(os.path.join(path, "dev"))
+    if dev and ":" in dev:
+        return ("b" if subsystem == "block" else "c") + dev
+    return "+%s:%s" % (subsystem, os.path.basename(path))
+
+
+def hexid(path, name):
+    v = read(os.path.join(path, name)).lower()
+    return v[2:] if v.startswith("0x") else v
+
+
+def pci_name(path, slot):
+    vid, did = hexid(path, "vendor"), hexid(path, "device")
+    svid, sdid = hexid(path, "subsystem_vendor"), hexid(path, "subsystem_device")
+    props = udev_props("+pci:" + slot)
+    db = ids_db("pci")
+    vname = props.get("ID_VENDOR_FROM_DATABASE") or (db.get(vid, ("", {}))[0]) or ("Vendor %s" % vid)
+    dname = props.get("ID_MODEL_FROM_DATABASE") or db.get(vid, ("", {}))[1].get(did)
+    if not dname:
+        dname = "Device %s" % did
+    sub = db.get(vid, ("", {}))[1].get((did, svid, sdid))
+    # "GA102 [GeForce RTX 3090]": the marketing name is the bracketed one
+    m = re.search(r"\[([^\]]+)\]\s*$", dname)
+    name = m.group(1) if m else dname
+    # "Intel Corporation" + "UHD Graphics 630": Device Manager's names carry the maker
+    short = re.sub(r"\[.*?\]", "", vname.split(",")[0].split(" / ")[0])
+    short = re.sub(r"\b(Corporation|Corp|Inc|Co|Ltd|Semiconductor|Technology|Technologies)\b\.?", "", short)
+    short = re.sub(r"\s+", " ", short).strip(" .,")
+    if short and short.split()[0].lower() not in name.lower():
+        name = "%s %s" % (short, name)
+    return vname, clean(name), sub
+
+
+PCI_CLASSES = {
+    "01": "storage-controller", "02": "net", "03": "display", "05": "system", "06": "system",
+    "07": "system", "08": "system", "09": "hid", "0a": "system", "0b": "processor", "0d": "net",
+    "0e": "system", "0f": "net", "10": "system", "11": "system", "12": "system", "13": "system",
+}
+NEEDS_DRIVER = {"display", "net", "sound", "storage-controller", "usb", "bluetooth", "camera", "printer"}
+
+
+def pci_class(code):
+    base, sub = code[2:4], code[2:6]
+    if base == "04":
+        return "sound" if sub in ("0401", "0403") else "camera" if sub == "0400" else "sound"
+    if sub == "0c03":
+        return "usb"
+    if sub in ("0c05", "0c80"):
+        return "system"
+    if base == "0c":
+        return "system"
+    if sub == "0d11":
+        return "bluetooth"
+    return PCI_CLASSES.get(base, "other")
+
+
+_MODINFO = {}
+
+
+def module_info(mod):
+    if mod in _MODINFO:
+        return _MODINFO[mod]
+    info = {}
+    m = os.path.join(SYSFS, "module", mod)
+    for k, f in (("VERSION", "version"), ("SRCVERSION", "srcversion")):
+        v = read(os.path.join(m, f))
+        if v:
+            info[k] = v
+    mi = tool("MODINFO", "modinfo")
+    if mi:
+        p = run_cmd(mi + [mod], timeout=5)
+        if p and p.returncode == 0:
+            for line in p.stdout.decode("utf-8", "replace").splitlines():
+                if ":" not in line:
+                    continue
+                k, v = line.split(":", 1)
+                k, v = k.strip(), v.strip()
+                key = {"filename": "FILE", "license": "LICENSE", "author": "AUTHOR",
+                       "description": "DESCRIPTION", "version": "VERSION"}.get(k)
+                if key and key not in info:
+                    info[key] = v
+                elif key == "AUTHOR":
+                    info[key] += "; " + v
+    if not info.get("FILE") and os.path.isdir(m):
+        info["FILE"] = "(built into the kernel)" if not os.path.exists(os.path.join(m, "initstate")) else ""
+    _MODINFO[mod] = info
+    return info
+
+
+def driver_of(path):
+    drv = mod = ""
+    try:
+        drv = os.path.basename(os.readlink(os.path.join(path, "driver")))
+    except OSError:
+        pass
+    try:
+        mod = os.path.basename(os.readlink(os.path.join(path, "driver", "module")))
+    except OSError:
+        pass
+    return drv, mod
+
+
+def dpkg_installed(pkg):
+    dq = tool("DPKG_QUERY", "dpkg-query")
+    if not dq:
+        return False
+    p = run_cmd(dq + ["-W", "-f", "${Status}", pkg], timeout=10)
+    return bool(p and p.returncode == 0 and b"install ok installed" in p.stdout)
+
+
+def sg_drivers_survey():
+    """sg-drivers --list: {pci slot: (packages still missing, note)}"""
+    over = os.environ.get("SG_DRIVERS")
+    cmd = over.split() if over else (["sh", "/usr/bin/sg-drivers"] if os.path.exists("/usr/bin/sg-drivers") else None)
+    if over == "":
+        cmd = None
+    out = {}
+    if not cmd:
+        return out
+    p = run_cmd(cmd + ["--list"], timeout=20)
+    if not p or p.returncode != 0:
+        return out
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        if not line.startswith("DEVICE "):
+            continue
+        f = line[7:].split("\t")
+        if len(f) < 5 or f[3] in ("", "-"):
+            continue
+        missing = [x for x in f[3].split() if not dpkg_installed(x)]
+        if missing:
+            out[f[0]] = (" ".join(missing), f[4], f[2])
+    return out
+
+
+def edid_name(data):
+    for off in (54, 72, 90, 108):
+        blk = data[off:off + 18]
+        if len(blk) == 18 and blk[0:3] == b"\0\0\0" and blk[3] == 0xFC:
+            return blk[5:].split(b"\n")[0].decode("ascii", "replace").strip()
+    return ""
+
+
+def devices_list():
+    devs = []
+    drivers = sg_drivers_survey()
+    by_path = {}
+
+    def add(d):
+        devs.append(d)
+        if d.get("SYSFS"):
+            by_path[os.path.realpath(d["SYSFS"])] = d
+        return d
+
+    # PCI
+    pdir = os.path.join(SYSFS, "bus/pci/devices")
+    for slot in sorted(os.listdir(pdir)) if os.path.isdir(pdir) else []:
+        p = os.path.join(pdir, slot)
+        code = read(os.path.join(p, "class")).lower()
+        cls = pci_class(code) if code.startswith("0x") else "other"
+        vname, name, sub = pci_name(p, slot)
+        drv, mod = driver_of(p)
+        m = re.match(r"(?:[0-9a-f]+:)?([0-9a-f]+):([0-9a-f]+)\.([0-7])", slot)
+        loc = "PCI bus %d, device %d, function %d" % (int(m.group(1), 16), int(m.group(2), 16),
+                                                     int(m.group(3))) if m else slot
+        d = {"DEVICE": "pci:" + slot, "CLASS": cls, "NAME": name, "VENDOR": vname,
+             "VENDOR-ID": "0x" + hexid(p, "vendor"), "PRODUCT-ID": "0x" + hexid(p, "device"),
+             "BUS": "pci", "SUBSYSTEM": "pci", "SYSFS": os.path.realpath(p), "LOCATION": loc,
+             "DRIVER": drv, "MODULE": mod or drv}
+        if sub:
+            d["SUBSYSTEM-NAME"] = sub
+        if cls in NEEDS_DRIVER and not drv:
+            d["STATUS"] = "nodriver"
+            d["PROBLEM"] = "The drivers for this device are not installed."
+        else:
+            d["STATUS"] = "ok"
+        if slot in drivers:
+            d["SG-DRIVER"], d["SG-DRIVER-NOTE"] = drivers[slot][0], drivers[slot][1]
+            if not drv:
+                d["PROBLEM"] = "The drivers for this device are not installed. Stained Glass can install %s." \
+                    % drivers[slot][0]
+        add(d)
+
+    # USB devices (not their interfaces)
+    udir = os.path.join(SYSFS, "bus/usb/devices")
+    for n in sorted(os.listdir(udir)) if os.path.isdir(udir) else []:
+        p = os.path.join(udir, n)
+        if ":" in n or not os.path.exists(os.path.join(p, "idVendor")):
+            continue
+        vid, pid = hexid(p, "idVendor"), hexid(p, "idProduct")
+        props = udev_props(udev_key(p, "usb"))
+        db = ids_db("usb")
+        manuf = read(os.path.join(p, "manufacturer")) or props.get("ID_VENDOR_FROM_DATABASE") or \
+            db.get(vid, ("", {}))[0]
+        prod = read(os.path.join(p, "product")) or props.get("ID_MODEL_FROM_DATABASE") or \
+            db.get(vid, ("", {}))[1].get(pid) or "USB device %s:%s" % (vid, pid)
+        iclasses, idrivers = [], []
+        for i in sorted(os.listdir(p)):
+            ip = os.path.join(p, i)
+            if i.startswith(n + ":") and os.path.isdir(ip):
+                iclasses.append((hexid(ip, "bInterfaceClass"), hexid(ip, "bInterfaceProtocol")))
+                dr, md = driver_of(ip)
+                if dr and (md or dr) not in idrivers:
+                    idrivers.append(md or dr)
+        dclass = hexid(p, "bDeviceClass")
+        codes = [c for c, _ in iclasses] + [dclass]
+        if "09" in codes:
+            cls, prod = "usb", ("USB Root Hub" if vid == "1d6b" else prod)
+        elif "0e" in codes:
+            cls = "camera"
+        elif "01" in codes:
+            cls = "sound"
+        elif "e0" in codes:
+            cls = "bluetooth"
+        elif "07" in codes:
+            cls = "printer"
+        elif "08" in codes:
+            cls = "usb"
+            prod = prod if "storage" in prod.lower() else "%s (USB Mass Storage)" % prod
+        elif "03" in codes:
+            cls = "hid"
+        elif "02" in codes or "0a" in codes:
+            cls = "net"
+        else:
+            cls = "usb"
+        busnum, devnum = read(os.path.join(p, "busnum")), read(os.path.join(p, "devnum"))
+        d = {"DEVICE": "usb:" + n, "CLASS": cls, "NAME": clean(prod), "VENDOR": clean(manuf),
+             "VENDOR-ID": "0x" + vid, "PRODUCT-ID": "0x" + pid, "BUS": "usb", "SUBSYSTEM": "usb",
+             "SYSFS": os.path.realpath(p), "LOCATION": "Port %s on USB bus %s (device %s)" % (
+                 n.split("-")[-1].split(".")[-1] if "-" in n else "0", busnum, devnum),
+             "DRIVER": ",".join(idrivers) or driver_of(p)[0], "MODULE": idrivers[0] if idrivers else "",
+             "SPEED": read(os.path.join(p, "speed"))}
+        if not idrivers and cls not in ("usb",) and iclasses:
+            d["STATUS"], d["PROBLEM"] = "nodriver", "The drivers for this device are not installed."
+        else:
+            d["STATUS"] = "ok"
+        add(d)
+
+    def owner(path):
+        """The PCI/USB device entry a sysfs node belongs to."""
+        path = os.path.realpath(path)
+        while path and path != "/" and len(path) > len(SYSFS):
+            if path in by_path:
+                return by_path[path]
+            path = os.path.dirname(path)
+        return None
+
+    # network interfaces
+    ndir = os.path.join(SYSFS, "class/net")
+    for n in sorted(os.listdir(ndir)) if os.path.isdir(ndir) else []:
+        p = os.path.join(ndir, n)
+        if n == "lo" or n.startswith("veth"):
+            continue
+        mac = read(os.path.join(p, "address"))
+        if os.path.exists(os.path.join(p, "device")):
+            o = owner(os.path.join(p, "device"))
+            if o:
+                o.setdefault("IFACE", [])
+                o["IFACE"].append(n)
+                o.setdefault("MAC", mac)
+                if o["CLASS"] in ("other", "system"):
+                    o["CLASS"] = "net"
+                continue
+            drv, mod = driver_of(os.path.join(p, "device"))
+            name = "%s network adapter (%s)" % (drv or "Virtual", n)
+            virtual = False
+        else:
+            kind = "Bridge" if os.path.isdir(os.path.join(p, "bridge")) else \
+                "Wireless" if os.path.isdir(os.path.join(p, "wireless")) else \
+                "TUN/TAP" if os.path.exists(os.path.join(p, "tun_flags")) else "Virtual"
+            name, drv, mod, virtual = "%s network adapter (%s)" % (kind, n), "", "", True
+            try:
+                drv = os.path.basename(os.readlink(os.path.join(p, "device/driver")))
+            except OSError:
+                pass
+        add({"DEVICE": "net:" + n, "CLASS": "net", "NAME": name, "BUS": "virtual" if virtual else "other",
+             "SUBSYSTEM": "net", "SYSFS": os.path.realpath(p), "DRIVER": drv, "MODULE": mod or drv,
+             "IFACE": [n], "MAC": mac, "STATUS": "ok", "VIRTUAL": "yes" if virtual else "no"})
+
+    # disks and optical drives
+    bdir = os.path.join(SYSFS, "block")
+    for n in sorted(os.listdir(bdir)) if os.path.isdir(bdir) else []:
+        if re.match(r"(loop|ram|zram|dm-|md|nbd|fd)", n):
+            continue
+        p = os.path.join(bdir, n)
+        size = int(read(os.path.join(p, "size"), "0") or 0) * 512
+        vendor = read(os.path.join(p, "device/vendor"))
+        model = read(os.path.join(p, "device/model")) or udev_props(udev_key(p, "block")).get("ID_MODEL", "")
+        name = " ".join(x for x in (vendor if vendor.lower() not in ("ata", "") else "", model) if x) or n
+        cdrom = n.startswith("sr")
+        if not cdrom and size == 0 and read(os.path.join(p, "removable")) != "1":
+            continue
+        d = {"DEVICE": "block:" + n, "CLASS": "cdrom" if cdrom else "disk",
+             "NAME": clean(name) + ("" if cdrom else " (%s)" % human(size)), "BUS": "block", "SUBSYSTEM": "block",
+             "SYSFS": os.path.realpath(p), "DEVNODE": "/dev/" + n, "SIZE": str(size), "STATUS": "ok",
+             "DRIVER": "sr" if cdrom else ("nvme" if n.startswith("nvme") else
+                                          "virtio_blk" if n.startswith("vd") else "sd"),
+             "MODULE": "sr_mod" if cdrom else ("nvme" if n.startswith("nvme") else
+                                              "virtio_blk" if n.startswith("vd") else "sd_mod")}
+        o = owner(os.path.join(p, "device")) if os.path.exists(os.path.join(p, "device")) else None
+        if o:
+            d["PARENT"] = o["DEVICE"]
+        add(d)
+
+    # sound cards: name the PCI/USB device by the card, or list a card of its own
+    sdir = os.path.join(SYSFS, "class/sound")
+    for n in sorted(os.listdir(sdir)) if os.path.isdir(sdir) else []:
+        if not re.fullmatch(r"card\d+", n):
+            continue
+        p = os.path.join(sdir, n)
+        o = owner(os.path.join(p, "device")) if os.path.exists(os.path.join(p, "device")) else None
+        cardname = read(os.path.join(p, "id"))
+        if o:
+            o["CLASS"] = "sound" if o["CLASS"] in ("other", "system", "hid", "usb") else o["CLASS"]
+            o["SOUND-CARD"] = cardname
+        else:
+            add({"DEVICE": "sound:" + n, "CLASS": "sound", "NAME": clean(cardname or n), "BUS": "virtual",
+                 "SUBSYSTEM": "sound", "SYSFS": os.path.realpath(p), "STATUS": "ok",
+                 "DRIVER": driver_of(os.path.join(p, "device"))[0]})
+
+    # input devices
+    idir = os.path.join(SYSFS, "class/input")
+    for n in sorted(os.listdir(idir), key=lambda x: int(re.sub(r"\D", "", x) or 0)) if os.path.isdir(idir) else []:
+        if not re.fullmatch(r"input\d+", n):
+            continue
+        p = os.path.join(idir, n)
+        props = udev_props("+input:" + n)
+        name = read(os.path.join(p, "name")) or n
+        if props.get("ID_INPUT_KEYBOARD") == "1":
+            cls = "keyboard"
+        elif props.get("ID_INPUT_MOUSE") == "1" or props.get("ID_INPUT_TOUCHPAD") == "1":
+            cls = "mouse"
+        elif props.get("ID_INPUT_JOYSTICK") == "1" or props.get("ID_INPUT_TABLET") == "1":
+            cls = "hid"
+        elif not props:
+            # no udev data (a container): read the capabilities
+            ev = int(read(os.path.join(p, "capabilities/ev"), "0").split()[-1] or "0", 16)
+            rel = read(os.path.join(p, "capabilities/rel"), "0")
+            key = read(os.path.join(p, "capabilities/key"), "0").split()
+            if ev & 0x4 and rel not in ("0", ""):
+                cls = "mouse"
+            elif ev & 0x2 and len(key) >= 2:
+                cls = "keyboard"
+            else:
+                cls = "system"
+        else:
+            cls = "system"
+        phys = read(os.path.join(p, "phys"))
+        o = owner(os.path.join(p, "device")) if os.path.exists(os.path.join(p, "device")) else None
+        d = {"DEVICE": "input:" + n, "CLASS": cls, "NAME": clean(name), "BUS": {
+            "0003": "usb", "0011": "i8042", "0019": "platform", "0005": "bluetooth"}.get(
+                read(os.path.join(p, "id/bustype")), "other"), "SUBSYSTEM": "input", "SYSFS": os.path.realpath(p),
+             "VENDOR-ID": "0x" + read(os.path.join(p, "id/vendor")),
+             "PRODUCT-ID": "0x" + read(os.path.join(p, "id/product")), "LOCATION": clean(phys),
+             "STATUS": "ok", "DRIVER": "evdev", "MODULE": "evdev"}
+        if o:
+            d["PARENT"] = o["DEVICE"]
+        add(d)
+
+    # monitors, from the connectors' EDID
+    ddir = os.path.join(SYSFS, "class/drm")
+    for n in sorted(os.listdir(ddir)) if os.path.isdir(ddir) else []:
+        p = os.path.join(ddir, n)
+        if "-" not in n or read(os.path.join(p, "status")) != "connected":
+            continue
+        try:
+            with open(os.path.join(p, "edid"), "rb") as f:
+                edid = f.read()
+        except OSError:
+            edid = b""
+        mname = edid_name(edid) or "Generic Monitor"
+        o = owner(p)
+        d = {"DEVICE": "monitor:" + n, "CLASS": "monitor", "NAME": clean(mname) if mname != "Generic Monitor"
+             else "Generic PnP Monitor", "BUS": "display", "SUBSYSTEM": "drm", "SYSFS": os.path.realpath(p),
+             "LOCATION": n.split("-", 1)[1], "STATUS": "ok", "DRIVER": "monitor"}
+        if len(edid) >= 12:
+            code = (edid[8] << 8) | edid[9]
+            d["VENDOR-ID"] = "".join(chr(64 + ((code >> s) & 31)) for s in (10, 5, 0))
+            d["PRODUCT-ID"] = "0x%04x" % (edid[10] | (edid[11] << 8))
+        if o:
+            d["PARENT"] = o["DEVICE"]
+        add(d)
+
+    # processors
+    for i, c in enumerate(cpuinfo()):
+        add({"DEVICE": "cpu:%d" % i, "CLASS": "processor", "NAME": clean(
+            c.get("model name") or c.get("Hardware") or "Processor"), "BUS": "cpu", "SUBSYSTEM": "cpu",
+            "SYSFS": os.path.realpath(os.path.join(SYSFS, "devices/system/cpu/cpu%d" % i)),
+            "STATUS": "ok", "DRIVER": read(os.path.join(SYSFS, "devices/system/cpu/cpufreq/policy%d/scaling_driver"
+                                                        % i)) or "processor"})
+
+    # batteries
+    pdir = os.path.join(SYSFS, "class/power_supply")
+    for n in sorted(os.listdir(pdir)) if os.path.isdir(pdir) else []:
+        p = os.path.join(pdir, n)
+        if read(os.path.join(p, "type")) != "Battery":
+            continue
+        add({"DEVICE": "power:" + n, "CLASS": "battery", "NAME": clean(" ".join(x for x in (
+            read(os.path.join(p, "manufacturer")), read(os.path.join(p, "model_name"))) if x) or "Battery"),
+            "BUS": "acpi", "SUBSYSTEM": "power_supply", "SYSFS": os.path.realpath(p), "STATUS": "ok",
+            "CAPACITY": read(os.path.join(p, "capacity"))})
+
+    for d in devs:
+        if "PARENT" not in d and d.get("SYSFS"):
+            o = owner(os.path.dirname(d["SYSFS"]))
+            if o and o is not d:
+                d["PARENT"] = o["DEVICE"]
+    return devs
+
+
+def cmd_devices(emit):
+    for d in devices_list():
+        emit("DEVICE %s" % d["DEVICE"])
+        for k in ("CLASS", "NAME", "VENDOR", "VENDOR-ID", "PRODUCT-ID", "SUBSYSTEM-NAME", "BUS", "SUBSYSTEM",
+                  "SYSFS", "DEVNODE", "LOCATION", "DRIVER", "MODULE"):
+            if d.get(k):
+                emit("%s %s" % (k, clean(d[k])))
+        if d.get("MODULE"):
+            for k, v in sorted(module_info(d["MODULE"]).items()):
+                if v:
+                    emit("MODULE-%s %s" % (k, clean(v)))
+        for k in ("IFACE",):
+            for v in d.get(k, []):
+                emit("%s %s" % (k, clean(v)))
+        for k in ("MAC", "SIZE", "SPEED", "SOUND-CARD", "CAPACITY", "VIRTUAL", "STATUS", "PROBLEM",
+                  "SG-DRIVER", "SG-DRIVER-NOTE", "PARENT"):
+            if d.get(k):
+                emit("%s %s" % (k, clean(d[k])))
+        emit("END")
+
+
+# --- disks ---------------------------------------------------------------------
+
+def human(n):
+    for unit in ("bytes", "KB", "MB", "GB", "TB", "PB"):
+        if n < 1024 or unit == "PB":
+            return ("%d %s" % (n, unit)) if unit == "bytes" else ("%.1f %s" % (n, unit)).replace(".0 ", " ")
+        n /= 1024.0
+    return str(n)
+
+
+ESP_TYPES = {"c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "0xef"}
+SYSTEM_MOUNTS = {"/", "/boot", "/boot/efi", "/efi", "/usr", "/var", "/home", "[SWAP]"}
+
+
+def lsblk():
+    cmd = tool("LSBLK", "lsblk")
+    if not cmd:
+        raise Fail("unsupported", "lsblk is not installed")
+    p = run_cmd(cmd + ["-J", "-b", "-O"], timeout=30, check=True)
+    try:
+        return json.loads(p.stdout.decode("utf-8", "replace")).get("blockdevices", [])
+    except ValueError:
+        raise Fail("failed", "lsblk gave no JSON")
+
+
+def mounts_of(node):
+    out = [m for m in (node.get("mountpoints") or [node.get("mountpoint")]) if m]
+    for c in node.get("children") or []:
+        out += mounts_of(c)
+    return out
+
+
+def fs_of(node):
+    """(fstype, fssize, fsused, fsavail, label, uuid) of the file system in a
+    partition, looking inside LUKS/LVM when the partition is only a container."""
+    if node.get("fssize") is not None or not node.get("children"):
+        return node
+    for c in node.get("children") or []:
+        if mounts_of(c):
+            return fs_of(c)
+    return node
+
+
+def drive_letters():
+    """{letter: realpath target} from the prefix's dosdevices."""
+    d = os.path.join(prefix_dir(), "dosdevices")
+    out = {}
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for n in sorted(names):
+        if re.fullmatch(r"[a-z]:", n):
+            try:
+                t = os.readlink(os.path.join(d, n))
+            except OSError:
+                continue
+            out[n.upper()] = os.path.realpath(os.path.join(d, t))
+    return out
+
+
+def disk_model():
+    """[(disk dict, [partitions], [free gaps])] with LETTER lists added."""
+    devs = lsblk()
+    letters = drive_letters()
+    # every mount point of every partition (and what is nested in it)
+    owners = []
+    disks = []
+    for dev in devs:
+        typ = dev.get("type")
+        if typ not in ("disk", "rom"):
+            continue
+        if re.match(r"(zram|ram|loop)", dev.get("name", "")):
+            continue
+        parts = [c for c in dev.get("children") or [] if c.get("type") == "part"]
+        if not parts and (dev.get("fstype") or mounts_of(dev)):
+            parts = [dict(dev, partn=0, start=0, _whole=True)]
+        disks.append((dev, parts))
+        for p in parts:
+            for m in mounts_of(p):
+                owners.append((m, p))
+    part_letters = {}
+    for letter, target in letters.items():
+        best, bp = "", None
+        for m, p in owners:
+            if m == "[SWAP]":
+                continue
+            if (target == m or target.startswith(m.rstrip("/") + "/")) and len(m) >= len(best):
+                best, bp = m, p
+        # the volume really holding it: a letter on a file system mounted
+        # below (a network drive under /run) or on nothing is not this one's
+        try:
+            if bp is not None and os.stat(target).st_dev != os.stat(best).st_dev:
+                bp = None
+        except OSError:
+            bp = None
+        if bp is not None:
+            part_letters.setdefault(id(bp), []).append(letter)
+    prefix_real = os.path.realpath(prefix_dir())
+    out = []
+    for dev, parts in disks:
+        size = int(dev.get("size") or 0)
+        system = False
+        items = []
+        for p in parts:
+            ms = mounts_of(p)
+            fs = fs_of(p)
+            flags = []
+            ptype = (p.get("parttype") or "").lower()
+            if ptype in ESP_TYPES:
+                flags.append("esp")
+            pf = (p.get("partflags") or "").lower()
+            if pf in ("0x80",):
+                flags.append("boot")
+            if "[SWAP]" in ms or (fs.get("fstype") == "swap"):
+                flags.append("swap")
+            holds_prefix = any(m != "[SWAP]" and (prefix_real == m or prefix_real.startswith(m.rstrip("/") + "/"))
+                               for m in ms)
+            if any(m in SYSTEM_MOUNTS for m in ms) or holds_prefix:
+                flags.append("system")
+                system = True
+            start = p.get("start")
+            if start is None:
+                start = read(os.path.join(SYSFS, "class/block", p.get("name", ""), "start"), "0") or 0
+            items.append({"part": p, "fs": fs, "mounts": ms, "flags": flags, "start": int(start) * 512,
+                          "size": int(p.get("size") or 0), "letters": sorted(part_letters.get(id(p), []))})
+        items.sort(key=lambda x: x["start"])
+        gaps = []
+        if dev.get("type") == "disk" and not (len(items) == 1 and items[0]["part"].get("_whole")):
+            pos = 0
+            lead = 1024 * 1024
+            for it in items:
+                if it["start"] - pos >= 2 * lead:
+                    gaps.append((pos if pos else lead, it["start"] - (pos if pos else lead)))
+                pos = max(pos, it["start"] + it["size"])
+            tail_end = size - (34 * 512 if (dev.get("pttype") == "gpt") else 0)
+            if tail_end - pos >= 2 * lead:
+                gaps.append((pos if pos else lead, tail_end - (pos if pos else lead)))
+        out.append((dev, items, gaps, system))
+    return out, letters, owners
+
+
+def cmd_disks(emit):
+    model, letters, owners = disk_model()
+    for dev, items, gaps, system in model:
+        emit("DISK %s" % clean(dev.get("name")))
+        emit("PATH %s" % clean(dev.get("path") or "/dev/" + dev.get("name", "")))
+        emit("TYPE %s" % ("cdrom" if dev.get("type") == "rom" else "disk"))
+        emit("SIZE %d" % int(dev.get("size") or 0))
+        for k, key in (("MODEL", "model"), ("VENDOR", "vendor"), ("SERIAL", "serial"), ("TRANSPORT", "tran")):
+            if dev.get(key):
+                emit("%s %s" % (k, clean(dev[key])))
+        emit("ROTATIONAL %s" % ("yes" if dev.get("rota") else "no"))
+        emit("REMOVABLE %s" % ("yes" if dev.get("rm") or dev.get("hotplug") else "no"))
+        emit("READONLY %s" % ("yes" if dev.get("ro") else "no"))
+        emit("PTTYPE %s" % clean(dev.get("pttype") or "none"))
+        emit("SYSTEM %s" % ("yes" if system else "no"))
+        emit("END")
+        for it in items:
+            p, fs = it["part"], it["fs"]
+            emit("PART %s" % clean(p.get("name")))
+            emit("PATH %s" % clean(p.get("path") or "/dev/" + p.get("name", "")))
+            emit("DISK %s" % clean(dev.get("name")))
+            emit("NUMBER %d" % int(p.get("partn") or 0))
+            emit("START %d" % it["start"])
+            emit("SIZE %d" % it["size"])
+            if p.get("fstype"):
+                emit("FSTYPE %s" % clean(p["fstype"]))
+            if fs is not p and fs.get("fstype"):
+                emit("INNER-FSTYPE %s" % clean(fs["fstype"]))
+            for k, key in (("LABEL", "label"), ("UUID", "uuid"), ("PARTTYPE", "parttype"),
+                           ("PARTTYPENAME", "parttypename"), ("PARTLABEL", "partlabel")):
+                v = p.get(key) if key != "label" else (fs.get("label") or p.get("label"))
+                if v:
+                    emit("%s %s" % (k, clean(v)))
+            for m in it["mounts"]:
+                emit("MOUNT %s" % clean(m))
+            for k, key in (("FSSIZE", "fssize"), ("FSUSED", "fsused"), ("FSAVAIL", "fsavail")):
+                if fs.get(key) is not None:
+                    emit("%s %d" % (k, int(fs[key])))
+            if it["flags"]:
+                emit("FLAGS %s" % " ".join(it["flags"]))
+            for letter in it["letters"]:
+                emit("LETTER %s" % letter)
+            emit("END")
+        for start, size in gaps:
+            emit("FREE %s" % clean(dev.get("name")))
+            emit("START %d" % start)
+            emit("SIZE %d" % size)
+            emit("END")
+    mapped = {l for _, items, _, _ in model for it in items for l in it["letters"]}
+    for letter, target in sorted(letters.items()):
+        if letter not in mapped:
+            emit("MAP %s\t%s" % (letter, clean(target)))
+
+
+# --- units ---------------------------------------------------------------------
+
+EXTRA_UNITS = ["greetd.service", "NetworkManager.service", "systemd-resolved.service", "cups.service",
+               "samba-ad-dc.service", "smbd.service", "nmbd.service", "winbind.service"]
+
+
+def cmd_units(emit):
+    sc = tool("SYSTEMCTL", "systemctl")
+    if not sc:
+        raise Fail("unsupported", "systemd is not running")
+    names = set()
+    for sub in (["list-units", "--all"], ["list-unit-files"]):
+        p = run_cmd(sc + sub + ["--no-legend", "--plain", "--no-pager", "sg-*"], timeout=20)
+        if p and p.returncode == 0:
+            for line in p.stdout.decode("utf-8", "replace").splitlines():
+                f = line.split()
+                if f and f[0].startswith("sg-") and not f[0].endswith("@.service"):
+                    names.add(f[0])
+                elif f and f[0].startswith("sg-") and f[0].endswith("@.service"):
+                    pass  # a template: its instances are listed on their own
+    names = sorted(names) + EXTRA_UNITS
+    props = "Id,Description,LoadState,ActiveState,SubState,UnitFileState,MainPID,ActiveEnterTimestamp,FragmentPath"
+    p = run_cmd(sc + ["show", "--timestamp=unix", "-p", props, "--"] + names, timeout=30)
+    if not p:
+        raise Fail("failed", "systemctl did not answer")
+    for block in p.stdout.decode("utf-8", "replace").split("\n\n"):
+        kv = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        if not kv.get("Id") or kv.get("LoadState") in ("not-found", ""):
+            continue
+        emit("UNIT %s" % clean(kv["Id"]))
+        emit("DESCRIPTION %s" % clean(kv.get("Description", "")))
+        emit("LOAD %s" % clean(kv.get("LoadState", "")))
+        emit("ACTIVE %s" % clean(kv.get("ActiveState", "")))
+        emit("SUB %s" % clean(kv.get("SubState", "")))
+        emit("UNIT-FILE-STATE %s" % clean(kv.get("UnitFileState", "") or "static"))
+        emit("MAIN-PID %s" % clean(kv.get("MainPID", "0") or "0"))
+        ts = kv.get("ActiveEnterTimestamp", "")
+        emit("SINCE %s" % (ts[1:] if ts.startswith("@") else "0"))
+        if kv.get("FragmentPath"):
+            emit("PATH %s" % clean(kv["FragmentPath"]))
+        emit("END")
+
+
+# --- journal -------------------------------------------------------------------
+
+def stained_glass(entry):
+    unit = entry.get("_SYSTEMD_UNIT") or entry.get("_SYSTEMD_USER_UNIT") or ""
+    ident = entry.get("SYSLOG_IDENTIFIER") or ""
+    return unit.startswith("sg-") or ident.startswith("sg-")
+
+
+def field(entry, name):
+    v = entry.get(name, "")
+    if isinstance(v, list):
+        if v and isinstance(v[0], int):
+            return bytes(v).decode("utf-8", "replace")
+        v = v[0] if v else ""
+        if isinstance(v, list):
+            return bytes(v).decode("utf-8", "replace")
+    return "" if v is None else str(v)
+
+
+def entry_unit(e):
+    """The Stained Glass unit an entry came from: a user unit (a session's
+    sg-* service) before the user@.service manager that runs it."""
+    sysu, useru = field(e, "_SYSTEMD_UNIT"), field(e, "_SYSTEMD_USER_UNIT")
+    if not sysu.startswith("sg-") and useru.startswith("sg-"):
+        return useru
+    return sysu or useru
+
+
+def parse_journal_args(argv):
+    opts = {"unit": [], "since": None, "until": None, "priority": 7, "lines": 500, "after": None}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--unit", "--since", "--until", "--priority", "--lines", "--after-cursor"):
+            if i + 1 >= len(argv):
+                raise Fail("invalid", "%s needs a value" % a)
+            v = argv[i + 1]
+            i += 2
+            if a == "--unit":
+                if not re.fullmatch(r"sg-[A-Za-z0-9@._:-]{1,120}", v):
+                    raise Fail("invalid", "only Stained Glass units (sg-*) are shown")
+                opts["unit"].append(v)
+            elif a == "--after-cursor":
+                if len(v) > 512 or not re.fullmatch(r"[A-Za-z0-9=;_.:-]+", v):
+                    raise Fail("invalid", "bad cursor")
+                opts["after"] = v
+            else:
+                if not re.fullmatch(r"\d{1,12}", v):
+                    raise Fail("invalid", "%s needs a number" % a)
+                opts[a[2:]] = int(v)
+        else:
+            raise Fail("invalid", "unknown journal option %s" % clean(a))
+    opts["lines"] = max(1, min(opts["lines"], 5000))
+    opts["priority"] = max(0, min(opts["priority"], 7))
+    return opts
+
+
+def cmd_journal(argv, emit):
+    """Newest first. Only Stained Glass units and identifiers, whatever was asked."""
+    opts = parse_journal_args(argv)
+    jc = tool("JOURNALCTL", "journalctl")
+    if not jc:
+        raise Fail("unsupported", "the journal is not available")
+    args = jc + ["-o", "json", "--no-pager", "-q", "-p", str(opts["priority"])]
+    if opts["since"] is not None:
+        args += ["--since", "@%d" % opts["since"]]
+    if opts["until"] is not None:
+        args += ["--until", "@%d" % opts["until"]]
+    if opts["after"]:
+        args += ["--after-cursor", opts["after"]]
+    else:
+        args += ["-r"]
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                env=dict(os.environ, LC_ALL="C"))
+    except OSError as e:
+        raise Fail("failed", "journalctl: %s" % e.strerror)
+    found = []
+    scanned = 0
+    deadline = time.monotonic() + 20
+    try:
+        for raw in proc.stdout:
+            scanned += 1
+            if scanned > 400000 or time.monotonic() > deadline:
+                break
+            try:
+                e = json.loads(raw)
+            except ValueError:
+                continue
+            if not stained_glass(e):
+                continue
+            unit = entry_unit(e)
+            if opts["unit"] and unit not in opts["unit"] and field(e, "SYSLOG_IDENTIFIER") not in opts["unit"]:
+                continue
+            found.append(e)
+            if not opts["after"] and len(found) >= opts["lines"]:
+                break
+    finally:
+        proc.kill()
+        proc.wait()
+    if opts["after"]:
+        found = list(reversed(found))[:opts["lines"]]
+    for e in found:
+        emit("E\t%s\t%s\t%s\t%s\t%s\t%s\t%s" % (
+            field(e, "__REALTIME_TIMESTAMP") or "0", field(e, "PRIORITY") or "6",
+            esc(entry_unit(e)),
+            esc(field(e, "SYSLOG_IDENTIFIER") or field(e, "_COMM")), esc(field(e, "_PID")),
+            esc(field(e, "__CURSOR")), esc(field(e, "MESSAGE"))))
+
+
+def journal_direct():
+    """May this process read the whole journal itself?"""
+    if os.geteuid() == 0 or os.environ.get("SG_JOURNALCTL"):
+        return True
+    groups = set(os.getgroups())
+    for g in ("systemd-journal", "adm"):
+        try:
+            if grp.getgrnam(g).gr_gid in groups:
+                return True
+        except KeyError:
+            pass
+    return False
+
+
+# --- users and groups ----------------------------------------------------------
+
+GROUP_INFO = {
+    ADMIN_GROUP: ("Administrators", "Administrators have complete and unrestricted access to the computer"),
+    USER_GROUP: ("Users", "Users with a Windows session on this computer"),
+    "sudo": ("", "Linux administrators (sudo)"),
+    "users": ("", "Linux users"),
+    "lpadmin": ("", "Printer administrators"),
+    "netdev": ("", "Network device users"),
+}
+
+
+def passwd_entries():
+    out = []
+    for line in read(PASSWD_FILE).splitlines():
+        f = line.split(":")
+        if len(f) >= 7 and f[2].isdigit():
+            out.append({"name": f[0], "uid": int(f[2]), "gid": int(f[3]) if f[3].isdigit() else -1,
+                        "gecos": f[4], "home": f[5], "shell": f[6]})
+    return out
+
+
+def group_entries():
+    out = []
+    for line in read(GROUP_FILE).splitlines():
+        f = line.split(":")
+        if len(f) >= 4 and f[2].isdigit():
+            out.append({"name": f[0], "gid": int(f[2]), "members": [m for m in f[3].split(",") if m]})
+    return out
+
+
+def shadow_entries():
+    try:
+        with open(SHADOW_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    out = {}
+    for line in lines:
+        f = line.split(":")
+        if len(f) >= 8:
+            out[f[0]] = f
+    return out
+
+
+def cmd_users(emit):
+    groups = group_entries()
+    gid_name = {g["gid"]: g["name"] for g in groups}
+    shadow = shadow_entries()
+    today = int(time.time() // 86400)
+    for u in passwd_entries():
+        if not (1000 <= u["uid"] < 60000 or u["name"] == SYSTEM_USER):
+            continue
+        member = [g["name"] for g in groups if u["name"] in g["members"]]
+        if u["gid"] in gid_name:
+            member.insert(0, gid_name[u["gid"]])
+        emit("USER %s" % clean(u["name"]))
+        emit("UID %d" % u["uid"])
+        emit("FULL-NAME %s" % clean(u["gecos"].split(",")[0]))
+        emit("HOME %s" % clean(u["home"]))
+        emit("SHELL %s" % clean(u["shell"]))
+        emit("GROUPS %s" % " ".join(sorted(set(member))))
+        sysacct = u["name"] == SYSTEM_USER
+        emit("ADMIN %s" % ("yes" if ADMIN_GROUP in member or sysacct else "no"))
+        emit("WINDOWS %s" % ("yes" if sysacct or ADMIN_GROUP in member or USER_GROUP in member else "no"))
+        if shadow is None or u["name"] not in shadow:
+            dis = "unknown"
+        else:
+            f = shadow[u["name"]]
+            locked = f[1].startswith("!") or f[1] == "*"
+            expired = f[7].isdigit() and int(f[7]) <= today
+            dis = "yes" if locked or expired else "no"
+        emit("DISABLED %s" % dis)
+        emit("SYSTEM-ACCOUNT %s" % ("yes" if sysacct else "no"))
+        if sysacct:
+            emit("DESCRIPTION The Windows SYSTEM account (elevated programs and services run as it)")
+        emit("END")
+
+
+def cmd_groups(emit):
+    users = passwd_entries()
+    for g in group_entries():
+        if not (1000 <= g["gid"] < 60000 or g["name"] in GROUP_INFO):
+            continue
+        if any(u["name"] == g["name"] and u["gid"] == g["gid"] for u in users) and g["name"] not in GROUP_INFO:
+            continue  # a user's personal group
+        members = list(g["members"])
+        for u in users:
+            if u["gid"] == g["gid"] and u["name"] not in members:
+                members.append(u["name"])
+        win, desc = GROUP_INFO.get(g["name"], ("", ""))
+        emit("GROUP %s" % clean(g["name"]))
+        emit("GID %d" % g["gid"])
+        emit("MEMBERS %s" % " ".join(members))
+        if win:
+            emit("WINDOWS-NAME %s" % win)
+        if desc:
+            emit("DESCRIPTION %s" % desc)
+        emit("END")
+
+
+# --- Samba ---------------------------------------------------------------------
+
+def samba_present():
+    return bool(tool("TESTPARM", "testparm") or tool("SMBD", "smbd"))
+
+
+def cmd_shares(emit):
+    tp = tool("TESTPARM", "testparm")
+    if not tp:
+        raise Fail("unsupported", "Samba is not installed")
+    p = run_cmd(tp + ["-s", "--suppress-prompt"], timeout=20)
+    if not p or p.returncode != 0:
+        raise Fail("failed", "testparm could not read the Samba configuration")
+    sections, cur = [], None
+    for line in p.stdout.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        m = re.fullmatch(r"\[(.+)\]", line)
+        if m:
+            cur = {"name": m.group(1), "opts": {}}
+            sections.append(cur)
+        elif cur is not None and "=" in line:
+            k, v = line.split("=", 1)
+            cur["opts"][k.strip().lower()] = v.strip()
+    for s in sections:
+        if s["name"].lower() == "global":
+            continue
+        o = s["opts"]
+        ro = o.get("read only", "yes").lower() in ("yes", "true", "1")
+        if o.get("writable", o.get("writeable", "")).lower() in ("yes", "true", "1"):
+            ro = False
+        emit("SHARE %s" % clean(s["name"]))
+        emit("PATH %s" % clean(o.get("path", "%H" if s["name"] == "homes" else "")))
+        emit("COMMENT %s" % clean(o.get("comment", "")))
+        emit("READONLY %s" % ("yes" if ro else "no"))
+        emit("GUEST %s" % ("yes" if o.get("guest ok", o.get("public", "no")).lower() in ("yes", "true", "1")
+                           else "no"))
+        emit("PRINTABLE %s" % ("yes" if o.get("printable", "no").lower() in ("yes", "true", "1") else "no"))
+        emit("END")
+    net = tool("NET", "net")
+    if net:
+        p = run_cmd(net + ["usershare", "info"], timeout=10)
+        if p and p.returncode == 0:
+            cur = None
+            for line in p.stdout.decode("utf-8", "replace").splitlines() + ["[]"]:
+                m = re.fullmatch(r"\[(.*)\]", line.strip())
+                if m:
+                    if cur and cur.get("name"):
+                        emit("SHARE %s" % clean(cur["name"]))
+                        emit("PATH %s" % clean(cur.get("path", "")))
+                        emit("COMMENT %s" % clean(cur.get("comment", "")))
+                        emit("READONLY %s" % ("no" if ":f" in cur.get("usershare_acl", "").lower() else "yes"))
+                        emit("GUEST %s" % ("yes" if cur.get("guest_ok", "n").lower().startswith("y") else "no"))
+                        emit("USERSHARE yes")
+                        emit("END")
+                    cur = {"name": m.group(1)}
+                elif cur is not None and "=" in line:
+                    k, v = line.split("=", 1)
+                    cur[k.strip()] = v.strip()
+
+
+def cmd_smbstatus(what, emit):
+    st = tool("SMBSTATUS", "smbstatus")
+    if not st:
+        raise Fail("unsupported", "Samba is not installed")
+    p = run_cmd(st + ["-j"], timeout=20)
+    if not p or p.returncode != 0:
+        raise Fail("failed", "smbstatus did not answer")
+    try:
+        data = json.loads(p.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        raise Fail("failed", "smbstatus gave no JSON")
+    if what == "sessions":
+        for sid, s in sorted((data.get("sessions") or {}).items()):
+            emit("SESSION %s" % clean(sid))
+            emit("USER %s" % clean(s.get("username", "")))
+            emit("MACHINE %s" % clean(s.get("remote_machine") or s.get("hostname", "")))
+            emit("PROTOCOL %s" % clean(s.get("session_dialect", "")))
+            emit("ENCRYPTED %s" % ("yes" if (s.get("encryption") or {}).get("cipher") else "no"))
+            emit("END")
+    else:
+        for path, f in sorted((data.get("open_files") or {}).items()):
+            for o in (f.get("opens") or {}).values():
+                emit("OPENFILE %s" % clean(os.path.join(f.get("service_path", ""), f.get("filename", path))))
+                emit("USER %s" % clean((o.get("uid") and user_name(int(o["uid"]))) or ""))
+                emit("SHARE %s" % clean(f.get("service_path", "")))
+                emit("MODE %s" % clean((o.get("access_mask") or {}).get("text", "")))
+                emit("END")
+
+
+# --- processes and connections -------------------------------------------------
+
+def cmd_processes(emit):
+    tick = os.sysconf("SC_CLK_TCK")
+    page = os.sysconf("SC_PAGE_SIZE")
+    for pid in sorted(int(x) for x in os.listdir(PROCFS) if x.isdigit()):
+        base = os.path.join(PROCFS, str(pid))
+        st = read(os.path.join(base, "stat"))
+        if not st or ")" not in st:
+            continue
+        name = st[st.index("(") + 1:st.rindex(")")]
+        f = st[st.rindex(")") + 2:].split()
+        uid = -1
+        for line in read(os.path.join(base, "status")).splitlines():
+            if line.startswith("Uid:"):
+                uid = int(line.split()[1])
+        io = {}
+        for line in read(os.path.join(base, "io")).splitlines():
+            k, _, v = line.partition(":")
+            io[k.strip()] = v.strip()
+        cmdline = read(os.path.join(base, "cmdline")).replace("\0", " ").strip()
+        emit("PROCESS %d" % pid)
+        emit("PPID %s" % f[1])
+        emit("NAME %s" % clean(name))
+        if cmdline:
+            emit("COMMAND %s" % clean(cmdline[:400]))
+        emit("USER %s" % clean(user_name(uid)))
+        emit("CPU-TICKS %d" % (int(f[11]) + int(f[12])))
+        emit("CLOCK-TICKS %d" % tick)
+        emit("RSS %d" % (int(f[21]) * page))
+        emit("THREADS %s" % f[17])
+        emit("STATE %s" % f[0])
+        if "read_bytes" in io:
+            emit("READ-BYTES %s" % io["read_bytes"])
+            emit("WRITE-BYTES %s" % io["write_bytes"])
+        emit("END")
+
+
+TCP_STATES = {"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV", "04": "FIN_WAIT1", "05": "FIN_WAIT2",
+              "06": "TIME_WAIT", "07": "CLOSE", "08": "CLOSE_WAIT", "09": "LAST_ACK", "0A": "LISTEN",
+              "0B": "CLOSING"}
+
+
+def addr(text, v6):
+    ip, port = text.split(":")
+    raw = bytes.fromhex(ip)
+    if v6:
+        raw = b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+        a = socket.inet_ntop(socket.AF_INET6, raw)
+        return "[%s]:%d" % (a, int(port, 16))
+    return "%s:%d" % (socket.inet_ntop(socket.AF_INET, raw[::-1]), int(port, 16))
+
+
+def cmd_connections(emit):
+    inode_pid = {}
+    for pid in (x for x in os.listdir(PROCFS) if x.isdigit()):
+        fd = os.path.join(PROCFS, pid, "fd")
+        try:
+            for n in os.listdir(fd):
+                try:
+                    t = os.readlink(os.path.join(fd, n))
+                except OSError:
+                    continue
+                if t.startswith("socket:["):
+                    inode_pid[t[8:-1]] = pid
+        except OSError:
+            continue
+    for proto, v6 in (("tcp", False), ("tcp6", True), ("udp", False), ("udp6", True)):
+        lines = read(os.path.join(PROCFS, "net", proto)).splitlines()[1:]
+        for line in lines:
+            f = line.split()
+            if len(f) < 10:
+                continue
+            state = TCP_STATES.get(f[3], f[3]) if proto.startswith("tcp") else ""
+            emit("CONN\t%s\t%s\t%s\t%s\t%s\t%s" % (proto, addr(f[1], v6), addr(f[2], v6), state,
+                                                   inode_pid.get(f[9], "-"), f[7]))
+
+
+# --- cleanup -------------------------------------------------------------------
+
+def dir_size(path, match=None):
+    total = 0
+    for root, dirs, files in os.walk(path, onerror=lambda e: None):
+        for n in files:
+            if match and not match(n):
+                continue
+            try:
+                st = os.lstat(os.path.join(root, n))
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                total += st.st_blocks * 512 if st.st_blocks else st.st_size
+    return total
+
+
+def home_of_caller():
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:
+        return os.environ.get("HOME", "")
+
+
+def user_categories():
+    home = home_of_caller()
+    data = os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local/share")
+    cache = os.environ.get("XDG_CACHE_HOME") or os.path.join(home, ".cache")
+    return [
+        ("recycle-bin", "Recycle Bin", "user", [os.path.join(data, "Trash/files"), os.path.join(data, "Trash/info")],
+         "The files you deleted, kept in the Recycle Bin until it is emptied.", None),
+        ("thumbnails", "Thumbnails", "user", [os.path.join(cache, "thumbnails")],
+         "Pictures of your files' contents, made again when they are needed.", None),
+        ("wine-downloads", "Downloaded Wine components", "user", [os.path.join(cache, "wine")],
+         "Installers Wine downloaded (Mono, Gecko); downloaded again if needed.", None),
+    ]
+
+
+VAR = os.environ.get("SG_VAR", "/var")
+
+
+def rotated(n):
+    return bool(re.search(r"\.(gz|xz|bz2|zst|old)$|\.\d+$", n))
+
+
+def system_categories():
+    return [
+        ("update-cache", "Downloaded update packages", "system", [os.path.join(VAR, "cache/apt/archives")],
+         "Packages Windows Update (apt) downloaded and already installed.", lambda n: n.endswith(".deb")),
+        ("old-logs", "Old system logs", "system", [os.path.join(VAR, "log")],
+         "Rotated and compressed log files.", rotated),
+        ("archived-journal", "Archived system journal", "system", [os.path.join(VAR, "log/journal")],
+         "Journal files older than the current ones.", lambda n: "@" in n and n.endswith(".journal~") or
+         ("@" in n and n.endswith(".journal"))),
+        ("crash-reports", "System error reports", "system", [os.path.join(VAR, "crash")],
+         "Reports of programs that stopped working.", None),
+    ]
+
+
+def emit_categories(cats, emit):
+    for cid, name, scope, paths, desc, match in cats:
+        size = 0
+        for p in paths:
+            if cid == "old-logs":
+                size += dir_size(p, lambda n: rotated(n) and not n.endswith(".journal"))
+            else:
+                size += dir_size(p, match)
+        emit("CATEGORY %s" % cid)
+        emit("NAME %s" % name)
+        emit("SCOPE %s" % scope)
+        emit("SIZE %d" % size)
+        emit("DESCRIPTION %s" % desc)
+        emit("END")
+
+
+def remove_in(path, match=None, keep_dirs=False):
+    freed = 0
+    if not os.path.isdir(path) or os.path.islink(path):
+        return 0
+    for root, dirs, files in os.walk(path, topdown=False, onerror=lambda e: None):
+        for n in files:
+            if match and not match(n):
+                continue
+            fp = os.path.join(root, n)
+            try:
+                st = os.lstat(fp)
+                os.unlink(fp)
+                freed += st.st_blocks * 512 if stat.S_ISREG(st.st_mode) else 0
+            except OSError:
+                pass
+        if not keep_dirs and root != path:
+            for d in dirs:
+                try:
+                    os.rmdir(os.path.join(root, d))
+                except OSError:
+                    pass
+    if not keep_dirs:
+        for d in os.listdir(path):
+            dp = os.path.join(path, d)
+            if os.path.isdir(dp) and not os.path.islink(dp):
+                try:
+                    os.rmdir(dp)
+                except OSError:
+                    pass
+    return freed
+
+
+def clean_category(cat, emit):
+    cid, name, scope, paths, desc, match = cat
+    freed = 0
+    if cid == "archived-journal":
+        jc = tool("JOURNALCTL", "journalctl")
+        before = sum(dir_size(p, match) for p in paths)
+        if jc:
+            run_cmd(jc + ["--vacuum-files=1"], timeout=120)
+        freed = max(0, before - sum(dir_size(p, match) for p in paths))
+    elif cid == "old-logs":
+        for p in paths:
+            freed += remove_in(p, lambda n: rotated(n) and not n.endswith(".journal") and "@" not in n,
+                               keep_dirs=True)
+    elif cid == "update-cache":
+        for p in paths:
+            freed += remove_in(p, lambda n: n.endswith(".deb"), keep_dirs=True)
+    else:
+        for p in paths:
+            freed += remove_in(p, match, keep_dirs=cid == "recycle-bin")
+    emit("CLEANED %s %d" % (cid, freed))
+
+
+# --- disk management writes ----------------------------------------------------
+
+def find_part(name):
+    if not re.fullmatch(r"[A-Za-z0-9]{1,32}", name or ""):
+        raise Fail("invalid", "no such partition")
+    model, letters, owners = disk_model()
+    for dev, items, gaps, system in model:
+        for it in items:
+            if it["part"].get("name") == name:
+                return dev, it, system, letters
+    raise Fail("notfound", "no partition called %s" % clean(name))
+
+
+def cmd_mount(pos, emit):
+    dev, it, system, _ = find_part(pos[0] if pos else "")
+    p = it["part"]
+    if it["mounts"]:
+        raise Fail("invalid", "%s is already mounted at %s" % (p["name"], it["mounts"][0]))
+    fstype = it["fs"].get("fstype") or p.get("fstype")
+    if not fstype or fstype in ("swap", "crypto_LUKS", "LVM2_member", "linux_raid_member"):
+        raise Fail("invalid", "%s holds no file system that can be opened" % p["name"])
+    label = it["fs"].get("label") or p["name"]
+    safe = re.sub(r"[^A-Za-z0-9 _.-]", "_", label).strip() or p["name"]
+    target = os.path.join(MEDIA_DIR, safe)
+    if os.path.exists(target) and os.listdir(target):
+        target = os.path.join(MEDIA_DIR, "%s-%s" % (safe, p["name"]))
+    os.makedirs(target, mode=0o755, exist_ok=True)
+    opts = []
+    if fstype in ("vfat", "exfat", "ntfs", "ntfs3"):
+        try:
+            gid = grp.getgrnam(USER_GROUP).gr_gid
+            opts = ["-o", "gid=%d,umask=0002" % gid]
+        except KeyError:
+            pass
+    run_cmd((tool("MOUNT", "mount") or ["mount"]) + opts + [p.get("path") or "/dev/" + p["name"], target],
+            timeout=60, check=True)
+    emit("MOUNTED %s %s" % (p["name"], target))
+
+
+def cmd_unmount(pos, emit):
+    dev, it, system, _ = find_part(pos[0] if pos else "")
+    p = it["part"]
+    if "system" in it["flags"] or "swap" in it["flags"]:
+        raise Fail("denied", "%s is in use by the system and cannot be removed" % p["name"])
+    if not it["mounts"]:
+        raise Fail("invalid", "%s is not mounted" % p["name"])
+    for m in it["mounts"]:
+        run_cmd((tool("UMOUNT", "umount") or ["umount"]) + [m], timeout=60, check=True)
+    emit("UNMOUNTED %s" % p["name"])
+
+
+def cmd_letter(pos, emit):
+    if len(pos) != 2:
+        raise Fail("invalid", "letter PART X:|none")
+    dev, it, system, letters = find_part(pos[0])
+    want = pos[1].upper()
+    dd = os.path.join(prefix_dir(), "dosdevices")
+    if not os.path.isdir(dd):
+        raise Fail("failed", "the Wine prefix has no drive letters (%s)" % dd)
+    st = os.stat(dd)
+    if want != "NONE":
+        if not re.fullmatch(r"[D-Y]:", want):
+            raise Fail("invalid", "drive letters D: to Y: can be assigned")
+        if want in it["letters"]:
+            emit("LETTER %s" % want)
+            return
+        if want in letters or os.path.lexists(os.path.join(dd, want.lower())):
+            raise Fail("invalid", "the drive letter %s is already in use" % want)
+        if not [m for m in it["mounts"] if m != "[SWAP]"]:
+            raise Fail("invalid", "%s is not mounted: mount it first" % it["part"]["name"])
+    removed = []
+    for letter in it["letters"]:
+        if letter in ("C:", "Z:"):
+            continue
+        if want == "NONE" or want != letter:
+            os.unlink(os.path.join(dd, letter.lower()))
+            removed.append(letter)
+    for letter in removed:
+        emit("REMOVED %s" % letter)
+    if want == "NONE":
+        return
+    mounts = [m for m in it["mounts"] if m != "[SWAP]"]
+    link = os.path.join(dd, want.lower())
+    os.symlink(mounts[0], link)
+    try:
+        os.lchown(link, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+    emit("LETTER %s" % want)
+
+
+FORMATS = {
+    "ntfs": ("mkfs.ntfs", lambda dev, label: ["-f", "-Q"] + (["-L", label] if label else []) + [dev]),
+    "exfat": ("mkfs.exfat", lambda dev, label: (["-L", label] if label else []) + [dev]),
+    "fat32": ("mkfs.vfat", lambda dev, label: ["-F", "32"] + (["-n", label.upper()] if label else []) + [dev]),
+    "ext4": ("mkfs.ext4", lambda dev, label: ["-F", "-q"] + (["-L", label] if label else []) + [dev]),
+}
+
+
+def cmd_format(pos, opts, emit):
+    if len(pos) != 2:
+        raise Fail("invalid", "format PART ntfs|exfat|fat32|ext4 [--label L]")
+    kind = pos[1].lower()
+    if kind not in FORMATS:
+        raise Fail("invalid", "file systems: ntfs, exfat, fat32, ext4")
+    label = opts.get("label", "")
+    limit = 11 if kind == "fat32" else 15 if kind == "exfat" else 32 if kind == "ntfs" else 16
+    if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,%d}" % limit, label):
+        raise Fail("invalid", "a volume label is up to %d letters, digits, spaces, _ . -" % limit)
+    dev, it, system, _ = find_part(pos[0])
+    p = it["part"]
+    if system:
+        raise Fail("denied", "Windows cannot format a volume on the disk the system is on")
+    if it["mounts"] or it["letters"]:
+        raise Fail("denied", "%s is in use: remove its drive letter and unmount it first" % p["name"])
+    if p.get("_whole"):
+        raise Fail("invalid", "%s is a whole disk, not a partition" % p["name"])
+    if "esp" in it["flags"]:
+        raise Fail("denied", "an EFI system partition cannot be formatted here")
+    if p.get("children"):
+        raise Fail("denied", "%s is in use (it holds other volumes)" % p["name"])
+    prog, args = FORMATS[kind]
+    cmd = tool("MKFS_" + kind.upper(), prog)
+    if not cmd:
+        raise Fail("unsupported", "%s is not installed" % prog)
+    run_cmd(cmd + args(p.get("path") or "/dev/" + p["name"], label), timeout=1800, check=True)
+    emit("FORMATTED %s %s" % (p["name"], kind))
+
+
+# --- requests ------------------------------------------------------------------
+
+LOCAL_COMMANDS = {"whoami", "system", "devices", "disks", "units", "users", "groups", "shares",
+                  "processes", "connections", "cleanup"}
+SERVICE_COMMANDS = {"journal": "user", "sessions": "admin", "openfiles": "admin", "cleanup-system": "user",
+                    "clean-system": "admin", "mount": "admin", "unmount": "admin", "letter": "admin",
+                    "format": "admin"}
+
+
+def parse_opts(argv, valued):
+    pos, opts = [], {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("--") and a[2:] in valued:
+            if i + 1 >= len(argv):
+                raise Fail("invalid", "%s needs a value" % a)
+            opts[a[2:]] = argv[i + 1]
+            i += 2
+        elif a.startswith("--"):
+            raise Fail("invalid", "unknown option %s" % clean(a))
+        else:
+            pos.append(a)
+            i += 1
+    return pos, opts
+
+
+def run_local(argv, emit, uid):
+    cmd = argv[0]
+    if cmd == "whoami":
+        emit("USER %s" % clean(user_name(uid)))
+        emit("ADMIN %s" % ("yes" if is_admin(uid) else "no"))
+    elif cmd == "system":
+        cmd_system(emit)
+    elif cmd == "devices":
+        cmd_devices(emit)
+    elif cmd == "disks":
+        cmd_disks(emit)
+    elif cmd == "units":
+        cmd_units(emit)
+    elif cmd == "users":
+        cmd_users(emit)
+    elif cmd == "groups":
+        cmd_groups(emit)
+    elif cmd == "shares":
+        cmd_shares(emit)
+    elif cmd == "processes":
+        cmd_processes(emit)
+    elif cmd == "connections":
+        cmd_connections(emit)
+
+
+def run_service(argv, uid, emit):
+    """What sg-sysinfod does, for uid. Also what root does directly."""
+    cmd = argv[0]
+    if cmd not in SERVICE_COMMANDS:
+        raise Fail("invalid", "unknown command %s" % clean(cmd))
+    if not may_use(uid):
+        raise Fail("denied", "this account may not use the administrative tools")
+    if SERVICE_COMMANDS[cmd] == "admin" and not is_admin(uid):
+        raise Fail("denied", "this needs an administrator")
+    if cmd == "journal":
+        cmd_journal(argv[1:], emit)
+    elif cmd in ("sessions", "openfiles"):
+        cmd_smbstatus(cmd, emit)
+    elif cmd == "cleanup-system":
+        emit_categories(system_categories(), emit)
+    elif cmd == "clean-system":
+        cats = {c[0]: c for c in system_categories()}
+        for cid in argv[1:]:
+            if cid not in cats:
+                raise Fail("invalid", "unknown cleanup category %s" % clean(cid))
+        for cid in argv[1:]:
+            clean_category(cats[cid], emit)
+    elif cmd == "mount":
+        cmd_mount(argv[1:], emit)
+    elif cmd == "unmount":
+        cmd_unmount(argv[1:], emit)
+    elif cmd == "letter":
+        cmd_letter(argv[1:], emit)
+    elif cmd == "format":
+        pos, opts = parse_opts(argv[1:], {"label"})
+        cmd_format(pos, opts, emit)
+
+
+def ask_service(argv, emit):
+    """sg-sysinfod, or as root do it here. Raises Fail from its ERROR line."""
+    if os.geteuid() == 0 or (argv[0] == "journal" and journal_direct()):
+        run_service(argv, os.geteuid() if os.geteuid() else 0, emit) if os.geteuid() == 0 else \
+            cmd_journal(argv[1:], emit)
+        return
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(SOCKET)
+    except OSError as e:
+        raise Fail("failed", "the system information service is not running (%s)" % e.strerror)
+    s.sendall((json.dumps({"argv": argv}) + "\n").encode("utf-8", "surrogateescape"))
+    err = None
+    for line in s.makefile("r", encoding="utf-8", errors="replace"):
+        line = line.rstrip("\n")
+        if line == "OK":
+            break
+        if line.startswith("ERROR "):
+            f = line.split(" ", 2)
+            err = Fail(f[1] if len(f) > 1 else "failed", f[2] if len(f) > 2 else "")
+            break
+        emit(line)
+    s.close()
+    if err:
+        raise err
+
+
+def run(argv, emit):
+    """One request from this process's own user: answered here or by sg-sysinfod."""
+    if not argv:
+        raise Fail("invalid", "no command")
+    cmd = argv[0]
+    uid = os.getuid()
+    if cmd in LOCAL_COMMANDS:
+        if cmd == "cleanup":
+            emit_categories(user_categories(), emit)
+            try:
+                if os.geteuid() == 0:
+                    emit_categories(system_categories(), emit)
+                else:
+                    ask_service(["cleanup-system"], emit)
+            except Fail:
+                pass  # the service is not there: the user's own categories only
+            return
+        return run_local(argv, emit, uid)
+    if cmd == "clean":
+        users = {c[0]: c for c in user_categories()}
+        systems = {c[0] for c in system_categories()}
+        ids = argv[1:]
+        if not ids:
+            raise Fail("invalid", "clean ID...")
+        for cid in ids:
+            if cid not in users and cid not in systems:
+                raise Fail("invalid", "unknown cleanup category %s" % clean(cid))
+        sysids = [c for c in ids if c in systems]
+        if sysids and os.geteuid() != 0 and not is_admin(uid):
+            raise Fail("denied", "cleaning up system files needs an administrator")
+        for cid in ids:
+            if cid in users:
+                clean_category(users[cid], emit)
+        if sysids:
+            ask_service(["clean-system"] + sysids, emit)
+        return
+    if cmd in SERVICE_COMMANDS and cmd not in ("cleanup-system", "clean-system"):
+        return ask_service(argv, emit)
+    raise Fail("invalid", "unknown command %s" % clean(cmd))
+
+
+def answer(fn, emit):
+    try:
+        fn()
+    except Fail as e:
+        emit("ERROR %s %s" % (e.kind, clean(e.message)))
+        return EXIT.get(e.kind, 1)
+    except BrokenPipeError:
+        raise
+    except Exception as e:  # never leave a caller without an answer
+        syslog.syslog(syslog.LOG_ERR, "internal error: %r" % e)
+        emit("ERROR failed internal error")
+        return 1
+    emit("OK")
+    return 0
+
+
+def serve():
+    """sg-sysinfod: one request on the socket (stdin), from the peer's uid."""
+    syslog.openlog("sg-sysinfod")
+    s = socket.socket(fileno=0)
+    pid, uid, gid = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                     struct.calcsize("3i")))
+    s.settimeout(30)
+    data = b""
+    while b"\n" not in data and len(data) < MAX_REQUEST:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    s.settimeout(None)
+    out = s.makefile("w", encoding="utf-8", newline="\n")
+
+    def emit(line):
+        out.write(line + "\n")
+        out.flush()
+
+    try:
+        req = json.loads(data.split(b"\n", 1)[0].decode("utf-8", "surrogateescape"))
+        argv = req["argv"]
+        if not isinstance(argv, list) or not argv or len(argv) > 32 or \
+                not all(isinstance(a, str) and len(a) <= 512 for a in argv):
+            raise ValueError
+    except (ValueError, KeyError, TypeError):
+        emit("ERROR invalid malformed request")
+        return 2
+    if SERVICE_COMMANDS.get(argv[0]) == "admin":
+        syslog.syslog(syslog.LOG_INFO, "uid %d: %s" % (uid, " ".join(clean(a) for a in argv[:4])))
+    return answer(lambda: run_service(argv, uid, emit), emit)
+
+
+def bridge(program):
+    """Run a Windows program with pipes as its stdin/stdout and answer each
+    request it writes (one JSON line in, the answer's lines back). Ends when
+    the program does."""
+    import select
+    syslog.openlog("sg-sysinfo-bridge")
+    down_r, down_w = os.pipe()
+    up_r, up_w = os.pipe()
+    child = subprocess.Popen(program, stdin=down_r, stdout=up_w, close_fds=True)
+    os.close(down_r)
+    os.close(up_w)
+    to_child = os.fdopen(down_w, "w", encoding="utf-8", newline="\n")
+    pending = b""
+
+    def emit(text):
+        to_child.write(text + "\n")
+        to_child.flush()
+
+    while True:
+        ready, _, _ = select.select([up_r], [], [], 1.0)
+        if not ready:
+            if child.poll() is not None:
+                break
+            continue
+        chunk = os.read(up_r, 65536)
+        if not chunk:
+            break
+        pending += chunk
+        if len(pending) > MAX_REQUEST and b"\n" not in pending:
+            pending = b""
+        while b"\n" in pending:
+            raw, pending = pending.split(b"\n", 1)
+            line = raw.decode("utf-8", "surrogateescape").strip("\r")
+            if not line.startswith("{"):
+                continue  # Wine or the program may write other things to stdout
+            try:
+                req = json.loads(line)
+                argv = req["argv"]
+                if not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                emit("ERROR invalid malformed request")
+                continue
+            try:
+                answer(lambda: run(argv, emit), emit)
+            except BrokenPipeError:
+                return child.wait()
+    return child.wait()
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--serve"]:
+        return serve()
+    if args[:1] == ["--bridge"]:
+        if len(args) < 2:
+            print("usage: sg-sysinfo --bridge PROGRAM [ARGS...]", file=sys.stderr)
+            return 2
+        return bridge(args[1:])
+    if not args or args[0] in ("-h", "--help"):
+        print("usage: sg-sysinfo whoami|system|devices|disks|units|journal|users|groups|shares|sessions|"
+              "openfiles|processes|connections|cleanup|clean|mount|unmount|letter|format ...", file=sys.stderr)
+        return 2
+    return answer(lambda: run(args, lambda line: print(line, flush=True)), lambda line: print(line, flush=True))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        sys.exit(1)

@@ -21,6 +21,8 @@ override_dh_installsystemd:
 	dh_installsystemd sg-installd.socket
 	# Network settings: the socket everywhere, the service per request.
 	dh_installsystemd sg-netd.socket
+	# The administrative tools' system information: likewise.
+	dh_installsystemd sg-sysinfod.socket
 	# Voice typing's model installer: likewise.
 	dh_installsystemd sg-speechd.socket
 	# The live session's account and shortcuts: enabled, runs on live boots only.

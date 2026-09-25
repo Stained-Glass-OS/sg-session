@@ -1,0 +1,15 @@
+[Unit]
+Description=Stained Glass system information request
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=/usr/bin/sg-sysinfo --serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+# Formatting a large volume takes a while.
+TimeoutSec=1800
+# No mount namespace (no PrivateTmp/ProtectSystem): Disk Management's mounts
+# must be the machine's, not this service's.
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK

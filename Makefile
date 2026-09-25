@@ -35,7 +35,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
-	install -m 0755 bin/sg-netctl $(BINDIR)
+	install -m 0755 bin/sg-netctl bin/sg-sysinfo $(BINDIR)
 	@# Voice typing: the engine (sgspeech.py) and its command. The model is
 	@# downloaded per machine by sg-speechd, never packaged.
 	install -m 0755 speech/sg-dictate $(BINDIR)
@@ -137,6 +137,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
+	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
@@ -159,6 +160,8 @@ lint:
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
+	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
 	@sh test/drivers-test.sh

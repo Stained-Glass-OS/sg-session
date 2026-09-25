@@ -4,6 +4,8 @@
 disable sg-rdpd.service
 enable sg-netmountd.socket
 enable sg-netd.socket
+# The administrative tools' system information: the socket everywhere.
+enable sg-sysinfod.socket
 # Runs on live boots only (ConditionKernelCommandLine).
 enable sg-live.service
 # Runs only while Setup's third-party drivers request is pending.
