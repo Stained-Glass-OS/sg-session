@@ -1,3 +1,16 @@
+sg-session (0.1.0-25) unstable; urgency=medium
+
+  * sg-pdf: the PDF Viewer's Linux half -- Debian's poppler (GObject
+    introspection, cairo) renders pages to BGRA at any scale and quarter
+    turn and answers each page's text with a box per character, its links,
+    the outline and search hits, in top-left page points, over the bridge
+    sg-shell's sg-pdf64.exe re-launches itself through. Password-protected
+    documents; refusals for bad requests and bitmaps over 60 Mpixel.
+  * Recommends gir1.2-poppler-0.18, python3-gi, python3-gi-cairo,
+    python3-cairo.
+  * Gate: test/pdf-test.py (in make lint).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 11:50:06 -0700
 sg-session (0.1.0-24) unstable; urgency=medium
 
   * The first-run setup (OOBE) at an installed machine's first boot, in the

@@ -50,6 +50,7 @@ separately.
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
 | `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
+| `bin/sg-pdf` | the PDF Viewer's Linux half: poppler renders pages and reports text, links, outline and search hits over the viewer's bridge (see below) |
 | `speech/sg-dictate`, `speech/sgspeech.py` | voice typing's engine, its bridge, and sg-speechd, the model download (see below) |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
@@ -960,6 +961,48 @@ child, so Settings reads files, as it does sg-dictate's.
   what they are asked -- the parsed answers Settings reads, the exact
   commands, and every refusal. Seen red: device names that start with `-`
   were accepted before the pattern was tightened.
+
+## The PDF Viewer's Linux half: sg-pdf
+
+`bin/sg-pdf` (Python, `/usr/bin/sg-pdf`) is what sg-shell's PDF Viewer
+(`sg-pdf64.exe`, the `.pdf` association) draws from: **Debian's poppler**
+through its GObject-introspection bindings (`gir1.2-poppler-0.18`,
+`python3-gi`, `python3-gi-cairo`, `python3-cairo` -- Recommends, and named in
+sg-image's package list). It runs as the user, reads only the file the viewer
+names, and touches no network. The viewer re-launches itself as `sg-pdf
+--bridge wine <itself> --bridged <args>` and talks on its standard handles,
+as sg-dictate's toolbar does.
+
+```
+open PATH [PASSWORD]     OK pages=N bytes=K   "size W H" a page (points), "title T", "author A"
+render PAGE SCALE ROT    OK w=W h=H bytes=W*H*4   top-down B,G,R,A rows, opaque (white paper)
+text PAGE                OK n=N bytes=18N     N UTF-16LE units, then N boxes (4 x float32 LE:
+                                              x1 y1 x2 y2); a character beyond the BMP has its box twice
+find NEEDLE [FLAGS]      OK n=N bytes=K       "PAGE X1 Y1 X2 Y2" lines, in reading order;
+                                              FLAGS c = match case, w = whole words
+links PAGE               OK n=N bytes=K       "X1 Y1 X2 Y2<TAB>goto<TAB>PAGE<TAB>TOP" or "...<TAB>uri<TAB>URI"
+outline                  OK n=N bytes=K       "DEPTH<TAB>PAGE<TAB>TOP<TAB>OPEN<TAB>TITLE" lines, in order
+quit
+```
+
+One request a line, fields separated by tabs; pages are 0-based; every
+coordinate is in points with the origin at the page's top left, unturned
+(poppler's search hits and link areas are bottom-left based and turned
+here). Errors are one line, `ERR <kind> <message>`: `invalid`, `open`,
+`password` (the document needs one: the viewer asks and sends `open PATH
+PASSWORD`), `notopen`, `range`, `toolarge` (a bitmap over 60 Mpixel),
+`failed` (poppler is not installed says so here). `--serve` answers on its
+own stdin/stdout; `--info FILE` prints the open answer.
+
+- **Gate: `test/pdf-test.py`** (in `make lint`; skips 77 without the GI
+  bindings): a PDF written by hand (Helvetica text, a filled box, a link
+  annotation, a two-entry outline); sizes, a bitmap's size and the box's
+  colour where the page puts it (and where a clockwise quarter turn puts
+  it), the H's box at the top left, find in any case and with match case in
+  reading order and top-left coordinates, the link and the outline, eight
+  refusals, and the bridge serving a stand-in program. Seen red against
+  mutants that leave search hits bottom-left based and that ignore the
+  rotation. sg-shell's `test/pdf-check.sh` is the Windows side.
 
 ## Voice typing: sg-dictate (Win+H)
 

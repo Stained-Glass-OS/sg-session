@@ -37,6 +37,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo $(BINDIR)
+	@# The PDF Viewer's Linux half: poppler through its GI bindings.
+	install -m 0755 bin/sg-pdf $(BINDIR)
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
 	install -m 0755 bin/sg-settingsctl $(BINDIR)
 	@# Voice typing: the engine (sgspeech.py) and its command. The model is
@@ -176,6 +178,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
+	@python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh \

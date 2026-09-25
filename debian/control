@@ -15,6 +15,7 @@ Architecture: any
 Depends: ${misc:Depends}, ${shlibs:Depends}, libpam-runtime, systemd-repart, e2fsprogs, openssl,
 Recommends: sg-shell,
          python3-numpy, python3-onnxruntime, pulseaudio-utils,
+         gir1.2-poppler-0.18, python3-gi, python3-gi-cairo, python3-cairo,
          wlr-randr, wlsunset, swayidle, wlopm, bluez,
          wine-sg | wine,
          sg-compositor | cage,

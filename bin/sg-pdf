@@ -1,0 +1,360 @@
+#!/usr/bin/python3
+# sg-pdf -- the PDF viewer's Linux half: Debian's poppler reads the document,
+# renders its pages to bitmaps and reports their text layout, links, outline
+# and search hits. sg-shell's sg-pdf64.exe (the Windows viewer) draws them.
+#
+#   sg-pdf --bridge PROGRAM [ARGS]  run PROGRAM (the Windows viewer, through
+#                                   wine) with pipes as its stdin and stdout
+#                                   and serve its requests: how a Windows
+#                                   program reaches this (Wine gives a Windows
+#                                   program no AF_UNIX and no pipe to a native
+#                                   one), as sg-dictate and sg-netctl do
+#   sg-pdf --serve                  serve requests on our own stdin/stdout
+#   sg-pdf --info FILE              pages and page sizes (for scripts)
+#
+# Protocol: one request a line, fields separated by tabs:
+#
+#   open PATH [PASSWORD]      the document (a Unix path)
+#   render PAGE SCALE ROT     page (0-based) at SCALE pixels a point, turned
+#                             ROT degrees clockwise (0, 90, 180, 270)
+#   text PAGE                 the page's text and each character's box
+#   find NEEDLE [FLAGS]       every hit in the document; FLAGS: c = match case,
+#                             w = whole words only
+#   links PAGE                the page's links
+#   outline                   the document's bookmarks
+#   quit
+#
+# Every answer is one line, "OK key=value ..." or "ERR kind message" (kind:
+# invalid, open, password, notopen, range, toolarge, failed). An OK line with
+# bytes=N is followed by exactly N bytes:
+#
+#   open     "size W H" a page (points), then "title T", "author A" lines
+#   render   w=W h=H: W*H*4 bytes, top-down rows of B,G,R,A (opaque)
+#   text     n=N: N UTF-16LE code units, then N boxes of four little-endian
+#            float32 (x1 y1 x2 y2, points, origin top-left, page unturned);
+#            a character beyond the BMP has its box twice, one per unit
+#   find     "PAGE X1 Y1 X2 Y2" lines (points, origin top-left)
+#   links    "X1 Y1 X2 Y2<TAB>goto<TAB>PAGE<TAB>TOP" or "...<TAB>uri<TAB>URI"
+#   outline  "DEPTH<TAB>PAGE<TAB>TOP<TAB>OPEN<TAB>TITLE" lines, in order (PAGE
+#            -1: none; OPEN 1: the document shows it expanded)
+#
+# Only the file the viewer names is read; nothing touches the network.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import math
+import os
+import select
+import struct
+import subprocess
+import sys
+import urllib.parse
+
+MAX_PIXELS = 60_000_000       # one page's bitmap: 60 Mpixel (240 MB) at most
+MAX_REQUEST = 1 << 16
+
+try:
+    import gi
+    gi.require_version("Poppler", "0.18")
+    from gi.repository import GLib, Poppler  # noqa: E402
+    import cairo  # noqa: E402
+    HAVE_POPPLER = True
+except (ImportError, ValueError) as e:  # the package's Depends bring these
+    HAVE_POPPLER = False
+    POPPLER_ERROR = str(e)
+
+
+def one_line(s):
+    return " ".join((s or "").split())
+
+
+class Document:
+    def __init__(self):
+        self.doc = None
+        self.pages = []
+
+    # ---- requests ----------------------------------------------------------------------
+
+    def open(self, path, password=None):
+        if not HAVE_POPPLER:
+            return "ERR failed poppler is not installed: " + POPPLER_ERROR, b""
+        if not os.path.isfile(path):
+            return "ERR open no such file", b""
+        uri = "file://" + urllib.parse.quote(os.path.abspath(path))
+        try:
+            doc = Poppler.Document.new_from_file(uri, password or None)
+        except GLib.Error as e:
+            if e.matches(Poppler.error_quark(), Poppler.Error.ENCRYPTED):
+                return "ERR password the document needs a password", b""
+            return "ERR open " + one_line(e.message), b""
+        self.doc = doc
+        self.pages = [doc.get_page(i) for i in range(doc.get_n_pages())]
+        out = []
+        for p in self.pages:
+            w, h = p.get_size()
+            out.append("size %.3f %.3f" % (w, h))
+        out.append("title " + one_line(doc.get_title()))
+        out.append("author " + one_line(doc.get_author()))
+        data = ("\n".join(out) + "\n").encode("utf-8")
+        return "OK pages=%d bytes=%d" % (len(self.pages), len(data)), data
+
+    def page(self, n):
+        if not self.doc:
+            raise Refusal("notopen", "no document is open")
+        try:
+            n = int(n)
+        except ValueError:
+            raise Refusal("invalid", "page is not a number")
+        if not 0 <= n < len(self.pages):
+            raise Refusal("range", "no such page")
+        return self.pages[n]
+
+    def render(self, n, scale, rot):
+        p = self.page(n)
+        try:
+            scale = float(scale)
+            rot = int(rot) % 360
+        except ValueError:
+            raise Refusal("invalid", "scale or rotation is not a number")
+        if not (0.01 <= scale <= 64) or math.isnan(scale) or rot not in (0, 90, 180, 270):
+            raise Refusal("invalid", "scale or rotation out of range")
+        pw, ph = p.get_size()
+        w, h = max(1, int(math.ceil(pw * scale))), max(1, int(math.ceil(ph * scale)))
+        if rot in (90, 270):
+            w, h = h, w
+        if w * h > MAX_PIXELS:
+            raise Refusal("toolarge", "the page would be too large a bitmap")
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
+        cr = cairo.Context(surf)
+        cr.set_source_rgb(1, 1, 1)
+        cr.paint()
+        if rot == 90:
+            cr.translate(w, 0)
+        elif rot == 180:
+            cr.translate(w, h)
+        elif rot == 270:
+            cr.translate(0, h)
+        cr.rotate(math.radians(rot))
+        cr.scale(scale, scale)
+        p.render(cr)
+        surf.flush()
+        stride = surf.get_stride()
+        buf = bytes(surf.get_data())
+        if stride != w * 4:
+            buf = b"".join(buf[y * stride:y * stride + w * 4] for y in range(h))
+        # ARGB32 is native-endian B,G,R,A; the page is opaque (white under it)
+        return "OK w=%d h=%d bytes=%d" % (w, h, len(buf)), buf
+
+    def text(self, n):
+        p = self.page(n)
+        text = p.get_text() or ""
+        ok, rects = p.get_text_layout()
+        if not ok:
+            rects = []
+        units = []
+        boxes = []
+        for i, ch in enumerate(text):
+            r = rects[i] if i < len(rects) else None
+            box = (r.x1, r.y1, r.x2, r.y2) if r else (0.0, 0.0, 0.0, 0.0)
+            u = ch.encode("utf-16-le", "surrogatepass")
+            units.append(u)
+            for _ in range(len(u) // 2):
+                boxes.append(box)
+        data = b"".join(units) + b"".join(struct.pack("<4f", *b) for b in boxes)
+        return "OK n=%d bytes=%d" % (len(boxes), len(data)), data
+
+    def find(self, needle, flags=""):
+        if not self.doc:
+            raise Refusal("notopen", "no document is open")
+        if not needle:
+            raise Refusal("invalid", "nothing to find")
+        opts = Poppler.FindFlags.DEFAULT
+        if "c" in flags:
+            opts |= Poppler.FindFlags.CASE_SENSITIVE
+        if "w" in flags:
+            opts |= Poppler.FindFlags.WHOLE_WORDS_ONLY
+        out = []
+        for i, p in enumerate(self.pages):
+            _, ph = p.get_size()
+            hits = p.find_text_with_options(needle, opts) or []
+            # PDF coordinates (origin bottom-left) -> top-left; in reading order
+            boxes = sorted(((r.x1, ph - r.y2, r.x2, ph - r.y1) for r in hits), key=lambda b: (round(b[1]), b[0]))
+            out += ["%d %.3f %.3f %.3f %.3f" % ((i,) + b) for b in boxes]
+        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data)), data
+
+    def dest_target(self, dest):
+        """(page 0-based, top in top-left points) of a destination, or None."""
+        if dest is None:
+            return None
+        if dest.type == Poppler.DestType.NAMED:
+            dest = self.doc.find_dest(dest.named_dest)
+            if dest is None:
+                return None
+        page = dest.page_num - 1
+        if not 0 <= page < len(self.pages):
+            return None
+        top = 0.0
+        if dest.change_top:
+            _, ph = self.pages[page].get_size()
+            top = max(0.0, ph - dest.top)
+        return page, top
+
+    def action_target(self, action):
+        t = action.type
+        if t == Poppler.ActionType.GOTO_DEST:
+            tgt = self.dest_target(action.goto_dest.dest)
+            return ("goto", tgt) if tgt else None
+        if t == Poppler.ActionType.URI:
+            uri = action.uri.uri or ""
+            return ("uri", one_line(uri)) if uri else None
+        return None
+
+    def links(self, n):
+        p = self.page(n)
+        _, ph = p.get_size()
+        out = []
+        for m in p.get_link_mapping() or []:
+            a = m.area
+            box = "%.3f %.3f %.3f %.3f" % (a.x1, ph - a.y2, a.x2, ph - a.y1)
+            tgt = self.action_target(m.action)
+            if not tgt:
+                continue
+            if tgt[0] == "goto":
+                out.append("%s\tgoto\t%d\t%.3f" % (box, tgt[1][0], tgt[1][1]))
+            else:
+                out.append("%s\turi\t%s" % (box, tgt[1]))
+        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data)), data
+
+    def outline(self):
+        if not self.doc:
+            raise Refusal("notopen", "no document is open")
+        out = []
+
+        def walk(it, depth):
+            while it and len(out) < 20000:
+                a = it.get_action()
+                title, page, top = "", -1, 0.0
+                if a is not None:
+                    if a.type == Poppler.ActionType.GOTO_DEST:
+                        title = a.goto_dest.title or ""
+                        tgt = self.dest_target(a.goto_dest.dest)
+                        if tgt:
+                            page, top = tgt
+                    elif a.type == Poppler.ActionType.URI:
+                        title = a.uri.title or ""
+                out.append("%d\t%d\t%.3f\t%d\t%s" % (depth, page, top, 1 if it.is_open() else 0, one_line(title)))
+                child = it.get_child()
+                if child and depth < 32:
+                    walk(child, depth + 1)
+                if not it.next():
+                    break
+
+        walk(Poppler.IndexIter.new(self.doc), 0)
+        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data)), data
+
+
+class Refusal(Exception):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
+
+
+def handle(doc, line):
+    """One request line -> (header, payload), or None to stop."""
+    f = line.split("\t")
+    cmd, args = f[0], f[1:]
+    try:
+        if cmd == "open" and 1 <= len(args) <= 2:
+            return doc.open(args[0], args[1] if len(args) > 1 else None)
+        if cmd == "render" and len(args) == 3:
+            return doc.render(*args)
+        if cmd == "text" and len(args) == 1:
+            return doc.text(args[0])
+        if cmd == "find" and 1 <= len(args) <= 2:
+            return doc.find(args[0], args[1] if len(args) > 1 else "")
+        if cmd == "links" and len(args) == 1:
+            return doc.links(args[0])
+        if cmd == "outline" and not args:
+            return doc.outline()
+        if cmd == "quit":
+            return None
+        return "ERR invalid unknown request", b""
+    except Refusal as e:
+        return "ERR %s %s" % (e.kind, e), b""
+    except (GLib.Error if HAVE_POPPLER else OSError, MemoryError, cairo.Error if HAVE_POPPLER else OSError) as e:
+        return "ERR failed " + one_line(str(e)), b""
+
+
+def serve(fd_in, out, alive=None):
+    """Answer requests from fd_in on out (a binary file) until quit or EOF.
+    `alive` is polled while idle: the bridge's child may exit while a process
+    it started (wineserver) still holds the pipe open."""
+    doc = Document()
+    pending = b""
+    while True:
+        if alive is not None:
+            ready, _, _ = select.select([fd_in], [], [], 1.0)
+            if not ready:
+                if not alive():
+                    return 0
+                continue
+        chunk = os.read(fd_in, 65536)
+        if not chunk:
+            return 0
+        pending += chunk
+        if len(pending) > MAX_REQUEST and b"\n" not in pending:
+            pending = b""
+        while b"\n" in pending:
+            raw, pending = pending.split(b"\n", 1)
+            line = raw.decode("utf-8", "replace").strip("\r")
+            if not line:
+                continue
+            ans = handle(doc, line)
+            if ans is None:
+                return 0
+            head, data = ans
+            try:
+                out.write(head.encode("utf-8") + b"\n" + data)
+                out.flush()
+            except BrokenPipeError:
+                return 0
+
+
+def bridge(program):
+    """Run the Windows viewer with pipes as its stdin/stdout and serve it."""
+    down_r, down_w = os.pipe()
+    up_r, up_w = os.pipe()
+    child = subprocess.Popen(program, stdin=down_r, stdout=up_w, close_fds=True)
+    os.close(down_r)
+    os.close(up_w)
+    out = os.fdopen(down_w, "wb")
+    serve(up_r, out, alive=lambda: child.poll() is None)
+    try:
+        out.close()
+    except BrokenPipeError:
+        pass
+    return child.wait()
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--bridge"] and len(args) > 1:
+        return bridge(args[1:])
+    if args[:1] == ["--serve"]:
+        return serve(sys.stdin.fileno(), sys.stdout.buffer)
+    if args[:1] == ["--info"] and len(args) == 2:
+        doc = Document()
+        head, data = doc.open(args[1])
+        print(head)
+        sys.stdout.write(data.decode("utf-8"))
+        return 0 if head.startswith("OK") else 1
+    print("usage: sg-pdf --bridge PROGRAM [ARGS] | --serve | --info FILE", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
