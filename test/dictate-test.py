@@ -117,11 +117,13 @@ with tempfile.TemporaryDirectory(dir="/var/tmp") as d:
     env_yes = {"SG_SPEECH_DIR": d, "SG_WINE_GROUP": mine}
     lines = serve(["status"], env_no)
     check("sg-speechd: status for anyone", lines == ["MODEL missing", "OK"], repr(lines))
-    lines = serve(["download"], env_no)
-    check("sg-speechd: a user without a Windows session may not download",
-          lines[-1:] and lines[-1].startswith("ERROR denied"), repr(lines))
-    check("sg-speechd: ...and nothing was written", not os.path.exists(os.path.join(d, sgspeech.MODEL_NAME)))
+    # Root is an administrator (and CI builds the package as root): only an
+    # unprivileged run can see these refusals.
     if os.getuid() != 0:
+        lines = serve(["download"], env_no)
+        check("sg-speechd: a user without a Windows session may not download",
+              lines[-1:] and lines[-1].startswith("ERROR denied"), repr(lines))
+        check("sg-speechd: ...and nothing was written", not os.path.exists(os.path.join(d, sgspeech.MODEL_NAME)))
         is_admin = "sg-admins" in {grp.getgrgid(g).gr_name for g in os.getgroups()}
         lines = serve(["remove"], env_yes)
         check("sg-speechd: only an administrator may remove the model",
