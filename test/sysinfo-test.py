@@ -193,9 +193,40 @@ def main():
     return 1 if FAILS else 0
 
 
+# Root is an administrator to sg-sysinfod (and CI builds the package as
+# root), so as root every request is made by "nobody" instead: the refusals
+# are about ordinary accounts.
+RUNAS = pwd.getpwnam("nobody") if os.getuid() == 0 else None
+
+
+def drop():
+    if RUNAS:
+        os.setgroups([])
+        os.setgid(RUNAS.pw_gid)
+        os.setuid(RUNAS.pw_uid)
+
+
+CLIENT = r'''
+import json, socket, subprocess, sys
+argv, raw, sysinfo = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+a, b = socket.socketpair()
+p = subprocess.Popen([sys.executable, sysinfo, "--serve"], stdin=b, stdout=b)
+b.close()
+a.sendall(raw.encode() if raw else (json.dumps({"argv": argv}) + "\n").encode())
+data = b""
+while True:
+    chunk = a.recv(65536)
+    if not chunk:
+        break
+    data += chunk
+p.wait(timeout=60)
+sys.stdout.write(data.decode())
+'''
+
+
 def run_tests(tmp):
-    me = os.getuid()
-    my_group = grp.getgrgid(os.getgid()).gr_name
+    me = RUNAS.pw_uid if RUNAS else os.getuid()
+    my_group = grp.getgrgid(RUNAS.pw_gid if RUNAS else os.getgid()).gr_name
     sysfs = os.path.join(tmp, "sys")
     make_sysfs(sysfs)
     write(os.path.join(tmp, "pci.ids"), PCI_IDS)
@@ -276,9 +307,14 @@ print(json.dumps({"sessions": {"1": {"username": "alice", "remote_machine": "10.
                 SG_SYSINFO_SOCKET=os.path.join(tmp, "no.sock"))
     base.pop("WINEPREFIX", None)
 
+    if RUNAS:
+        for root, dirs, files in os.walk(tmp):
+            for n in dirs + files + ["."]:
+                os.lchown(os.path.join(root, n), RUNAS.pw_uid, RUNAS.pw_gid)
+
     def cli(*argv, env=None):
         p = subprocess.run([sys.executable, SYSINFO] + list(argv), stdout=subprocess.PIPE, env=env or base,
-                           timeout=60)
+                           timeout=60, preexec_fn=drop)
         return p.stdout.decode().splitlines(), p.returncode
 
     def calls():
@@ -305,21 +341,12 @@ print(json.dumps({"sessions": {"1": {"username": "alice", "remote_machine": "10.
         return out
 
     def serve(argv, admin=False, user=True, raw=None):
-        a, b = socket.socketpair()
+        """One request over a real socket to sg-sysinfo --serve, from this uid."""
         e = dict(base, SG_ADMIN_GROUP=my_group if admin else "sg-no-such-group",
                  SG_WINE_GROUP=my_group if user else "sg-no-such-group", SG_SYSTEM_USER="sg-no-such-user")
-        p = subprocess.Popen([sys.executable, SYSINFO, "--serve"], stdin=b, stdout=b, env=e)
-        b.close()
-        a.sendall(raw if raw is not None else (json.dumps({"argv": argv}) + "\n").encode())
-        data = b""
-        while True:
-            chunk = a.recv(65536)
-            if not chunk:
-                break
-            data += chunk
-        p.wait(timeout=60)
-        a.close()
-        return data.decode().splitlines()
+        p = subprocess.run([sys.executable, "-c", CLIENT, json.dumps(argv), raw.decode() if raw else "", SYSINFO],
+                           stdout=subprocess.PIPE, env=e, timeout=120, preexec_fn=drop)
+        return p.stdout.decode().splitlines()
 
     # --- system --------------------------------------------------------------
     out, rc = cli("system")
@@ -506,7 +533,7 @@ print(json.dumps({"sessions": {"1": {"username": "alice", "remote_machine": "10.
     # --- processes and connections (the real /proc) ---------------------------
     out, rc = cli("processes", env=dict(base, SG_PROCFS="/proc"))
     procs = {b["_"]: b for b in blocks(out, "PROCESS")}
-    check(str(os.getpid()) in procs and procs[str(os.getpid())].get("USER") == [pwd.getpwuid(me).pw_name],
+    check(str(os.getpid()) in procs and procs[str(os.getpid())].get("USER") == [pwd.getpwuid(os.getuid()).pw_name],
           "processes: this test's own process, with its user")
     out, rc = cli("connections", env=dict(base, SG_PROCFS="/proc"))
     check(rc == 0 and out[-1] == "OK", "connections answers")
@@ -529,7 +556,8 @@ sys.stdout.write("{not json\n"); sys.stdout.flush(); d = sys.stdin.readline().rs
 open(sys.argv[1], "w").write(json.dumps([a, b, c, d]))
 ''')
     res = os.path.join(tmp, "bridge.json")
-    p = subprocess.run([sys.executable, SYSINFO, "--bridge", sys.executable, child, res], env=base, timeout=60)
+    p = subprocess.run([sys.executable, SYSINFO, "--bridge", sys.executable, child, res], env=base, timeout=60,
+                       preexec_fn=drop)
     try:
         a, b, c, d = json.load(open(res))
     except (OSError, ValueError):
