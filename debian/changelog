@@ -1,3 +1,16 @@
+sg-session (0.1.0-17) unstable; urgency=medium
+
+  * sg-install installs from the Stained Glass ISO (sg.live=iso): the root
+    image the initrd attached (label SGLIVEROOT), the ESP image mounted at
+    /run/sg-esp, the plain boot entry kept in loader/install/, and the disk
+    the medium is on (a USB stick or CD) left alone.
+  * sg-prefix-init re-imports a registry defaults file whenever it is new
+    or changed (SHA-256 stamps in the state directory), so an upgraded
+    package's registrations (App Paths, file associations) reach prefixes
+    made before it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 03:13:50 -0700
+
 sg-session (0.1.0-16) unstable; urgency=medium
 
   * sg-speechd: the model directory is /var/lib/stained-glass-speech, the

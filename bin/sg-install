@@ -66,10 +66,15 @@ lower() { tr '[:upper:]' '[:lower:]'; }
 # here. The root is the root-type partition on the disk the ESP is on (the
 # same GPT auto-discovery that found it at boot); the kernel's ext4 state says
 # whether it is mounted, and how.
+# Booted from the ISO (sg.live=iso): the initrd (sg-image iso/sg-live-iso)
+# mounted the medium at /run/sg-iso, attached its root image, and mounted its
+# system partition image at /run/sg-esp.
+iso_live() { grep -qw sg.live=iso /proc/cmdline && mountpoint -q /run/sg-iso; }
 source_esp() {
     # The ESP is an automount: touch it so it is really there to find.
     ls /boot /efi >/dev/null 2>&1 || :
-    for m in /boot /efi /boot/efi; do
+    for m in /run/sg-esp /boot /efi /boot/efi; do
+        [ "$m" != /run/sg-esp ] || iso_live || continue
         s=$(findmnt -n -o SOURCE,FSTYPE "$m" 2>/dev/null | awk '$2 == "vfat" {print $1}')
         [ -n "$s" ] && { echo "$s"; return; }
     done
@@ -77,6 +82,7 @@ source_esp() {
 source_root() {
     [ "$(findmnt -n -o FSTYPE /)" = overlay ] || return 0
     grep -qw systemd.volatile=overlay /proc/cmdline || return 0
+    if iso_live; then blkid -l -t LABEL=SGLIVEROOT -o device; return 0; fi
     esp=$(source_esp); [ -n "$esp" ] || return 0
     d=$(parent_disk "$esp"); [ -n "$d" ] || return 0
     lsblk -n -o PATH,PARTTYPE "/dev/$d" | awk -v t="$ROOT_TYPE" 'tolower($2) == t {print $1; exit}'
@@ -90,6 +96,14 @@ ext4_state() {
 parent_disk() { lsblk -n -o PKNAME "$1" 2>/dev/null | head -1; }
 
 boot_disk() {
+    # From the ISO, the disk to leave alone is the one the medium is on (a USB
+    # stick shows up as a writable disk like any other).
+    if iso_live; then
+        m=$(findmnt -n -o SOURCE /run/sg-iso)
+        p=$(parent_disk "$m")
+        echo "/dev/${p:-${m#/dev/}}"
+        return
+    fi
     for part in "$(source_root)" "$(source_esp)" "$(findmnt -n -o SOURCE / 2>/dev/null)"; do
         [ -n "$part" ] || continue
         p=$(parent_disk "$part")
@@ -504,7 +518,8 @@ for f in "$S"/*; do
 done
 mkdir -p "$B/loader/entries"
 opts=""
-for e in "$S"/loader/entries/*.conf; do
+# The ISO keeps the plain entry out of its boot menu, in loader/install/.
+for e in "$S"/loader/entries/*.conf "$S"/loader/install/*.conf; do
     [ -f "$e" ] || continue
     case "$e" in *-live.conf) continue ;; esac
     base=${e##*/}

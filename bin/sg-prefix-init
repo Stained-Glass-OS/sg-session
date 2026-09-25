@@ -50,6 +50,35 @@ set_machine_settings() {
     fi
 }
 
+# Registry defaults other packages ship in $SG_DEFAULTS_DIR (App Paths, file
+# associations, shell settings). Each file is imported when it is new or has
+# changed since it was last imported -- so an upgraded package's new
+# registrations reach a prefix made before it, not only new prefixes. The
+# stamp is the file's SHA-256, kept in $SG_STATE/defaults/.
+# (HKCU values in them land in the account running this, SYSTEM, and in the
+# Default User profile only when the prefix is first made: existing users keep
+# their own settings.)
+import_defaults() {
+    [ -d "$SG_DEFAULTS_DIR" ] || return 0
+    _stamps="$SG_STATE/defaults"
+    mkdir -p "$_stamps"
+    _any=0
+    for _reg in "$SG_DEFAULTS_DIR"/*.reg; do
+        [ -f "$_reg" ] || continue
+        _name=$(basename "$_reg")
+        _sum=$(sha256sum < "$_reg" | cut -d' ' -f1)
+        [ "$(cat "$_stamps/$_name.sha256" 2>/dev/null)" != "$_sum" ] || continue
+        if wine reg import "$(winepath -w "$_reg")" >/dev/null 2>&1; then
+            printf '%s\n' "$_sum" > "$_stamps/$_name.sha256"
+            sg_log "imported defaults: $_name"
+            _any=1
+        else
+            sg_log "WARNING: could not import defaults from $_reg"
+        fi
+    done
+    [ "$_any" = 0 ] || wineserver -w
+}
+
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
@@ -60,6 +89,7 @@ if [ -e "$STAMP" ]; then
     # Bounded: auto-start services never exit, so an unbounded wait would
     # hang boot on a machine that has any.
     timeout 120 wineserver -w || true
+    import_defaults
     set_machine_settings
     run_installers
     exit 0
@@ -95,17 +125,7 @@ wineserver -w
 # values in them become every user's defaults rather than only this account's.
 # reg.exe is given a Windows path: handed a Unix one, it resolves it as a DOS
 # path on C: and fails.
-if [ -d "$SG_DEFAULTS_DIR" ]; then
-    for _reg in "$SG_DEFAULTS_DIR"/*.reg; do
-        [ -f "$_reg" ] || continue
-        if wine reg import "$(winepath -w "$_reg")" >/dev/null 2>&1; then
-            sg_log "imported defaults: $(basename "$_reg")"
-        else
-            sg_log "WARNING: could not import defaults from $_reg"
-        fi
-    done
-    wineserver -w
-fi
+import_defaults
 
 # --- make userdef.reg a real Default User profile -------------------------
 # wineboot applies wine.inf's HKCU sections to whoever ran it, then stamps
