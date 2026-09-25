@@ -37,6 +37,10 @@
 #   sg-settingsctl updates
 #       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
 #   sg-settingsctl session-start      apply night light and the idle timers
+#   sg-settingsctl lockscreen
+#       LOCKSCREEN <picture published yes|no>\t<shown on sign-in yes|no>
+#   sg-settingsctl lockscreen picture FILE | default
+#   sg-settingsctl lockscreen signin yes|no
 #                                     (swayidle also locks before any sleep)
 #
 # Settings are the user's: ~/.config/stained-glass/settings.json.
@@ -477,6 +481,114 @@ def sleep_now(args):
     return []
 
 
+# ---- the lock screen's picture (published for the lock service; see sg-lockd) ------------------
+#
+# The lock screen is drawn by the machine account, which cannot read the
+# user's files and must not read a path the user names. So the user's choice
+# is copied, as the user, into a drop directory (1733: anyone may create, no
+# one may list or touch another's file): <user> the picture, <user>.signin
+# "1"/"0". sg-lockd re-checks everything (owner, type, size) before using it.
+
+LOCKPIC_MAX = 32 << 20
+
+
+def lockpic_dir():
+    return os.environ.get("SG_LOCKSCREEN_DIR") or "/var/lib/stained-glass/lockscreen"
+
+
+def is_picture(head):
+    return (head[:3] == b"\xff\xd8\xff" or head[:8] == b"\x89PNG\r\n\x1a\n" or head[:2] == b"BM"
+            or head[:6] in (b"GIF87a", b"GIF89a"))
+
+
+def publish(name, data):
+    import tempfile
+    d = lockpic_dir()
+    fd, tmp = tempfile.mkstemp(dir=d, prefix="." + name + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(d, name))
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise Fail("failed", "could not publish the lock screen picture: %s" % e.strerror)
+
+
+def lockscreen(args):
+    import pwd
+    user = pwd.getpwuid(os.getuid()).pw_name
+    d = lockpic_dir()
+    if not os.path.isdir(d):
+        raise Fail("unsupported", "no lock screen directory (%s)" % d)
+    if len(args) == 2 and args[0] == "picture" and args[1] == "default":
+        try:
+            os.unlink(os.path.join(d, user))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise Fail("failed", e.strerror)
+    elif len(args) == 2 and args[0] == "picture":
+        try:
+            fd = os.open(args[1], os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            raise Fail("notfound", "cannot open %s" % args[1])
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            import stat
+            if not stat.S_ISREG(st.st_mode) or st.st_size <= 0 or st.st_size > LOCKPIC_MAX:
+                raise Fail("invalid", "not a picture file of at most 32 MB")
+            data = f.read(LOCKPIC_MAX + 1)
+        if len(data) > LOCKPIC_MAX or not is_picture(data[:8]):
+            raise Fail("invalid", "not a JPEG, PNG, BMP or GIF picture")
+        publish(user, data)
+    elif len(args) == 2 and args[0] == "signin":
+        one_of(args[1], ("yes", "no"), "signin")
+        publish(user + ".signin", b"1" if args[1] == "yes" else b"0")
+    elif args:
+        raise Fail("invalid", "usage: lockscreen [picture FILE|default] [signin yes|no]")
+    signin = True
+    try:
+        with open(os.path.join(d, user + ".signin"), "rb") as f:
+            signin = f.read(1) != b"0"
+    except OSError:
+        pass
+    return ["LOCKSCREEN %s\t%s" % (yn(os.path.isfile(os.path.join(d, user))), yn(signin))]
+
+
+# ---- sleep and hibernate (logind, which asks polkit) ------------------------------------
+
+def logind_can(what):
+    """logind's answer to Can<What>: yes, no, challenge (polkit would ask for a
+    password -- no agent runs in our session, so Start treats it as no) or na."""
+    text = run(["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager", "Can" + what], timeout=10, check=False)
+    m = re.match(r's\s+"(\w+)"', text.strip())
+    return m.group(1) if m else "na"
+
+
+def sleep_caps(args):
+    if args:
+        raise Fail("invalid", "usage: sleep-caps")
+    return ["CAN suspend %s" % logind_can("Suspend"), "CAN hibernate %s" % logind_can("Hibernate")]
+
+
+def sleep_now(args):
+    """Start's Sleep/Hibernate: lock first, then ask logind (through systemctl;
+    polkit decides -- an inactive or remote session is refused)."""
+    if len(args) > 1 or (args and args[0] not in ("suspend", "hibernate")):
+        raise Fail("invalid", "usage: sleep [suspend|hibernate]")
+    verb = args[0] if args else "suspend"
+    lock = lock_command()
+    if lock:
+        run(lock.split(" "), timeout=10, check=False)
+    run(["systemctl", verb], timeout=30)
+    return []
+
+
 # ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
 
 def updates(args):
@@ -505,7 +617,8 @@ def session_start(args):
 
 COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
-            "sleep-caps": sleep_caps, "sleep": sleep_now}
+            "sleep-caps": sleep_caps, "sleep": sleep_now,
+            "lockscreen": lockscreen}
 
 
 def main(argv):

@@ -338,6 +338,63 @@ inherited through Wine — so the real greeter never read a byte from the bridge
 at the login screen either. The login-screen gate missed it because it stood a
 shell script in for the greeter; `make test-lock` drives the real one.
 
+### The lock screen's picture and clock
+
+Windows 10's lock screen: the picture chosen in Settings > Personalization >
+Lock screen fills the screen with the time and date at the bottom left (the
+"curtain"); a key, a click or the wheel lifts it to the sign-in pane -- the
+same picture shrunk to 1/24 and grown back, dimmed (a cheap acrylic), with
+the account's initial in an accent circle, or the plain blue when "Show lock
+screen background picture on the sign-in screen" is off. The login screen
+has the curtain too, over the system's picture
+(`/usr/share/stained-glass/wallpapers/stained-glass.jpg`,
+`SG_LOCK_DEFAULT_PICTURE`); `SG_GREETER_CURTAIN=0` turns it off.
+
+- **The key that lifts the curtain is not lost**: it goes on to the box that
+  now has the focus (Enter, Escape and Space only lift it). Every gate and
+  remote-support tool that just starts typing keeps working -- sg-image's
+  login typing ("x", BackSpace, the name) and `make test-lock` unchanged.
+- **The machine account draws the lock screen and must not read the user's
+  files or a path the user names.** Settings publishes the choice as the
+  user (`sg-settingsctl lockscreen picture FILE|default`, `lockscreen signin
+  yes|no`) into `/var/lib/stained-glass/lockscreen` (tmpfiles, 1733: anyone
+  may create, nobody may list or replace another's file): `<user>` the
+  picture (JPEG/PNG/BMP/GIF by magic, at most 32 MB, mode 0644) and
+  `<user>.signin`. At every lock, sg-lockd opens `<user>` with `O_NOFOLLOW`,
+  requires a regular file owned by the session's uid, at most 32 MB, a
+  picture's magic, and copies it **from that descriptor** into a private
+  `mkstemp` file (`SG_LOCK_PICTURE` for the UI, deleted when the UI stops).
+  Anything else -- a symlink, a planted file owned by someone else, a
+  non-picture -- is ignored and the system's picture shows. A user who
+  plants a file under another's name only costs that user their picture
+  (they fall back to the default). The published pictures are readable by
+  other local users (sgwine traverses `/var/lib/stained-glass`), like a
+  wallpaper would be.
+- **The greeter decodes with WIC** (`\\?\unix\` path, 32bpp BGR) and scales
+  it itself: an area average when shrinking, bilinear when growing, "Fill"
+  cropping. Statics over the picture erase with a pattern brush of the
+  blurred picture aligned to the control, so the old warning about
+  transparent statics still holds.
+- **Gate: `make test-lockpic`** (`test/lockpic-e2e.sh`, Xvfb, its own
+  prefix): sg-settingsctl refuses a non-picture and publishes a picture and
+  the switch as the user's own files; `sg-lockd --stage-picture USER` (the
+  service's staging, as a hook) stages it, refuses a symlink and a published
+  non-picture; the real greeter shows the picture's colours with the clock's
+  white at the bottom left and no form; typing "alice" + Enter lifts it and
+  arrives whole ("USER alice"), over the dimmed picture with the clock gone;
+  ShowOnSignIn off gives the plain colour (a JPEG); lock mode's account
+  circle (a BMP); no picture: plain colour with the clock. Mutants: a
+  greeter ignoring the picture (`-DSG_MUTANT_NOPIC`, 6 fails), the old
+  greeter (9), one that eats the lifting key ("USER lice"), an sg-lockd
+  without `O_NOFOLLOW`/owner check -- each red (`SG_GREETER=`, `SG_LOCKD=`).
+  **`make test-lock`** now also publishes a picture, requires it staged while
+  locked, reads the lock X server's pixels (`xwd -root`), and requires the
+  staged copy gone after unlocking. Its first run on a fresh prefix can miss
+  the 60 s window for the lock screen (Wine's first start); run it again.
+- **Not yet:** the curtain does not come back after a minute idle, no
+  slide-up animation, no Windows Spotlight, no notifications on the curtain;
+  a picture chosen before this existed is not published until chosen again.
+
 ## Run as administrator: the consent prompt
 
 `sg-brokerd` (ADR 0012) asks on the **secure surface**. It finds the

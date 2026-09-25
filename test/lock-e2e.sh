@@ -9,6 +9,8 @@
 #   - a wrong password is refused and the machine stays locked
 #   - the right password unlocks, and the lock UI is torn down
 #   - not one key typed at the lock screen reached the user session
+#   - the user's lock-screen picture (published as Settings does) is staged
+#     for the lock UI while locked, shown on its screen, and removed after
 # PAM runs for real under pam_wrapper/pam_matrix: no real account is used.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -44,6 +46,11 @@ for svc in stained-glass-lock other; do
 done
 printf '%s:correct-horse:stained-glass-lock\n' "$(id -un)" > "$T/passdb"
 
+# The user's lock-screen picture, published the way Settings does it.
+mkdir -m 1733 "$T/drop"
+python3 -c "from PIL import Image; Image.new('RGB', (800, 600), (0x10, 0xA0, 0x90)).save('$T/pic.png')" 2>/dev/null \
+    && SG_LOCKSCREEN_DIR="$T/drop" "$HERE/bin/sg-settingsctl" lockscreen picture "$T/pic.png" >/dev/null 2>&1
+
 ctl() { python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('$T/ctl.sock');s.sendall(b'$1\n');print(s.recv(64).decode().strip())"; }
 inj() { WAYLAND_DISPLAY="$T/priv.sock" "$HERE/build/sg-vkbd" "$@"; sleep 1; }
 user_keys() { awk '/^KeyPress/{p=1;next} p&&match($0,/keysym 0x[0-9a-f]+, [A-Za-z_0-9]+\)/){s=substr($0,RSTART,RLENGTH); sub(/.*, /,"",s); sub(/\)/,"",s); print s; p=0}' "$T/user.txt"; }
@@ -60,6 +67,7 @@ PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$T/pam.d" LD_PRELOAD="$PW" \
 SG_LOCK_PAMCHECK="$HERE/build/sg-rdp-pamcheck" SG_LOCK_CONTROL="$T/ctl.sock" SG_LOCK_PRIV="$T/priv.sock" \
 SG_LOCK_UI="$HERE/lib/sg-lock-ui" SG_LIB="$HERE/lib" SG_LIBEXEC="$HERE/build" SG_LOG_DIR="$T" \
 SG_PREFIX="$PFX" SG_LOCKD_LOG="$T/lockd.log" SG_LOCK_DISPLAY_NUM="$LOCKN" \
+SG_LOCKSCREEN_DIR="$T/drop" TMPDIR="$T" \
     "$HERE/build/sg-lockd" >/dev/null 2>&1 &
 LP=$!
 _w=0; while ! grep -q watching "$T/lockd.log" 2>/dev/null && [ $_w -lt 50 ]; do sleep 0.2; _w=$((_w+1)); done
@@ -92,6 +100,16 @@ while [ $_w -lt 60 ]; do
 done
 [ -n "$LN" ] && pass "the lock screen appears (on its own X server, $LN)" || fail "no lock screen appeared"
 sleep 3
+if [ -s "$T/drop/$(id -un)" ]; then
+    staged=$(ls "$T"/sg-lockpic-* 2>/dev/null | head -1)
+    [ -n "$staged" ] && cmp -s "$staged" "$T/pic.png" && pass "the user's lock-screen picture is staged for the lock UI" \
+        || fail "the user's lock-screen picture was not staged"
+    if [ -n "$LN" ] && command -v convert >/dev/null && xwd -display "$LN" -root -silent 2>/dev/null | convert xwd:- "$T/lock.png" 2>/dev/null; then
+        v=$(convert "$T/lock.png" -format '%[fx:int(255*p{20,20}.r)] %[fx:int(255*p{20,20}.g)] %[fx:int(255*p{20,20}.b)]' info: 2>/dev/null)
+        [ "$v" = "16 160 144" ] && pass "the lock screen shows the picture ($v)" || fail "the lock screen shows $v, not the picture"
+        [ -n "${ARTIFACTS:-}" ] && mkdir -p "$ARTIFACTS" && cp "$T/lock.png" "$ARTIFACTS/lock-screen.png"
+    fi
+else echo "note: no picture published (python3-pil missing?); picture checks skipped"; fi
 
 inj x; inj -k BackSpace   # warm up the lock server's keymap, then clear
 inj 'wrongpass' -k Return
@@ -106,6 +124,10 @@ sleep 2
 if [ -n "$LN" ] && DISPLAY="$LN" xdotool search --name 'Sign in' >/dev/null 2>&1; then
     fail "the lock screen is still up after unlocking"
 else pass "the lock screen is torn down after unlocking"; fi
+if [ -s "$T/drop/$(id -un)" ]; then
+    ls "$T"/sg-lockpic-* >/dev/null 2>&1 && fail "the staged picture outlived the lock screen" \
+        || pass "the staged picture is removed after unlocking"
+fi
 
 after=$(user_keys | wc -l)
 leaked=$(user_keys | tail -n +$((before + 1)) | tr '\n' ' ')

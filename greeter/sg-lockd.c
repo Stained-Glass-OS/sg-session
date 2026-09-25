@@ -35,6 +35,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -208,17 +210,112 @@ static int find_session( void )
     return found;
 }
 
+/* ---- the user's lock-screen picture ----------------------------------------
+ *
+ * Settings publishes the user's choice (sg-settingsctl lockscreen, running as
+ * the user) into a drop directory -- mode 1733, so anyone may create a file
+ * there but nobody may list it or touch another's: <user> is the picture,
+ * <user>.signin says whether the sign-in pane shows it ("0" or "1").
+ *
+ * This service, as the machine account, must not trust any of it: a file named
+ * after this user may have been planted by someone else, may be a symlink to
+ * something only the machine account can read, may be enormous or not a
+ * picture at all. So: opened without following links, a regular file, owned by
+ * the user whose session this is, at most SG_LOCKPIC_MAX bytes, starting like
+ * a JPEG, PNG, BMP or GIF -- and then copied, from the descriptor that was
+ * checked, into a private file the lock UI reads. Anything else is ignored and
+ * the lock screen shows the system's picture. */
+#define SG_LOCKPIC_MAX (32 << 20)
+
+static const char *lockpic_dir( void )
+{
+    const char *d = getenv( "SG_LOCKSCREEN_DIR" );
+    return d && *d ? d : "/var/lib/stained-glass/lockscreen";
+}
+
+/* Open DIR/NAME if it is a regular file of at most MAX bytes owned by UID. */
+static int open_owned( const char *name, uid_t uid, off_t max, struct stat *st )
+{
+    char path[1024];
+    int fd;
+    if (strchr( name, '/' ) || (size_t)snprintf( path, sizeof(path), "%s/%s", lockpic_dir(), name ) >= sizeof(path)) return -1;
+    if ((fd = open( path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | O_NOCTTY )) < 0) return -1;
+    if (fstat( fd, st ) < 0 || !S_ISREG( st->st_mode ) || st->st_uid != uid || st->st_size <= 0 || st->st_size > max)
+    {
+        logmsg( "lock picture %s refused: %s", path, S_ISREG( st->st_mode ) && st->st_uid != uid ? "not the user's own file"
+                                                   : "not a regular file of an acceptable size" );
+        close( fd );
+        return -1;
+    }
+    return fd;
+}
+
+static int is_picture( const unsigned char *h, size_t n )
+{
+    return (n >= 3 && h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF)                     /* JPEG */
+        || (n >= 8 && !memcmp( h, "\x89PNG\r\n\x1a\n", 8 ))                            /* PNG  */
+        || (n >= 2 && h[0] == 'B' && h[1] == 'M')                                        /* BMP  */
+        || (n >= 6 && (!memcmp( h, "GIF87a", 6 ) || !memcmp( h, "GIF89a", 6 )));        /* GIF  */
+}
+
+/* Stage USER's picture into a private file; *signin gets 0 or 1. Returns the
+ * staged file's path (malloc'd) or NULL for "use the system's picture". */
+static char *lockpic_stage( const char *user, int *signin )
+{
+    struct passwd *pw = getpwnam( user );
+    struct stat st;
+    unsigned char buf[65536];
+    char name[MAXFIELD + 16], *out = NULL;
+    const char *tmp = getenv( "TMPDIR" );
+    int fd, ofd = -1;
+    ssize_t n;
+    size_t total = 0, first = 1;
+
+    *signin = 1;
+    if (!pw) return NULL;
+    snprintf( name, sizeof(name), "%s.signin", user );
+    if ((fd = open_owned( name, pw->pw_uid, 16, &st )) >= 0)
+    {
+        char c = 0;
+        if (read( fd, &c, 1 ) == 1 && c == '0') *signin = 0;
+        close( fd );
+    }
+    if ((fd = open_owned( user, pw->pw_uid, SG_LOCKPIC_MAX, &st )) < 0) return NULL;
+    if (asprintf( &out, "%s/sg-lockpic-XXXXXX", tmp && *tmp ? tmp : "/tmp" ) < 0) { close( fd ); return NULL; }
+    if ((ofd = mkstemp( out )) < 0) goto fail;
+    while ((n = read( fd, buf, sizeof(buf) )) > 0)
+    {
+        if (first && !is_picture( buf, (size_t)n )) { logmsg( "lock picture of %s refused: not a JPEG, PNG, BMP or GIF", user ); goto fail; }
+        first = 0;
+        total += (size_t)n;
+        if (total > SG_LOCKPIC_MAX || write_full( ofd, buf, (size_t)n ) < 0) goto fail;
+    }
+    if (n < 0 || first) goto fail;
+    close( fd ); close( ofd );
+    return out;
+fail:
+    close( fd );
+    if (ofd >= 0) { close( ofd ); unlink( out ); }
+    free( out );
+    return NULL;
+}
+
 /* ---- the lock UI ------------------------------------------------------- */
 
-struct ui { pid_t pid; int to, from; };
+struct ui { pid_t pid; int to, from; char *picture; };
 
 static int ui_start( struct ui *ui, const char *user )
 {
-    int up[2], down[2];
+    int up[2], down[2], signin;
+    free( ui->picture );
+    ui->picture = lockpic_stage( user, &signin );
     if (pipe( up ) < 0 || pipe( down ) < 0) return -1;
     if ((ui->pid = fork()) < 0) return -1;
     if (!ui->pid)
     {
+        if (ui->picture) setenv( "SG_LOCK_PICTURE", ui->picture, 1 );
+        else unsetenv( "SG_LOCK_PICTURE" );
+        setenv( "SG_LOCK_SIGNIN", signin ? "1" : "0", 1 );
         dup2( down[0], 0 ); dup2( up[1], 1 );
         close( up[0] ); close( up[1] ); close( down[0] ); close( down[1] );
         setsid();   /* its own process group, so teardown takes Xwayland too */
@@ -247,6 +344,7 @@ static void ui_stop( struct ui *ui )
     kill( -ui->pid, SIGKILL );
     waitpid( ui->pid, NULL, 0 );
     ui->pid = 0;
+    if (ui->picture) { unlink( ui->picture ); free( ui->picture ); ui->picture = NULL; }
 }
 
 static void ui_send( struct ui *ui, const char *fmt, ... )
@@ -317,7 +415,7 @@ static int drop_privileges( const char *account )
     return 0;
 }
 
-int main( void )
+int main( int argc, char **argv )
 {
     const char *helper = getenv( "SG_LOCK_PAMCHECK" );
     const char *account = getenv( "SG_SYSTEM_USER" );
@@ -336,6 +434,18 @@ int main( void )
      * policy from remote login. The helper reads this. */
     setenv( "SG_REMOTE_PAM_SERVICE", "stained-glass-lock", 0 );
     if (!account) account = "sgsystem";
+    /* The gate's hook: stage USER's picture as the service would and say
+     * what the lock UI would be given. */
+    if (argc == 3 && !strcmp( argv[1], "--stage-picture" ))
+    {
+        int signin;
+        char *p;
+        g_log = stderr;
+        p = lockpic_stage( argv[2], &signin );
+        printf( "PICTURE %s\nSIGNIN %d\n", p ? p : "-", signin );
+        free( p );
+        return 0;
+    }
     g_log = logpath ? fopen( logpath, "a" ) : stderr;
     if (!g_log) g_log = stderr;
     int scan = !g_control;

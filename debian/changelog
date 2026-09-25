@@ -1,3 +1,21 @@
+sg-session (0.1.0-23) unstable; urgency=medium
+
+  * The lock screen shows the picture chosen in Settings > Personalization >
+    Lock screen, with the time and date at the bottom left (Windows 10's
+    curtain); a key, click or the wheel lifts it to the sign-in pane over the
+    blurred, dimmed picture (or the plain colour when "show on the sign-in
+    screen" is off), with the account's initial. The login screen has the
+    curtain over the system's picture. The key that lifts it is typed.
+  * sg-settingsctl lockscreen: publishes the user's choice, as the user,
+    into /var/lib/stained-glass/lockscreen (tmpfiles, 1733); sg-lockd stages
+    it for the lock UI only if it is the session user's own regular file
+    (no symlinks), a JPEG/PNG/BMP/GIF, at most 32 MB -- copied from the
+    checked descriptor.
+  * Gate: make test-lockpic; make test-lock checks the picture is staged,
+    shown on the lock screen's X server, and removed after unlocking.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 11:45:58 -0700
+
 sg-session (0.1.0-22) unstable; urgency=medium
 
   * sg-settingsctl: sleep-caps (logind CanSuspend/CanHibernate) and sleep

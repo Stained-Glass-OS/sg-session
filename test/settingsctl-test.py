@@ -253,6 +253,35 @@ check("updates: apt's upgradable list", "UPDATE libfoo1\t1.2-3\t1.2-3+deb13u1" i
       "UPDATE wine-sg\t10.0-37\t10.0-38" in lines, lines)
 check("updates: nothing staged", "STAGED no" in lines, lines)
 
+# ---- the lock screen's picture (published into a 1733 drop for sg-lockd)
+import pwd
+drop = os.path.join(tmp, "lockscreen")
+os.mkdir(drop)
+os.chmod(drop, 0o1733)
+ENV["SG_LOCKSCREEN_DIR"] = drop
+me = pwd.getpwuid(os.getuid()).pw_name
+png = os.path.join(tmp, "pic.png")
+with open(png, "wb") as f:
+    f.write(b"\x89PNG\r\n\x1a\n" + b"\0" * 64)
+fake = os.path.join(tmp, "fake.jpg")
+with open(fake, "wb") as f:
+    f.write(b"#!/bin/sh\n")
+code, lines = ctl("lockscreen")
+check("lockscreen: nothing published yet", code == 0 and "LOCKSCREEN no\tyes" in lines, lines)
+code, lines = ctl("lockscreen", "picture", fake)
+check("lockscreen: a non-picture is refused", code == 2 and not os.path.exists(os.path.join(drop, me)), lines)
+code, lines = ctl("lockscreen", "picture", png)
+st = os.stat(os.path.join(drop, me)) if os.path.exists(os.path.join(drop, me)) else None
+check("lockscreen: a picture is published as the user's own, readable file",
+      code == 0 and st and st.st_uid == os.getuid() and st.st_mode & 0o777 == 0o644 and "LOCKSCREEN yes\tyes" in lines, lines)
+code, lines = ctl("lockscreen", "signin", "no")
+check("lockscreen: the sign-in switch", code == 0 and "LOCKSCREEN yes\tno" in lines, lines)
+code, lines = ctl("lockscreen", "signin", "maybe")
+check("lockscreen: a bad switch value is refused", code == 2, lines)
+code, lines = ctl("lockscreen", "picture", "default")
+check("lockscreen: back to the system's picture", code == 0 and "LOCKSCREEN no\tno" in lines, lines)
+check("lockscreen: no temporary files left in the drop", sorted(os.listdir(drop)) == [me + ".signin"], os.listdir(drop))
+
 # ---- usage
 code, lines = ctl("reboot")
 check("an unknown command is refused", code == 2 and lines[-1].startswith("ERROR invalid"), lines)

@@ -259,8 +259,8 @@ CFLAGS_BRIDGE := -O2 -Wall -Wextra
 greeter:
 	@command -v $(MINGW64) >/dev/null 2>&1 || { echo "SKIP: $(MINGW64) not installed"; exit 0; }
 	@mkdir -p build
-	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lgdi32 -luser32
-	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
+	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
 	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32
 	python3 setup/make-icon.py build/sg-setup.ico
 	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
@@ -355,6 +355,12 @@ test-rdp-stream: rdp
 .PHONY: test-lock
 test-lock: greeter rdp vkbd
 	@sh test/lock-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The lock screen's picture and clock: Settings' published choice, sg-lockd's
+# checks, and the greeter's curtain and sign-in pane, by pixels under Xvfb.
+.PHONY: test-lockpic
+test-lockpic: greeter
+	@sh test/lockpic-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # sg-vkbd: a virtual-keyboard test fixture with a stable keymap (see its
 # header for why wtype is not enough to drive a Wine prompt). Never installed.
