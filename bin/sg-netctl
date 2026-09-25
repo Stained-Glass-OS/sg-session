@@ -60,6 +60,10 @@ import uuid
 
 SOCKET = os.environ.get("SG_NETD_SOCKET", "/run/stained-glass-net/netd.sock")
 ADMIN_GROUP = os.environ.get("SG_ADMIN_GROUP", "sg-admins")
+# The SYSTEM account: what "Run as administrator" runs as, reached only
+# through the elevation broker's consent (ADR 0012 and its amendment). An
+# elevated netsh or Control Panel is an administrator here.
+SYSTEM_USER = os.environ.get("SG_SYSTEM_USER", "sgsystem")
 USER_GROUP = os.environ.get("SG_WINE_GROUP", "sgwine")
 NM_DIR = os.environ.get("SG_NM_DIR", "/etc/NetworkManager/system-connections")
 MAX_REQUEST = 65536
@@ -689,15 +693,23 @@ def in_group(uid, group):
     return gid in os.getgrouplist(pw.pw_name, pw.pw_gid)
 
 
+def is_system(uid):
+    try:
+        return pwd.getpwuid(uid).pw_name == SYSTEM_USER
+    except KeyError:
+        return False
+
+
 def is_admin(uid):
-    return uid == 0 or in_group(uid, ADMIN_GROUP)
+    return uid == 0 or in_group(uid, ADMIN_GROUP) or is_system(uid)
 
 
 def may_use(uid):
     """Who is a person at this computer: an account with a Windows session
     (the sgwine group -- local users, the live session's, domain users once
-    they sign in), an administrator, or root. Not system accounts."""
-    return uid == 0 or in_group(uid, USER_GROUP) or in_group(uid, ADMIN_GROUP)
+    they sign in), an administrator, SYSTEM (an elevated program) or root.
+    Not other system accounts."""
+    return uid == 0 or in_group(uid, USER_GROUP) or in_group(uid, ADMIN_GROUP) or is_system(uid)
 
 
 WIFI_FLAGS = {"hidden", "no-autoconnect", "password-stdin", "rescan"}

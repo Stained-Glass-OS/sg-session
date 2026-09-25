@@ -12,6 +12,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import grp
 import json
+import pwd
 import os
 import shutil
 import socket
@@ -137,13 +138,14 @@ def run_tests(t):
                 out.append(c)
         return out
 
-    def serve(argv, secret=None, admin=False, outsider=False):
+    def serve(argv, secret=None, admin=False, outsider=False, system=False):
         """One request over a real socket to sg-netctl --serve, from this uid.
         admin: the admin group is one this user is in; outsider: neither it nor
-        the Windows users' group is."""
+        the Windows users' group is; system: this user is the SYSTEM account."""
         a, b = socket.socketpair()
         e = dict(env, SG_ADMIN_GROUP=my_group if admin else "sg-no-such-group",
-                 SG_WINE_GROUP="sg-no-such-group" if outsider else my_group)
+                 SG_WINE_GROUP="sg-no-such-group" if outsider else my_group,
+                 SG_SYSTEM_USER=pwd.getpwuid(me).pw_name if system else "sg-no-such-user")
         p = subprocess.Popen([sys.executable, NETCTL, "--serve"], stdin=b, stdout=b, env=e)
         b.close()
         a.sendall((json.dumps({"argv": argv, "secret": secret}) + "\n").encode())
@@ -177,6 +179,8 @@ def run_tests(t):
         check(out[-1].startswith("ERROR denied"), "an ordinary user may not: %s" % " ".join(cmd))
     out = serve(["wifi", "scan"], outsider=True)
     check(out[-1].startswith("ERROR denied"), "an account without a Windows session may not even scan")
+    out = serve(["whoami"], outsider=True, system=True)
+    check("ADMIN yes" in out, "SYSTEM (an elevated program, after consent) is an administrator")
     out = serve(["wifi", "scan"])
     check(out[-1] == "OK" and any(l.startswith("WIFI 70\twpa-psk\tno\tno\t%s\tCafe" % b"Cafe".hex()) for l in out),
           "an ordinary user may scan for Wi-Fi: " + (out[0] if out else "(nothing)"))
