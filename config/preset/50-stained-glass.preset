@@ -4,3 +4,7 @@
 disable sg-rdpd.service
 enable sg-netmountd.socket
 enable sg-netd.socket
+# Runs on live boots only (ConditionKernelCommandLine).
+enable sg-live.service
+# Runs only while Setup's third-party drivers request is pending.
+enable sg-drivers.service

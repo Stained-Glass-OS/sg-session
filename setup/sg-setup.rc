@@ -1,0 +1,2 @@
+/* Setup's icon, drawn by make-icon.py at build time. */
+1 ICON "build/sg-setup.ico"

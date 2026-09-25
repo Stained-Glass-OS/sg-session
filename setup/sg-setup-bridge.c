@@ -72,7 +72,8 @@ struct buf { char data[LINE_MAX_LEN]; size_t len; };
 
 static int allowed( const char *line )
 {
-    static const char *const ok[] = { "LIST", "INSTALL ", "PASSWORD ", "REBOOT", "POWEROFF" };
+    static const char *const ok[] = { "LIST", "LAYOUT", "DRIVERS", "NEW ", "DELETE ", "FORMAT ", "INSTALL ",
+                                      "PASSWORD ", "REBOOT", "POWEROFF" };
     size_t i;
     for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
     {
@@ -141,6 +142,17 @@ static void from_wizard( char *line, void *ctx )
         logmsg( "setup ready" );
         return;
     }
+    if (!strcmp( line, "TRY" ))
+    {
+        /* "Try Stained Glass OS": not the installer service's business. The
+         * login screen script reads the answer when the wizard has closed,
+         * and signs in the live session. */
+        const char *result = getenv( "SG_SETUP_RESULT" );
+        FILE *f = result ? fopen( result, "w" ) : NULL;
+        if (f) { fputs( "try\n", f ); fclose( f ); }
+        logmsg( "try the live system" );
+        return;
+    }
     if (!allowed( line )) return;
     if (service < 0)
     {
@@ -177,6 +189,8 @@ int main( int argc, char **argv )
         dup2( down[0], STDIN_FILENO );
         dup2( up[1], STDOUT_FILENO );
         close( up[0] ); close( up[1] ); close( down[0] ); close( down[1] );
+        /* Tells the wizard it has its bridge (without it, it starts one). */
+        setenv( "SG_SETUP_BRIDGED", "1", 1 );
         execl( "/bin/sh", "sh", "-c", argv[1], (char *)NULL );
         _exit( 127 );
     }

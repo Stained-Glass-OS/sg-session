@@ -180,6 +180,7 @@ static void to_ui( const char *fmt, ... )
     n = vsnprintf( buf, sizeof(buf) - 2, fmt, ap );
     va_end( ap );
     if (n < 0) return;
+    if (to_greeter < 0) { logmsg( "%s", buf ); return; }   /* no greeter: signing in the live account */
     buf[n++] = '\n';
     write_all( to_greeter, buf, (size_t)n );
 }
@@ -266,6 +267,39 @@ static int handle_greetd_reply( const char *cmd_for_session )
     return done;
 }
 
+/* The live session: "Try Stained Glass OS" on the installation media signs
+ * in its live account, which has no password, with no greeter at all. Only
+ * on a live boot (the media's "live" entry) and only that account -- the
+ * account exists only there, made at boot in the volatile overlay -- and PAM
+ * still decides: an account that asks for a password is not signed in. */
+static int autologin( const char *user, const char *session_cmd )
+{
+    char cmdline[4096] = "", buf[512], *tok, *save = NULL;
+    FILE *f = fopen( "/proc/cmdline", "r" );
+    int live = 0, r;
+
+    if (f) { if (!fgets( cmdline, sizeof(cmdline), f )) cmdline[0] = 0; fclose( f ); }
+    for (tok = strtok_r( cmdline, " \n", &save ); tok; tok = strtok_r( NULL, " \n", &save ))
+        if (!strcmp( tok, "systemd.volatile=overlay" )) live = 1;
+    if (!live || strcmp( user, "live" ))
+    {
+        logmsg( "automatic sign-in is only for the live account on a live boot" );
+        return 1;
+    }
+    if ((greetd_fd = greetd_connect()) < 0) return 1;
+    snprintf( buf, sizeof(buf), "{\"type\":\"create_session\",\"username\":\"%s\"}", user );
+    if (greetd_send( buf ) < 0) return 1;
+    if ((r = handle_greetd_reply( session_cmd )) > 0)
+    {
+        logmsg( "signed in the live session" );
+        return 0;
+    }
+    logmsg( "the live account was not signed in" );
+    greetd_send( "{\"type\":\"cancel_session\"}" );
+    free( greetd_recv() );
+    return 1;
+}
+
 int main( int argc, char **argv )
 {
     const char *session_cmd = (argc > 1) ? argv[1] : "/usr/bin/sg-session-start";
@@ -274,6 +308,7 @@ int main( int argc, char **argv )
     pid_t child;
     char line[2048];
 
+    if (getenv( "SG_GREET_AUTOLOGIN" )) return autologin( getenv( "SG_GREET_AUTOLOGIN" ), session_cmd );
     if (!greeter_cmd) { logmsg( "usage: sg-greet-bridge <session-cmd> <greeter-cmd>" ); return 2; }
     if ((greetd_fd = greetd_connect()) < 0) return 1;
     if (pipe( up ) < 0 || pipe( down ) < 0) { logmsg( "pipe: %s", strerror(errno) ); return 1; }

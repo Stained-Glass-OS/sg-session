@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
-BINS         = bin/sg-install domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+BINS         = bin/sg-install bin/sg-drivers domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
@@ -64,7 +64,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	    install -m 0755 build/sg-rdp-authd bin/sg-rdp-cert $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# Setup (live boots only): the wizard, its bridge, and the root service
-	@# that runs sg-install, behind a socket only the login screen may use.
+	@# that runs sg-install, behind a socket only the login screen and the
+	@# live session may use; and the live session's setup.
 	@if [ -f build/sg-setup-bridge ]; then \
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-setup-bridge $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -73,7 +74,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	    install -m 0755 build/sg-setup64.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
-	install -m 0755 setup/sg-installd $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 setup/sg-installd setup/sg-live-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-polimport ]; then \
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-polimport $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -131,7 +132,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
-	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer $(UNITDIR)
+	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
@@ -145,15 +146,16 @@ install: d3d-probe greeter token-probe procagent rdp
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@sh test/drivers-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
@@ -181,7 +183,7 @@ clean:
 	rm -rf test/tmp
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
 	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub
-	rm -f build/sg-setup64.exe build/sg-setup-bridge
+	rm -f build/sg-setup64.exe build/sg-setup-bridge build/sg-setup.ico build/sg-setup-res.o
 
 # --- the D3D probe ---------------------------------------------------------
 #
@@ -240,7 +242,9 @@ greeter:
 	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lgdi32 -luser32
 	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32
-	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c -lgdi32 -luser32
+	python3 setup/make-icon.py build/sg-setup.ico
+	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
+	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c build/sg-setup-res.o -lcomctl32 -lgdi32 -luser32
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-setup-bridge setup/sg-setup-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c

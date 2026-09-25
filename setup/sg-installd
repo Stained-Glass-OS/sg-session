@@ -2,23 +2,31 @@
 # The privileged half of Setup: runs sg-install for the setup wizard.
 #
 # Socket-activated, one instance per connection (sg-installd.socket), as root.
-# The socket exists only on a live boot and only the login screen's account
-# (group sggreet) may connect: installing is for whoever is at the machine's
-# console with the installation media booted, as with Windows Setup. The
-# wizard decides nothing; this checks what it asks for and sg-install checks
-# it again.
+# The socket exists only on a live boot, and only the login screen's account
+# and the live session's (group sgsetup) may connect: installing is for
+# whoever is at the machine with the installation media booted, as with
+# Windows Setup. The wizard decides nothing; this checks what it asks for
+# against what sg-install itself reports, and sg-install checks it again.
 #
 # Protocol on stdin/stdout, one request per line:
 #
 #   <- HELLO
-#   -> LIST
-#   <- DISK <path>\t<bytes>\t<model>      one per disk, then
+#   -> LAYOUT
+#   <- DISK ... / PART ... / FREE ...     sg-install --layout's lines, then
 #   <- END
-#   -> INSTALL <disk>\t<account>\t<hostname>\t<full name>
+#   -> NEW <disk>\t<start sector>\t<bytes>
+#   -> DELETE <partition>
+#   -> FORMAT <partition>
+#   <- OK | FAILED <text>                 the wizard asks for LAYOUT again
+#   -> INSTALL <target>\t<account>\t<hostname>\t<full name>\t<keyboard>\t<drivers 1|0>
+#        target: part:<partition> | free:<disk>:<start>:<sectors>
 #   -> PASSWORD <password>                starts the installation
 #   <- PROGRESS <percent> <text>          ...
+#   <- MOKPASSWORD <password>             Secure Boot: the enrollment password
 #   <- DONE | FAILED <text>
 #   -> REBOOT | POWEROFF
+#   -> DRIVERS                            <- DEVICE lines (sg-drivers --list), END
+#   -> LIST                               (older wizards) DISK <path>\t<bytes>\t<model> ... END
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -36,48 +44,107 @@ if ! grep -qw systemd.volatile=overlay /proc/cmdline && [ "${SG_INSTALLD_TEST:-0
 fi
 say HELLO
 
-disk="" account="" host="" full=""
+# Is "$1" (a PART path, or "disk<TAB>start" of a FREE region) in the layout?
+in_layout() {
+    "$SG_INSTALL" --layout 2>/dev/null | awk -F'\t' -v kind="$1" -v a="$2" -v b="${3:-}" -v c="${4:-}" '
+        kind == "part" && $1 == "PART " a { found = 1 }
+        kind == "free" && $1 == "FREE " a && $2 == b && (c == "" || $3 == c) { found = 1 }
+        END { exit !found }'
+}
+# The last line sg-install wrote to stderr, as the reason.
+why() { grep '^sg-install: ' "$1" | tail -1 | sed 's/^sg-install: //'; }
+
+# One operation at a time, across connections: partitioning a disk while
+# another connection installs to it is not a thing to allow.
+locked() {
+    exec 9>"$LOCK"
+    if ! flock -n 9; then exec 9>&-; say "FAILED Setup is busy with another operation."; return 1; fi
+    return 0
+}
+unlock() { exec 9>&-; }
+
+# Runs sg-install with the given arguments for a partition operation.
+operate() {
+    locked || return 0
+    err=$(mktemp)
+    if "$SG_INSTALL" "$@" --yes >/dev/null 2>"$err"; then log "done: $*"; say OK
+    else w=$(why "$err"); log "failed: $* (${w:-unknown})"; say "FAILED ${w:-The operation did not complete.}"; fi
+    rm -f "$err"
+    unlock
+}
+
+target="" account="" host="" full="" kbd="" drivers=0
+SG_DRIVERS="${SG_DRIVERS:-/usr/bin/sg-drivers}"
 while IFS= read -r line; do
     case "$line" in
     LIST)
         "$SG_INSTALL" --list 2>/dev/null | while IFS= read -r d; do say "DISK $d"; done
         say END
         ;;
+    LAYOUT)
+        "$SG_INSTALL" --layout 2>/dev/null
+        say END
+        ;;
+    DRIVERS)
+        "$SG_DRIVERS" --list 2>/dev/null
+        say END
+        ;;
+    "NEW "*)
+        set -f; old_ifs=$IFS; IFS=$TAB
+        # shellcheck disable=SC2086  # split on tabs, globbing off
+        set -- ${line#NEW }
+        IFS=$old_ifs; set +f
+        disk=${1:-} start=${2:-} bytes=${3:-}
+        case "$start$bytes" in ''|*[!0-9]*) say "FAILED Choose unallocated space and a size."; continue ;; esac
+        if ! in_layout free "$disk" "$start"; then say "FAILED There is no unallocated space there."; continue; fi
+        operate --new "$disk" --start "$start" --bytes "$bytes"
+        ;;
+    "DELETE "*|"FORMAT "*)
+        op=${line%% *} part=${line#* }
+        if ! in_layout part "$part"; then say "FAILED That partition cannot be used."; continue; fi
+        case "$op" in DELETE) operate --delete "$part" ;; FORMAT) operate --format "$part" ;; esac
+        ;;
     "INSTALL "*)
-        set -f
-        old_ifs=$IFS; IFS=$TAB
+        set -f; old_ifs=$IFS; IFS=$TAB
         # shellcheck disable=SC2086  # split on tabs, globbing off
         set -- ${line#INSTALL }
         IFS=$old_ifs; set +f
-        disk=${1:-} account=${2:-} host=${3:-} full=${4:-}
+        target=${1:-} account=${2:-} host=${3:-} full=${4:-} kbd=${5:-} drivers=${6:-0}
         ;;
     "PASSWORD "*)
         pw=${line#PASSWORD }
         line=""
-        if [ -z "$disk" ] || [ -z "$account" ] || [ -z "$host" ]; then
-            pw=""; say "FAILED Choose a disk and an account first."; continue
+        if [ -z "$target" ] || [ -z "$account" ] || [ -z "$host" ]; then
+            pw=""; say "FAILED Choose where to install and an account first."; continue
         fi
-        # Only a disk the installer itself offers: not the media, nothing too
-        # small, nothing read-only.
-        if ! "$SG_INSTALL" --list 2>/dev/null | cut -f1 | grep -qxF -- "$disk"; then
-            pw=""; say "FAILED $disk cannot be used."; continue
-        fi
-        exec 9>"$LOCK"
-        if ! flock -n 9; then pw=""; say "FAILED Setup is already installing."; exec 9>&-; continue; fi
-        log "installing onto $disk for $account, host name $host"
+        # Only a place the installer itself offers: nothing on the media,
+        # nothing read-only.
+        case "$target" in
+            part:*) where="--target"; arg=${target#part:}; ok=0; in_layout part "$arg" && ok=1 ;;
+            free:*)
+                where="--free"; arg=${target#free:}
+                d=${arg%%:*}; r=${arg#*:}; s=${r%%:*}; n=${r#*:}
+                ok=0; in_layout free "$d" "$s" "$n" && ok=1 ;;
+            *) ok=0 ;;
+        esac
+        if [ "$ok" != 1 ]; then pw=""; say "FAILED Stained Glass OS cannot be installed there."; continue; fi
+        locked || { pw=""; continue; }
+        drivers_flag=""; [ "$drivers" = 1 ] && drivers_flag=--drivers
+        log "installing to $arg for $account, host name $host"
         err=$(mktemp)
-        if printf '%s\n' "$pw" | "$SG_INSTALL" --disk "$disk" --user "$account" --hostname "$host" \
-                ${full:+--full-name "$full"} --password-stdin --yes 2>"$err"; then
-            log "installed onto $disk"
+        if printf '%s\n' "$pw" | "$SG_INSTALL" "$where" "$arg" --user "$account" --hostname "$host" \
+                ${full:+--full-name "$full"} ${kbd:+--keyboard "$kbd"} \
+                ${drivers_flag:+"$drivers_flag"} --password-stdin --yes 2>"$err"; then
+            log "installed to $arg"
             say DONE
         else
-            why=$(grep '^sg-install: ' "$err" | tail -1 | sed 's/^sg-install: //')
-            log "failed: ${why:-unknown}"
-            say "FAILED ${why:-The installation did not complete.}"
+            w=$(why "$err")
+            log "failed: ${w:-unknown}"
+            say "FAILED ${w:-The installation did not complete.}"
         fi
         pw=""
         rm -f "$err"
-        exec 9>&-
+        unlock
         ;;
     REBOOT) log "restarting"; "$SYSTEMCTL" reboot ;;
     POWEROFF) log "shutting down"; "$SYSTEMCTL" poweroff ;;

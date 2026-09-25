@@ -16,10 +16,22 @@ LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 # A live boot (the installation media's "live" entry) shows Setup here instead:
 # the machine's first screen is the installer, as with Windows Setup.
 # SG_SETUP=0 shows the login screen anyway.
+#
+# Setup's "Try Stained Glass OS" closes it and leaves "try" in the result
+# file; then the live account (made at boot by sg-live-setup, no password) is
+# signed in through greetd -- PAM decides, as for anyone. Anything else (Setup
+# cancelled, crashed) ends this greeter, and greetd shows Setup again.
 if grep -qw systemd.volatile=overlay /proc/cmdline 2>/dev/null && [ "${SG_SETUP:-1}" != 0 ] \
         && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-setup64.exe" ]; then
-    exec systemd-cat -t sg-setup -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" \
+    result=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/sg-setup-result.XXXXXX") || exit 1
+    SG_SETUP_RESULT="$result" systemd-cat -t sg-setup -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" \
         "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-setup64.exe"
+    answer=$(cat "$result" 2>/dev/null)
+    rm -f "$result"
+    if [ "$answer" = try ] && getent passwd live >/dev/null; then
+        exec systemd-cat -t sg-login -- env SG_GREET_AUTOLOGIN=live "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start
+    fi
+    exit 0
 fi
 
 # Wine prefers its Wayland driver whenever WAYLAND_DISPLAY is set, and the

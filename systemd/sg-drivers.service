@@ -1,0 +1,20 @@
+# Setup's "Install third-party drivers": the drivers this PC needs from
+# Debian's non-free archive (NVIDIA's, Broadcom's, firmware), installed on the
+# first boot once the network is up -- DKMS builds them for the kernel the
+# machine runs. Only while Setup's request is pending; if the archive cannot
+# be reached, it tries again later and at the next boot.
+[Unit]
+Description=Install this PC's third-party drivers
+ConditionPathExists=/etc/stained-glass/drivers.pending
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-drivers --install-recommended --pending
+TimeoutStartSec=1h
+Restart=on-failure
+RestartSec=10min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,3 +1,38 @@
+sg-session (0.1.0-13) unstable; urgency=medium
+
+  * Setup looks and works like Windows Setup: language and keyboard, Install
+    now, license terms, installation type, account, "Where do you want to
+    install", Ready, the Installing steps and a restart countdown -- full
+    screen over a stained-glass backdrop on the installation media, or in a
+    window from the live desktop. Our own drawing and icon.
+  * A partitioner: drives, partitions and unallocated space with total size,
+    free space and type; Refresh, Delete, Format and New (which makes an EFI
+    system partition first on a disk without one), each applied when chosen,
+    destructive ones behind a warning.
+  * sg-install installs into a partition or unallocated space, not only over
+    a whole disk: a file copy of the read-only live root into a fresh ext4,
+    the kernels into the disk's EFI system partition -- or into a boot
+    partition of its own beside another system's -- root pinned by PARTUUID,
+    and a firmware boot entry. Other partitions and other systems' boot
+    loaders are never touched; the boot menu is shown when Windows is there.
+  * "Try Stained Glass OS": a live session (a passwordless live account made
+    at each live boot in the volatile overlay; greetd and PAM sign it in) with
+    "Install Stained Glass OS" on the desktop and in the Start menu. Setup's
+    socket is now group sgsetup: the login screen and the live session.
+  * Third-party drivers, Windows Update style: sg-drivers finds what a PC
+    needs from Debian's non-free archive -- NVIDIA's driver as Debian's
+    nvidia-detect chooses it (with the kernel and headers DKMS builds for),
+    Broadcom's wl, graphics and Wi-Fi firmware -- and installs it. Setup's
+    "Install third-party drivers for graphics and Wi-Fi (recommended)",
+    checked by default, shows what it found; sg-drivers.service installs
+    them at the first boot once the network is up, and retries. With the
+    NVIDIA driver, nouveau is blacklisted on the kernel command line. With
+    Secure Boot on, Setup makes the machine's own module signing key (root
+    only), points DKMS at it and asks the firmware to enroll it, and shows
+    the one-time password with the enrollment steps on its last page.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 24 Sep 2026 18:40:11 -0700
+
 sg-session (0.1.0-12) unstable; urgency=medium
 
   * Network settings: sg-netctl (CLI, the sg-netd socket service, and a bridge

@@ -372,54 +372,176 @@ Things that bit:
 
 ## Installing: sg-install and Setup
 
-`bin/sg-install` installs the running **live** system onto a disk. The live
-system is the stick booted through its `-live` boot entry
-(`systemd.volatile=overlay`, added by sg-image's `mkosi.postoutput`): `/` is an
-overlay on a tmpfs, and the stick's root partition underneath is mounted
-read-only, so `systemd-repart` can copy it block for block (`CopyBlocks=`)
-with the ESP, and mark it to grow into the rest of the disk. The copy is then
-made a machine of its own: a new ext4 UUID, an empty machine-id, the chosen host
-name, ssh host keys generated on first boot, the live entry and the lab
-account `sguser` removed, and the owner created in `sgwine`, `sg-admins` and
-`sudo`. The source is the pristine read-only root, so nothing from the live
-session reaches the installed machine: the Wine prefix is built on its first
-boot.
+`bin/sg-install` installs the running **live** system. The live system is the
+stick booted through its `-live` boot entry (`systemd.volatile=overlay`, added
+by sg-image's `mkosi.postoutput`): `/` is an overlay on a tmpfs, and the
+stick's root partition underneath is mounted read-only. sg-install mounts that
+partition read-only again and **copies its files** into a fresh ext4 on the
+target (a file copy, so any partition big enough works and nothing else on
+the disk moves). The copy is then made a machine of its own: an empty
+machine-id, the chosen host name, ssh host keys generated on first boot, the
+keyboard layout, the lab account `sguser` removed, and the owner created in
+`sgwine`, `sg-admins` and `sudo`. Nothing from the live session reaches the
+installed machine: the source is the pristine read-only root, and the Wine
+prefix is built on its first boot.
 
-**Setup** is the wizard around it. On a live boot `sg-login-ui` starts
-`sg-setup64.exe` where the login screen would be; it asks `sg-setup-bridge`,
-which asks `sg-installd` -- root, socket-activated, one instance per
-connection -- to run sg-install. The socket (`/run/stained-glass-setup/installd.sock`,
-root:sggreet 0660) exists **only on a live boot**
-(`ConditionKernelCommandLine=`), and only the login screen's account may
-connect: installing is for whoever is at the console with the installation
-media booted, as with Windows Setup. The wizard decides nothing; sg-installd
-checks the disk against sg-install's own list, and sg-install validates
-everything again.
+**Where it installs** -- `--layout` lists every disk it may touch with its
+partitions and unallocated space; `--new`, `--delete` and `--format` change
+them (applied immediately, as in Windows Setup); the install goes to one of:
+
+- `--free DISK:START:SECTORS` -- unallocated space, exactly as `--layout`
+  reported it. On a disk with no EFI system partition, a 512 MB one is made
+  there first and the kernels go in it; on a disk that has one (Windows'),
+  **a 1 GB extended boot loader partition (XBOOTLDR) of our own** is made
+  beside the root, and the kernels go there. gpt-auto mounts it at `/boot`
+  and the ESP at `/efi`; systemd-boot in the ESP finds it on the same disk.
+- `--target PARTITION` -- an existing partition, formatted. The disk must
+  have an ESP (else the Windows message: unable to create or locate a system
+  partition); the kernels go into it under `stained-glass/` (the entry
+  token), so they cannot collide with another Linux's `debian/`.
+- `--disk DISK` -- the whole disk, erased: a new GPT, then as `--free`.
+
+**Booting beside another system.** The root is named on the kernel command
+line (`root=PARTUUID=... rw`, also in `/etc/kernel/cmdline` with the entry
+token in `/etc/kernel/entry-token`, so later kernels match). In a shared ESP,
+`EFI/systemd/` is ours; the firmware fallback `EFI/BOOT/BOOTX64.EFI` is written
+only where nothing is; `loader/loader.conf` only when absent or ours (`#
+Stained Glass OS` first line) -- with `timeout 5` when a Windows boot manager
+is there, so the menu shows (systemd-boot lists Windows itself). efibootmgr adds
+"Stained Glass OS" first in the firmware boot order, as Windows Setup does.
+Nothing else in the ESP, and no partition that was not chosen, is touched.
 
 - **Where the live root is.** systemd 257 does not expose the lower layer at
   `/run/systemd/volatile-root` -- it is `/sysroot` in the initrd's namespace.
   sg-install takes the root-type partition on the ESP's disk (GPT
   auto-discovery, as at boot) and requires the kernel's ext4 state
   (`/proc/fs/ext4/<dev>/options`) not to be `rw`. One superblock, one state.
+  The ESP is an automount: sg-install touches `/boot` and `/efi` before
+  looking for it.
+- **Refused:** the disk it runs from (any operation), MBR disks (UEFI
+  installs to GPT, as Windows'), partitions in use, system/MSR/boot/recovery
+  partitions as the root, a root under 10 GB, formatting a system partition.
 - **The live overlay is small** (under 1 GB on a 4 GB machine) and the Wine
   prefix alone is ~650 MB: sg-image mounts a tmpfs of its own on
   `/var/lib/stained-glass` on live boots.
+- **`SG_INSTALL_DISKS`** (tests only) replaces disk discovery with the given
+  devices -- loop devices, for trying `--layout`/`--new`/`--delete` on
+  scratch files. Never point it at a real disk.
+- **`userdel -r` exits non-zero after removing an account** with no home or
+  mail spool; sg-install checks that the account is gone instead.
+- **After mkfs, `lsblk` is stale until udev re-probes**: sg-install triggers a
+  `change` event, or Setup would show a just-formatted partition as empty.
+
+**Setup** is the wizard around it, and looks like Windows Setup: language and
+keyboard, Install now, license terms, installation type, account ("Who's going
+to use this PC?"), "Where do you want to install Stained Glass OS?" (the
+partitioner: Refresh, Delete, Format, New, with Windows-like warnings), Ready,
+Installing (the step list and a progress bar under "1 Collecting information /
+2 Installing"), then a 15-second restart countdown. Our own drawing: a
+stained-glass backdrop, the four-pane mark, and its icon (`setup/make-icon.py`,
+generated at build time into the exe's resources).
+
+On a live boot `sg-login-ui` starts `sg-setup64.exe` full screen where the
+login screen would be; it asks `sg-setup-bridge`, which asks `sg-installd` --
+root, socket-activated, one instance per connection -- to run sg-install.
+The socket (`/run/stained-glass-setup/installd.sock`, root:**sgsetup** 0660)
+exists **only on a live boot** (`ConditionKernelCommandLine=`). Group
+`sgsetup` is the login screen's account and the live session's. The wizard
+decides nothing; sg-installd checks each request against sg-install's own
+`--layout`, and sg-install validates everything again.
+
+**The live session ("Try Stained Glass OS", the hybrid).** `sg-live.service`
+(live boots only) runs `setup/sg-live-setup` before greetd: it creates the
+account `live` -- no password, groups sgwine, sgsetup, sg-admins -- in the
+volatile overlay, so it is never on the stick's root (sg-install refuses if it
+ever is), and puts "Install Stained Glass OS" (`Z:\usr\libexec\stained-glass\sg-setup64.exe`)
+on the all-users desktop and Start menu, as SYSTEM through `sg-mklnk.js`.
+Setup's Try link sends `TRY`; the bridge writes `try` to `$SG_SETUP_RESULT`;
+`sg-login-ui` then runs `sg-greet-bridge` with `SG_GREET_AUTOLOGIN=live`,
+which asks greetd for that account's session with no greeter -- **only on a
+live boot and only for `live`** (the login gate checks the refusal), and PAM
+still decides (`nullok`). Logging out returns to Setup. The shortcut starts
+sg-setup64.exe without a bridge; it then starts one itself
+(`\\?\unix\usr\bin\systemd-cat -t sg-setup sg-setup-bridge "wine sg-setup64.exe --windowed"`),
+which runs it again, windowed (`SG_SETUP_BRIDGED` tells them apart).
+
 - **Never put a socket under `/run/stained-glass`.** It is sg-wineserver's
   `RuntimeDirectory`: systemd chowned the installer's socket to sgsystem, and
   would delete it whenever that service stops. Setup's is in
   `/run/stained-glass-setup`; the install gate checks its owner and mode.
-- **`userdel -r` exits non-zero after removing an account** with no home or
-  mail spool; sg-install checks that the account is gone instead.
 - **The wizard acts on Enter/Escape release, for a press seen on the same
-  page**, and "Ready to install" opens with focus on Back: a key held on one
-  page must never answer "erase this disk". It logs each page change
-  (`sg-setup: page <name>`, journal tag `sg-setup`), which is what the gates
-  wait on.
+  page**; "Ready to install" opens with focus on Back; destructive warnings
+  open on Cancel. A key held on one page must never answer "erase this". It
+  logs each page change (`sg-setup: page <name>`), the rows it selects
+  (`sg-setup: selected Drive 0 Partition 2`) and layouts, journal tag
+  `sg-setup`, which is what the gates wait on.
 - **Gates:** `make test-setup` runs the real wizard, bridge and sg-installd on
-  this machine under xvfb, with a stand-in for sg-install; sg-image's
-  `make install-test` boots the stick in QEMU, drives Setup through the VM's
-  keyboard onto a blank disk, restarts, and runs the boot gate on the
-  installed disk as the new owner.
+  this machine under xvfb, with a stand-in sg-install that keeps a Windows-like
+  layout: license acceptance, password mismatch, preselection, New, Delete
+  through its warning, nothing else touched, Back on Ready, the arguments and
+  password on stdin, restart, and Try (screenshots in
+  `build/artifacts-setup/`). sg-image's `make install-test` runs two scenarios
+  in QEMU: **blank** (Try -> the live desktop's session gate -> Setup from the
+  desktop shortcut, windowed -> New on a blank disk -> install) and
+  **dualboot** (a Windows-shaped disk; install into its unallocated space; the
+  Windows boot manager, MSR and data partitions and their table entries
+  byte-identical afterwards), each followed by the full boot gate on the
+  installed disk alone.
+
+## Third-party drivers: sg-drivers
+
+`bin/sg-drivers` (root) is Windows Update's "optional drivers" / Ubuntu's
+"additional drivers": what this PC needs from Debian's **non-free** archive
+(sg-image's apt sources carry `main contrib non-free non-free-firmware`), and
+installing it. **It is the interface for the Control Panel's future drivers
+page** -- call it through the elevation broker, parse its lines:
+
+| Command | Output |
+|---|---|
+| `sg-drivers --list` | `DEVICE <slot>\t<vendor:device>\t<what>\t<packages or ->\t<note>` per device that wants something |
+| `sg-drivers --recommended` | the packages still to install, space separated, one line (empty: none) |
+| `sg-drivers --install-recommended [--pending]` | installs them with apt (stderr: progress); exit 0 when done or nothing to do |
+| `sg-drivers --status` | `STATUS pending|none`, then `INSTALLED <package>` lines |
+| `sg-drivers --secure-boot-enroll [--root DIR]` | with Secure Boot on: `MOKPASSWORD <8 digits>` |
+
+- **NVIDIA: Debian's `nvidia-detect` decides** (in the image; it carries
+  Debian's per-driver ID lists and knows the release): `nvidia-driver` for
+  Maxwell and newer, the Tesla series where it says so, and *nothing* for a
+  card no trixie driver supports (Kepler and older -- 470/390 stopped at
+  bookworm), which keeps nouveau. With a driver: `firmware-misc-nonfree`
+  and `linux-image-amd64 linux-headers-amd64` (DKMS builds for the headers
+  it has; the pair keeps kernel and headers in step), and
+  `modprobe.blacklist=nouveau` on this root's boot entries and
+  `/etc/kernel/cmdline` (Debian's package blacklists it in modprobe.d; an
+  initrd built before it would not). Without the driver nouveau is untouched.
+- **Firmware by vendor**: AMD graphics `firmware-amd-graphics`, Intel
+  graphics `firmware-intel-graphics`, Wi-Fi `firmware-iwlwifi` (Intel),
+  `-realtek`, `-atheros` (Qualcomm too), `-mediatek`, `-brcm80211`, and
+  `broadcom-sta-dkms` only for the Broadcom chips only wl runs.
+- **When**: Setup's "Install third-party drivers for graphics and Wi-Fi
+  (recommended)" (checked by default, on the installation type page, which
+  shows what the survey found) makes sg-install write
+  `/etc/stained-glass/drivers.pending`; `sg-drivers.service` installs at the
+  first boot after `network-online.target` and removes it, and retries every
+  10 minutes and at the next boot while the archive is unreachable. **Not
+  inside Setup**: DKMS and a kernel upgrade want the running system and its
+  real boot partitions, not a chroot of a system that has never booted.
+- **Secure Boot**: with it on (the `SecureBoot` EFI variable), sg-install
+  runs `--secure-boot-enroll --root` on the new system: an RSA key made on
+  the spot (`/var/lib/dkms/mok.key`, 0600; certificate `mok.pub`, DER),
+  `/etc/dkms/framework.conf.d/50-stained-glass-mok.conf` pointing DKMS at it,
+  and `mokutil --import` with a hash of an 8-digit one-time password.
+  Setup's last page shows the password and the MokManager steps, and does
+  not restart by itself. Off: nothing is made. **Open:** the image's own
+  boot chain is not signed (systemd-boot without shim), so the media does
+  not boot with Secure Boot on yet; this path is gated with the state forced.
+- **Test inputs**: `SG_DRIVERS_PCI` (a file of `slot vendor device class`
+  lines instead of the PCI bus), `SG_DRIVERS_NVIDIA_DETECT`, `SG_SECUREBOOT`,
+  `SG_DRIVERS_ENTRIES` (where the boot entries are). Gates:
+  `test/drivers-test.sh` (in `make test`'s lint block) and sg-image's
+  install gate (the real nvidia-detect with fake devices, `apt-get -s` of the
+  NVIDIA set against the archive, the forced Secure Boot enrollment, the
+  first-boot service settling).
 
 ## Network settings: sg-netctl and sg-netd
 

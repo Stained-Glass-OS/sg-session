@@ -1,0 +1,216 @@
+#!/bin/sh
+# Third-party drivers: what this PC needs from Debian's non-free archive, and
+# installing it -- Windows Update's optional drivers, Ubuntu's "additional
+# drivers". Root.
+#
+#   sg-drivers --list
+#       One line per device that wants something:
+#       DEVICE <slot>\t<vendor:device>\t<what it is>\t<packages or ->\t<note>
+#   sg-drivers --recommended
+#       The packages to install, space separated, on one line (empty: none).
+#   sg-drivers --install-recommended [--pending]
+#       Install them with apt, on the running system: DKMS builds the NVIDIA
+#       and Broadcom drivers for the kernel it runs, and a kernel upgrade
+#       needs the real boot partitions -- so Setup never does this into the
+#       system it is making; sg-drivers.service does it at the first boot.
+#       With --pending, only if /etc/stained-glass/drivers.pending exists
+#       (Setup's "install third-party drivers"), which is removed once done
+#       and kept for the next boot if the archive cannot be reached. With the
+#       NVIDIA driver, modprobe.blacklist=nouveau goes on the kernel command
+#       line; without it, nouveau stays the driver.
+#   sg-drivers --secure-boot-enroll [--root DIR]
+#       With Secure Boot on: make this machine's module signing key (MOK) for
+#       DKMS, and ask the firmware to enroll it at the next boot. Prints
+#       "MOKPASSWORD <password>": the one-time password the enrollment screen
+#       asks for. With Secure Boot off, prints nothing and does nothing.
+#   sg-drivers --status
+#       STATUS pending|none and the drivers packages installed.
+#
+# NVIDIA: Debian's nvidia-detect chooses the package from the device id
+# (nvidia-driver, the Tesla series, or nothing for a card no driver in this
+# release supports -- which keeps the open nouveau driver). Firmware for AMD
+# and Intel graphics and for Wi-Fi comes from non-free-firmware, by vendor.
+#
+# For tests: SG_DRIVERS_PCI names a file of "slot vendor device class" lines
+# (hex, e.g. "0000:01:00.0 10de 1c82 030000") read instead of the PCI bus;
+# SG_DRIVERS_NVIDIA_DETECT names the nvidia-detect to run; SG_SECUREBOOT=1|0
+# overrides the firmware's Secure Boot state.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -eu
+PATH="$PATH:/usr/sbin:/sbin"
+ROOT="" MODE="" PENDING=0
+EFIVARS=/sys/firmware/efi/efivars
+SB_VAR="$EFIVARS/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+
+die() { printf 'sg-drivers: %s\n' "$*" >&2; exit 1; }
+say() { printf 'sg-drivers: %s\n' "$*" >&2; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --list|--recommended|--install-recommended|--secure-boot-enroll|--status) MODE=${1#--} ;;
+        --root) ROOT=${2:?}; shift ;;
+        --pending) PENDING=1 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+[ -n "$MODE" ] || die "usage: sg-drivers --list | --recommended | --install-recommended [--pending] | --secure-boot-enroll [--root DIR] | --status"
+[ -z "$ROOT" ] || [ -d "$ROOT/etc" ] || die "$ROOT is not a system root"
+PENDING_FILE="$ROOT/etc/stained-glass/drivers.pending"
+
+# Run a command in the system being set up (chrooted when --root: reading
+# only, and making the Secure Boot key).
+in_root() { if [ -n "$ROOT" ]; then chroot "$ROOT" "$@"; else "$@"; fi; }
+# shellcheck disable=SC2016  # ${Status} is dpkg-query's, not the shell's
+installed() { in_root dpkg-query -W -f '${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
+
+# --- the devices ---------------------------------------------------------------
+pci_devices() {
+    if [ -n "${SG_DRIVERS_PCI:-}" ]; then grep -v '^#' "$SG_DRIVERS_PCI" | tr '[:upper:]' '[:lower:]'; return; fi
+    for d in /sys/bus/pci/devices/*; do
+        [ -r "$d/vendor" ] || continue
+        printf '%s %s %s %s\n' "${d##*/}" "$(sed 's/^0x//' "$d/vendor")" "$(sed 's/^0x//' "$d/device")" \
+            "$(sed 's/^0x//' "$d/class")"
+    done
+}
+
+# Broadcom Wi-Fi chips that only Broadcom's own driver (wl) runs; the rest
+# use brcmfmac with firmware (Debian's wiki, "wl").
+BROADCOM_STA="4311 4312 4313 4315 4327 4328 4329 432a 432b 432c 432d 4331 4353 4357 4358 4359 4360 43a0 43b1 a8d8 a99d"
+KERNEL_PAIR="linux-image-amd64 linux-headers-amd64"
+
+nvidia_package() {   # device id -> the package nvidia-detect recommends, "" for none, "?" unknown
+    if [ -n "${SG_DRIVERS_NVIDIA_DETECT:-}" ]; then out=$("$SG_DRIVERS_NVIDIA_DETECT" "10de$1" 2>/dev/null || :)
+    elif [ -x "$ROOT/usr/bin/nvidia-detect" ]; then out=$(in_root /usr/bin/nvidia-detect "10de$1" 2>/dev/null || :)
+    else echo "?"; return; fi
+    printf '%s\n' "$out" | awk 'found { print $1; exit } /It is recommended to install the/ { found = 1 }'
+}
+
+# DEVICE lines, as --list prints them.
+survey() {
+    pci_devices | while read -r slot vendor device class; do
+        base=$(printf '%s' "$class" | cut -c1-2); sub=$(printf '%s' "$class" | cut -c1-4)
+        what="" pkgs="" note=""
+        case "$vendor:$base" in
+            10de:03)
+                what="NVIDIA graphics"
+                p=$(nvidia_package "$device")
+                case "$p" in
+                    "?") pkgs="nvidia-detect"; note="the driver is chosen once Debian's nvidia-detect is installed" ;;
+                    "") pkgs="-"; note="no NVIDIA driver in this Debian release supports it: the open-source driver (nouveau) is used" ;;
+                    *) pkgs="$p firmware-misc-nonfree $KERNEL_PAIR"; note="NVIDIA's driver, built for this kernel by DKMS" ;;
+                esac ;;
+            1002:03) what="AMD graphics"; pkgs="firmware-amd-graphics"; note="firmware" ;;
+            8086:03) what="Intel graphics"; pkgs="firmware-intel-graphics"; note="firmware" ;;
+            *)
+                case "$vendor:$sub" in
+                    8086:0280) what="Intel Wi-Fi"; pkgs="firmware-iwlwifi"; note="firmware" ;;
+                    10ec:0280|10ec:0200) what="Realtek network"; pkgs="firmware-realtek"; note="firmware" ;;
+                    168c:0280|17cb:0280) what="Qualcomm Atheros Wi-Fi"; pkgs="firmware-atheros"; note="firmware" ;;
+                    14c3:0280) what="MediaTek Wi-Fi"; pkgs="firmware-mediatek"; note="firmware" ;;
+                    14e4:0280)
+                        what="Broadcom Wi-Fi"
+                        case " $BROADCOM_STA " in
+                            *" $device "*) pkgs="broadcom-sta-dkms $KERNEL_PAIR"; note="Broadcom's driver, built by DKMS" ;;
+                            *) pkgs="firmware-brcm80211"; note="firmware" ;;
+                        esac ;;
+                esac ;;
+        esac
+        [ -n "$what" ] || continue
+        printf 'DEVICE %s\t%s:%s\t%s\t%s\t%s\n' "$slot" "$vendor" "$device" "$what" "${pkgs:--}" "$note"
+    done
+}
+
+# The packages still to install, one line.
+recommended() {
+    survey | cut -f4 | tr ' ' '\n' | grep -v '^-\?$' | sort -u | while read -r p; do
+        installed "$p" || printf '%s\n' "$p"
+    done | tr '\n' ' ' | sed 's/ $//'
+}
+
+secure_boot_on() {
+    case "${SG_SECUREBOOT:-}" in 1) return 0 ;; 0) return 1 ;; esac
+    [ -r "$SB_VAR" ] || return 1
+    [ "$(od -An -t u1 -j4 -N1 "$SB_VAR" | tr -d ' ')" = 1 ]
+}
+
+# modprobe.blacklist=nouveau on this system's kernel command line: its boot
+# entries (those naming this root) and /etc/kernel/cmdline for later kernels.
+# Debian's package blacklists it in modprobe.d; the command line covers an
+# initrd built before the driver came.
+keep_nouveau_away() {
+    cl="$ROOT/etc/kernel/cmdline"
+    [ -f "$cl" ] || return 0
+    grep -q 'modprobe.blacklist=nouveau' "$cl" || sed -i 's/$/ modprobe.blacklist=nouveau/' "$cl"
+    root_id=$(grep -o 'root=PARTUUID=[^ ]*' "$cl" || :)
+    [ -n "$root_id" ] || return 0
+    ls /boot /efi >/dev/null 2>&1 || :
+    for dir in ${SG_DRIVERS_ENTRIES:-/boot/loader/entries /efi/loader/entries}; do
+      for e in "$dir"/*.conf; do
+        [ -f "$e" ] || continue
+        grep -q "^options .*$root_id" "$e" || continue
+        grep -q 'modprobe.blacklist=nouveau' "$e" || sed -i 's/^\(options .*\)$/\1 modprobe.blacklist=nouveau/' "$e"
+      done
+    done
+}
+
+case "$MODE" in
+list) survey ;;
+recommended) recommended; echo ;;
+status)
+    if [ -f "$PENDING_FILE" ]; then echo "STATUS pending"; else echo "STATUS none"; fi
+    for p in $(survey | cut -f4 | tr ' ' '\n' | grep -v '^-\?$' | sort -u); do
+        installed "$p" && printf 'INSTALLED %s\n' "$p"
+    done
+    ;;
+secure-boot-enroll)
+    secure_boot_on || exit 0
+    command -v mokutil >/dev/null || die "mokutil is not installed"
+    command -v openssl >/dev/null || die "openssl is not installed"
+    d="$ROOT/var/lib/dkms"
+    mkdir -p "$d" "$ROOT/etc/dkms/framework.conf.d"
+    chmod 755 "$d"
+    host=$(cat "$ROOT/etc/hostname" 2>/dev/null || echo stained-glass)
+    if [ ! -s "$d/mok.key" ]; then
+        # This machine's own key, made here and never anywhere else: DKMS
+        # signs the modules it builds with it, and the firmware trusts it once
+        # the owner has enrolled it.
+        (umask 077; openssl req -new -x509 -nodes -newkey rsa:2048 -days 36500 -outform DER \
+            -subj "/CN=Stained Glass OS $host DKMS module signing/" \
+            -keyout "$d/mok.key" -out "$d/mok.pub" >/dev/null 2>&1) || die "cannot make the module signing key"
+        chmod 600 "$d/mok.key"; chmod 644 "$d/mok.pub"
+    fi
+    printf 'mok_signing_key="/var/lib/dkms/mok.key"\nmok_certificate="/var/lib/dkms/mok.pub"\n' \
+        > "$ROOT/etc/dkms/framework.conf.d/50-stained-glass-mok.conf"
+    # A one-time password for the enrollment screen: digits, so it types the
+    # same on any keyboard layout.
+    pw=$(od -An -N8 -tu1 /dev/urandom | tr -s ' ' '\n' | grep . | awk '{ printf "%d", $1 % 10 }')
+    hash=$(mktemp)
+    mokutil --generate-hash="$pw" > "$hash" 2>/dev/null || { rm -f "$hash"; die "cannot make the enrollment password"; }
+    mokutil --import "$d/mok.pub" --hash-file "$hash" >/dev/null 2>&1 || { rm -f "$hash"; die "the firmware did not accept the key for enrollment"; }
+    rm -f "$hash"
+    printf 'MOKPASSWORD %s\n' "$pw"
+    ;;
+install-recommended)
+    [ -z "$ROOT" ] || die "drivers are installed on the running system, not into --root"
+    if [ "$PENDING" = 1 ] && [ ! -f "$PENDING_FILE" ]; then exit 0; fi
+    export DEBIAN_FRONTEND=noninteractive
+    if survey | cut -f4 | grep -qw nvidia-detect; then
+        in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
+        in_root apt-get -q -y install nvidia-detect >/dev/null || die "cannot install nvidia-detect"
+    fi
+    pkgs=$(recommended)
+    if [ -z "$pkgs" ]; then
+        say "this PC needs no third-party drivers"
+    else
+        say "installing: $pkgs"
+        in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
+        # shellcheck disable=SC2086  # a list of package names
+        in_root apt-get -q -y install $pkgs || die "installing $pkgs failed"
+        case " $pkgs " in *" nvidia-"*"-driver "*|*" nvidia-driver "*) keep_nouveau_away ;; esac
+        say "installed: $pkgs"
+    fi
+    rm -f "$PENDING_FILE"
+    ;;
+esac

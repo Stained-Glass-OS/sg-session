@@ -1,0 +1,19 @@
+# The live session's account and the "Install Stained Glass OS" shortcuts.
+# Live boots only (the installation media's "live" entry): the account is made
+# in the volatile overlay, so it never reaches the media's root or a machine
+# installed from it.
+[Unit]
+Description=Stained Glass OS live session
+ConditionKernelCommandLine=systemd.volatile=overlay
+After=sg-prefix-init.service sg-wineserver.service systemd-user-sessions.service
+Wants=sg-wineserver.service
+Before=greetd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/stained-glass/sg-live-setup
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

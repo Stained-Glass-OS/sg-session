@@ -21,6 +21,11 @@ override_dh_installsystemd:
 	dh_installsystemd sg-installd.socket
 	# Network settings: the socket everywhere, the service per request.
 	dh_installsystemd sg-netd.socket
+	# The live session's account and shortcuts: enabled, runs on live boots only.
+	dh_installsystemd --no-start sg-live.service
+	# Third-party drivers at the first boot: runs only while Setup's request
+	# is pending (ConditionPathExists); never started by the package.
+	dh_installsystemd --no-start sg-drivers.service
 	# Remote Desktop is off by default, as on Windows.
 	dh_installsystemd --no-enable --no-start sg-rdpd.service
 	# The timer is enabled and started. The service it runs is installed but

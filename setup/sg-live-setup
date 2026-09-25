@@ -1,0 +1,51 @@
+#!/bin/sh
+# The live session: "Try Stained Glass OS" on the installation media.
+#
+# Run as root at every live boot (sg-live.service, which exists only on one:
+# ConditionKernelCommandLine=systemd.volatile=overlay), before the login
+# screen. It makes the live account -- no password, in the volatile overlay,
+# so it is gone at the next boot and never on the media's root, which is what
+# Setup copies -- and puts "Install Stained Glass OS" on every desktop and in
+# the Start menu, pointing at Setup, which opens in a window from there.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+LIVE_USER=live
+
+grep -qw systemd.volatile=overlay /proc/cmdline || { sg_log "not a live boot: nothing to do"; exit 0; }
+[ "$(findmnt -n -o FSTYPE /)" = overlay ] || { sg_log "the root is not the live overlay: refusing"; exit 1; }
+
+if ! getent passwd "$LIVE_USER" >/dev/null; then
+    groups=""
+    for g in "$SG_WINE_GROUP" sgsetup sg-admins; do
+        getent group "$g" >/dev/null && groups="${groups:+$groups,}$g"
+    done
+    useradd -m -s /bin/bash -c "Stained Glass OS Live" ${groups:+-G "$groups"} "$LIVE_USER" \
+        || { sg_log "cannot create the live account"; exit 1; }
+    # No password: the login screen signs it in when asked to "Try" (PAM
+    # decides, with nullok), on this boot only.
+    passwd -d "$LIVE_USER" >/dev/null || { sg_log "cannot clear the live account's password"; exit 1; }
+    sg_log "made the live account"
+fi
+
+# The shortcuts, in the machine's Windows system as SYSTEM: the all-users
+# desktop and Start menu. The prefix is on a tmpfs on a live boot, like
+# everything else here.
+systemctl is-active --quiet sg-wineserver.service || { sg_log "no Windows system to add the shortcuts to"; exit 0; }
+# shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+    SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" sh -c '
+    . "$SG_LIB/sg-common.sh"; sg_wine_env
+    js=$(winepath -w "$SG_LIB/sg-mklnk.js")
+    target="Z:\\usr\\libexec\\stained-glass\\sg-setup64.exe"
+    for dir in "C:\\users\\Public\\Desktop" "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"; do
+        mkdir -p "$(winepath -u "$dir")"
+        wine cscript //nologo "$js" "$dir\\Install Stained Glass OS.lnk" "$target" \
+            "Install Stained Glass OS on this PC" >/dev/null 2>&1 \
+            || printf "sg-live-setup: could not create the shortcut in %s\n" "$dir" >&2
+    done'
+sg_log "added the Install Stained Glass OS shortcuts"
+exit 0

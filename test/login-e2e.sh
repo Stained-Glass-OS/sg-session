@@ -79,6 +79,22 @@ case "$out" in *"wrong password"*) pass "a wrong password reaches greetd and is 
 case "$out" in *STARTED*) fail "a session started after a wrong password" ;;
     *) pass "no session starts after a wrong password" ;; esac
 
+# The live session's automatic sign-in ("Try Stained Glass OS") is only for a
+# live boot. This machine is not one: the bridge must not even ask greetd.
+if ! grep -qw systemd.volatile=overlay /proc/cmdline; then
+    rm -f "$T/greetd.sock" "$T/stub.out"
+    "$HERE/build/greetd-stub" "$T/greetd.sock" PASS >"$T/stub.out" 2>"$T/stub.err" &
+    SP=$!
+    _w=0; while [ ! -S "$T/greetd.sock" ] && [ $_w -lt 50 ]; do sleep 0.1; _w=$((_w+1)); done
+    if GREETD_SOCK="$T/greetd.sock" SG_GREET_AUTOLOGIN=live "$HERE/build/sg-greet-bridge" /usr/bin/sg-session-start \
+            2>"$T/auto.err"; then
+        fail "automatic sign-in succeeded on a machine that is not a live boot"
+    elif grep -q create_session "$T/stub.err"; then
+        fail "automatic sign-in asked greetd for a session on a machine that is not a live boot"
+    else pass "automatic sign-in (the live session) is refused off a live boot"; fi
+    kill "$SP" 2>/dev/null; wait "$SP" 2>/dev/null; SP=""
+fi
+
 echo
 if [ "$RC" -eq 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
 exit "$RC"

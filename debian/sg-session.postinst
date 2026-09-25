@@ -85,6 +85,11 @@ case "$1" in
                     --disabled-password sggreet
         fi
         adduser sggreet "$SG_WINE_GROUP" >/dev/null 2>&1 || true
+        # Setup's installer service answers this group (its socket exists
+        # only on a live boot): the login screen, where Setup runs full
+        # screen, and the live session's account, made at boot.
+        getent group sgsetup >/dev/null || addgroup --system sgsetup >/dev/null
+        adduser sggreet sgsetup >/dev/null 2>&1 || true
         getent group render >/dev/null && adduser sggreet render >/dev/null 2>&1 || true
 
         # Remote Desktop's network-facing side runs as this account and nothing

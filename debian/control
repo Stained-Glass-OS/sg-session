@@ -4,7 +4,8 @@ Priority: optional
 Maintainer: Stained Glass OS <ke7oxh@gmail.com>
 Build-Depends: debhelper-compat (= 13), libpam0g-dev, pkgconf, zlib1g-dev, libssl-dev,
  gcc-mingw-w64-x86-64, gcc-mingw-w64-i686,
- freerdp3-dev, libwayland-dev, libwayland-bin, libxkbcommon-dev
+ freerdp3-dev, libwayland-dev, libwayland-bin, libxkbcommon-dev,
+ python3:any
 Standards-Version: 4.7.0
 Homepage: https://github.com/Stained-Glass-OS/sg-session
 Rules-Requires-Root: no

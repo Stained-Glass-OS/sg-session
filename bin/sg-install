@@ -2,29 +2,63 @@
 # Install Stained Glass OS from the running live system onto a disk.
 #
 #   sg-install --list
-#       Disks it could install to, one per line: PATH<TAB>BYTES<TAB>MODEL.
-#   sg-install --disk DEV --user NAME --password-stdin [--full-name TEXT]
-#              [--hostname NAME] [--keep-lab-user] --yes
-#       Erase DEV and install. The password is read from stdin (one line).
+#       Whole disks it could erase and install to: PATH<TAB>BYTES<TAB>MODEL.
+#   sg-install --layout
+#       Every disk it may touch, with its partitions and unallocated space, in
+#       disk order, for Setup's "Where do you want to install" page:
+#         DISK <path>\t<bytes>\t<model>\t<gpt|dos|none>
+#         PART <path>\t<disk>\t<number>\t<bytes>\t<free bytes|->\t<kind>\t<fstype>\t<label>
+#         FREE <disk>\t<start sector>\t<sectors>\t<bytes>
+#       kind: system (EFI system partition), msr, recovery, boot (an extended
+#       boot loader partition), primary.
+#   sg-install --new DISK --start SECTOR --bytes N --yes
+#       Create a partition in unallocated space. On a disk with no EFI system
+#       partition, one is made first, as Windows Setup does.
+#   sg-install --delete PARTITION --yes
+#   sg-install --format PARTITION --yes
+#   sg-install (--target PARTITION | --free DISK:START:SECTORS | --disk DISK)
+#              --user NAME --password-stdin [--full-name TEXT]
+#              [--hostname NAME] [--keyboard LAYOUT] [--drivers]
+#              [--keep-lab-user] --yes
+#       Install: into an existing partition (formatted), into unallocated space
+#       (partitions made there), or over a whole disk (erased). The password is
+#       read from stdin, one line. --drivers: install the third-party
+#       drivers this PC needs (sg-drivers) at its first boot; with Secure Boot
+#       on, make its module signing key now and ask the firmware to enroll it,
+#       printing "MOKPASSWORD <password>" for Setup to show.
 #
 # The live system is the installer: booted from a stick with the "live" entry
 # (systemd.volatile=overlay), its root partition is mounted read-only under a
-# tmpfs overlay, so systemd-repart copies it -- and the ESP -- block for block
-# onto the target, and marks the root to grow into the rest of the disk on
-# first boot. Then the copy is made the owner's: a fresh machine identity, the
-# owner's administrator account, the hostname, no lab account, no live entry.
+# tmpfs overlay. Its files are copied into a fresh ext4 on the target, and the
+# kernel and boot loader into the target disk's EFI system partition -- or,
+# where that belongs to another operating system, into an extended boot loader
+# partition of our own beside it. Nothing that was not chosen is touched:
+# other partitions, and other systems' boot loaders, stay as they were.
 #
 # Progress goes to stdout as "PROGRESS <percent> <text>" lines, for the setup
 # UI; errors to stderr, exit status non-zero.
 set -eu
 
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
-MIN_BYTES=$((16 * 1024 * 1024 * 1024))
+PATH="$PATH:/usr/sbin:/sbin"
+GIB=$((1024 * 1024 * 1024))
+MIB=$((1024 * 1024))
+MIN_ROOT_BYTES=$((10 * GIB))
+ESP_BYTES=$((512 * MIB))
+XBOOT_BYTES=$((1 * GIB))
+MIN_DISK_BYTES=$((1 * GIB))
 ESP_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
-ROOT_TYPE=4f68bce3-e8cd-4db1-96e7-fbcaf984b709   # root, x86-64
+ROOT_TYPE=4f68bce3-e8cd-4db1-96e7-fbcaf984b709    # root, x86-64
+XBOOT_TYPE=bc13c2ff-59e6-4262-a352-b275fd6f7172   # extended boot loader
+MSR_TYPE=e3c9e316-0b5c-4db8-817d-f92df00215ae
+WINRE_TYPE=de94bba4-06d1-4d40-a16a-bfd50179d6ac
+LINUX_TYPE=0fc63daf-8483-4772-8e79-3d69d8477de4
+TOKEN_SHARED=stained-glass     # our directory in an EFI partition we share
+TAB=$(printf '\t')
 
 die() { printf 'sg-install: %s\n' "$*" >&2; exit 1; }
 progress() { printf 'PROGRESS %s %s\n' "$1" "$2"; }
+lower() { tr '[:upper:]' '[:lower:]'; }
 
 # --- where the live system runs from ---------------------------------------
 # With systemd.volatile=overlay, / is an overlay on a tmpfs whose lower layer
@@ -33,6 +67,8 @@ progress() { printf 'PROGRESS %s %s\n' "$1" "$2"; }
 # same GPT auto-discovery that found it at boot); the kernel's ext4 state says
 # whether it is mounted, and how.
 source_esp() {
+    # The ESP is an automount: touch it so it is really there to find.
+    ls /boot /efi >/dev/null 2>&1 || :
     for m in /boot /efi /boot/efi; do
         s=$(findmnt -n -o SOURCE,FSTYPE "$m" 2>/dev/null | awk '$2 == "vfat" {print $1}')
         [ -n "$s" ] && { echo "$s"; return; }
@@ -61,7 +97,15 @@ boot_disk() {
     done
 }
 
-list_disks() {
+# Disks the installer may touch: whole, writable, not the one it runs from.
+# SG_INSTALL_DISKS (tests only: loop devices) replaces the discovery.
+candidate_disks() {
+    if [ -n "${SG_INSTALL_DISKS:-}" ]; then
+        for d in $SG_INSTALL_DISKS; do
+            printf '%s\t%s\ttest disk\n' "$d" "$(lsblk -d -n -b -o SIZE "$d")"
+        done
+        return
+    fi
     boot=$(boot_disk)
     # Raw output, fields read in order -- never eval'd: the model string comes
     # from the hardware. lsblk escapes spaces in it as \x20.
@@ -70,20 +114,194 @@ list_disks() {
         [ "$ro" = 0 ] || continue
         case "$dev" in /dev/loop*|/dev/ram*|/dev/zram*|/dev/sr*) continue ;; esac
         [ "$dev" != "$boot" ] || continue
-        [ "$bytes" -ge "$MIN_BYTES" ] || continue
+        [ "$bytes" -ge "$MIN_DISK_BYTES" ] || continue
         printf '%s\t%s\t%s\n' "$dev" "$bytes" "$(printf '%s' "${model:-disk}" | sed 's/\\x20/ /g')"
     done
 }
+is_candidate() { candidate_disks | cut -f1 | grep -qxF -- "$1"; }
+
+list_disks() {
+    candidate_disks | while IFS="$TAB" read -r dev bytes model; do
+        [ "$bytes" -ge $((MIN_ROOT_BYTES + ESP_BYTES + 2 * MIB)) ] || continue
+        printf '%s\t%s\t%s\n' "$dev" "$bytes" "$model"
+    done
+}
+
+# --- a disk's partition table ------------------------------------------------
+sector_size() { blockdev --getss "$1"; }
+disk_label() {
+    l=$(sfdisk -d "$1" 2>/dev/null | sed -n 's/^label: //p')
+    echo "${l:-none}"
+}
+# One line per partition, in start order: NUMBER START SECTORS TYPE UUID
+parts_of() {
+    sfdisk -d "$1" 2>/dev/null | awk '
+        / : start=/ {
+            dev = $1; n = dev; sub(/.*[^0-9]/, "", n)
+            start = ""; size = ""; type = ""; uuid = ""
+            line = $0; sub(/^[^:]*: */, "", line)
+            k = split(line, f, /, */)
+            for (i = 1; i <= k; i++) {
+                split(f[i], kv, /= */)
+                gsub(/ /, "", kv[1]); gsub(/[ "]/, "", kv[2])
+                if (kv[1] == "start") start = kv[2]
+                else if (kv[1] == "size") size = kv[2]
+                else if (kv[1] == "type") type = tolower(kv[2])
+                else if (kv[1] == "uuid") uuid = tolower(kv[2])
+            }
+            print n, start, size, type, uuid
+        }' | sort -n -k2
+}
+part_path() {   # DISK NUMBER
+    lsblk -n -r -o PATH,PARTN "$1" | awk -v n="$2" '$2 == n {print $1; exit}'
+}
+part_number() { lsblk -n -r -o PARTN "$1" | head -1; }
+part_type() { lsblk -n -o PARTTYPE "$1" | head -1 | lower; }
+# The usable sectors of a disk: FIRST LAST (GPT's; a blank disk's as GPT
+# would make them).
+usable_range() {
+    ss=$(sector_size "$1")
+    total=$(( $(blockdev --getsize64 "$1") / ss ))
+    first=$(sfdisk -d "$1" 2>/dev/null | sed -n 's/^first-lba: //p')
+    last=$(sfdisk -d "$1" 2>/dev/null | sed -n 's/^last-lba: //p')
+    echo "${first:-$((MIB / ss))} ${last:-$((total - 34))}"
+}
+# Unallocated space: START SECTORS, 1 MiB aligned, at least 16 MiB.
+free_regions() {
+    ss=$(sector_size "$1")
+    align=$((MIB / ss))
+    # shellcheck disable=SC2046  # two numbers
+    set -- "$1" $(usable_range "$1")
+    parts_of "$1" | awk -v first="$2" -v last="$3" -v align="$align" -v min=$((16 * MIB / ss)) '
+        function emit(s, e) {        # the gap [s, e], inclusive
+            s = int((s + align - 1) / align) * align
+            n = e - s + 1
+            n = int(n / align) * align
+            if (n >= min) print s, n
+        }
+        BEGIN { pos = first }
+        { if ($2 > pos) emit(pos, $2 - 1); end = $2 + $3; if (end > pos) pos = end }
+        END { if (last >= pos) emit(pos, last) }'
+}
+kind_of() {
+    case "$1" in
+        "$ESP_TYPE") echo system ;;
+        "$MSR_TYPE") echo msr ;;
+        "$WINRE_TYPE") echo recovery ;;
+        "$XBOOT_TYPE") echo boot ;;
+        *) echo primary ;;
+    esac
+}
+# Free bytes in a partition's file system, where that can be known without
+# mounting it; "-" otherwise.
+fs_free() {
+    mp=$(lsblk -n -r -o MOUNTPOINTS "$1" | head -1)
+    if [ -n "$mp" ]; then df -B1 --output=avail "$mp" 2>/dev/null | tail -1 | tr -d ' '; return; fi
+    case "$(lsblk -n -o FSTYPE "$1" | head -1)" in
+        ext2|ext3|ext4)
+            dumpe2fs -h "$1" 2>/dev/null | awk -F: '
+                /^Free blocks/ {f = $2} /^Block size/ {b = $2}
+                END { if (f != "" && b != "") printf "%.0f\n", f * b; else print "-" }' ;;
+        *) echo - ;;
+    esac
+}
+esp_of() { # the disk's first EFI system partition
+    lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$ESP_TYPE" 'tolower($2) == t {print $1; exit}'
+}
+
+layout() {
+    candidate_disks | while IFS="$TAB" read -r dev bytes model; do
+        label=$(disk_label "$dev")
+        printf 'DISK %s\t%s\t%s\t%s\n' "$dev" "$bytes" "$model" "$label"
+        [ "$label" != dos ] || continue     # listed, but Setup cannot use it
+        ss=$(sector_size "$dev")
+        {
+            parts_of "$dev" | while read -r n start size type _uuid; do
+                p=$(part_path "$dev" "$n"); [ -n "$p" ] || continue
+                fst=$(lsblk -n -o FSTYPE "$p" | head -1)
+                lab=$(lsblk -n -r -o LABEL "$p" | head -1 | sed 's/\\x20/ /g' | tr -d '\t')
+                printf '%s PART %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$start" "$p" "$dev" "$n" \
+                    $((size * ss)) "$(fs_free "$p")" "$(kind_of "$type")" "${fst:--}" "${lab:--}"
+            done
+            free_regions "$dev" | while read -r s n; do
+                printf '%s FREE %s\t%s\t%s\t%s\n' "$s" "$dev" "$s" "$n" $((n * ss))
+            done
+        } | sort -n -k1,1 | cut -d' ' -f2-
+    done
+}
+
+# --- checks every operation makes ------------------------------------------
+check_disk() {
+    [ -b "$1" ] || die "$1 is not a block device"
+    [ "$(lsblk -d -n -o TYPE "$1")" = disk ] || [ -n "${SG_INSTALL_DISKS:-}" ] || die "$1 is not a whole disk"
+    [ "$1" != "$(boot_disk)" ] || die "$1 is the disk this system is running from"
+    is_candidate "$1" || die "$1 cannot be used"
+}
+check_part() {
+    [ -b "$1" ] || die "$1 is not a block device"
+    [ "$(lsblk -d -n -o TYPE "$1")" = part ] || die "$1 is not a partition"
+    PDISK="/dev/$(parent_disk "$1")"
+    check_disk "$PDISK"
+    if lsblk -n -o MOUNTPOINTS "$1" | grep -q .; then die "$1 is in use"; fi
+    PNUM=$(part_number "$1")
+    [ -n "$PNUM" ] || die "cannot find the number of $1"
+}
+check_gpt() {
+    case "$(disk_label "$1")" in
+        gpt|none) ;;
+        dos) die "Stained Glass OS cannot be installed to this disk: it has an MBR partition table, and on UEFI systems it installs to GPT disks only" ;;
+        *) die "$1 has a partition table Setup does not know" ;;
+    esac
+}
+settle() { partx -u "$1" >/dev/null 2>&1 || :; udevadm settle >/dev/null 2>&1 || :; }
+# udev's view of a partition (what lsblk reports) after its file system changed
+reprobe() { udevadm trigger --action=change --settle "$1" >/dev/null 2>&1 || udevadm settle >/dev/null 2>&1 || :; }
+# Make partition [start, start+sectors) of type $4 named $5; print its path.
+make_part() {
+    [ "$(disk_label "$1")" = gpt ] || printf 'label: gpt\n' | sfdisk -q --wipe always "$1" >/dev/null \
+        || die "cannot create a partition table on $1"
+    before=$(parts_of "$1" | awk '{print $1}' | sort -n | tr '\n' ' ')
+    printf 'start=%s, size=%s, type=%s, name="%s"\n' "$2" "$3" "$4" "$5" \
+        | sfdisk -q --append --no-reread --wipe-partitions always "$1" >/dev/null 2>&1 \
+        || die "cannot create a partition on $1"
+    settle "$1"
+    n=$(parts_of "$1" | awk -v s="$2" '$2 == s {print $1; exit}')
+    case " $before " in *" $n "*) die "the new partition on $1 did not appear" ;; esac
+    t=0; p=""
+    while [ -z "$p" ] || [ ! -b "$p" ]; do
+        p=$(part_path "$1" "$n")
+        [ $t -lt 20 ] || die "the new partition on $1 did not appear"
+        if [ -z "$p" ] || [ ! -b "$p" ]; then sleep 0.5; settle "$1"; fi
+        t=$((t + 1))
+    done
+    wipefs -a -q "$p" 2>/dev/null || :
+    echo "$p"
+}
+# A free region of DISK: exactly START SECTORS as --layout reported it.
+check_free() {
+    free_regions "$1" | grep -qx "$2 $3" || die "there is no unallocated space at sector $2 of $1 of that size"
+}
 
 # --- arguments ---------------------------------------------------------------
-DISK="" USER_NAME="" FULL_NAME="" HOSTNAME_NEW="stained-glass" PASS_STDIN=0 YES=0 KEEP_LAB=0 MODE=install
+MODE=install TARGET="" FREE="" DISK="" START="" BYTES=""
+USER_NAME="" FULL_NAME="" HOSTNAME_NEW="stained-glass" KEYBOARD="" PASS_STDIN=0 YES=0 KEEP_LAB=0 DRIVERS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --list) MODE=list ;;
+        --layout) MODE=layout ;;
+        --new) MODE=new; DISK=${2:?}; shift ;;
+        --delete) MODE=delete; TARGET=${2:?}; shift ;;
+        --format) MODE=format; TARGET=${2:?}; shift ;;
+        --start) START=${2:?}; shift ;;
+        --bytes) BYTES=${2:?}; shift ;;
+        --target) TARGET=${2:?}; shift ;;
+        --free) FREE=${2:?}; shift ;;
         --disk) DISK=${2:?}; shift ;;
         --user) USER_NAME=${2:?}; shift ;;
         --full-name) FULL_NAME=${2:?}; shift ;;
         --hostname) HOSTNAME_NEW=${2:?}; shift ;;
+        --keyboard) KEYBOARD=${2:?}; shift ;;
+        --drivers) DRIVERS=1 ;;
         --password-stdin) PASS_STDIN=1 ;;
         --keep-lab-user) KEEP_LAB=1 ;;
         --yes) YES=1 ;;
@@ -93,88 +311,250 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(id -u)" = 0 ] || die "must run as root"
-if [ "$MODE" = list ]; then list_disks; exit 0; fi
+case "$MODE" in
+list) list_disks; exit 0 ;;
+layout) layout; exit 0 ;;
+new)
+    [ "$YES" = 1 ] || die "this changes $DISK's partitions; pass --yes to confirm"
+    check_disk "$DISK"; check_gpt "$DISK"
+    printf '%s' "$START$BYTES" | grep -Eq '^[0-9]+$' || die "--start and --bytes are numbers"
+    ss=$(sector_size "$DISK"); align=$((MIB / ss))
+    region=$(free_regions "$DISK" | awk -v s="$START" '$1 == s {print $2; exit}')
+    [ -n "$region" ] || die "there is no unallocated space at sector $START of $DISK"
+    want=$(( BYTES / ss / align * align ))
+    [ "$want" -le "$region" ] || want=$region
+    s=$START
+    if [ -z "$(esp_of "$DISK")" ]; then
+        # As Windows Setup: a disk to boot from needs a system partition.
+        esp_sectors=$((ESP_BYTES / ss))
+        [ "$want" -gt $((esp_sectors + 16 * MIB / ss)) ] \
+            || die "Setup was unable to create a new system partition: there is not enough unallocated space"
+        esp=$(make_part "$DISK" "$s" "$esp_sectors" "$ESP_TYPE" "EFI system partition")
+        mkfs.vfat -F 32 -n SYSTEM "$esp" >/dev/null || die "cannot format the system partition"
+        reprobe "$esp"
+        s=$((s + esp_sectors)); want=$((want - esp_sectors))
+        echo "CREATED $esp system"
+    fi
+    p=$(make_part "$DISK" "$s" "$want" "$LINUX_TYPE" "Primary")
+    echo "CREATED $p primary"
+    exit 0 ;;
+delete)
+    [ "$YES" = 1 ] || die "this deletes $TARGET; pass --yes to confirm"
+    check_part "$TARGET"
+    sfdisk -q --delete --no-reread "$PDISK" "$PNUM" >/dev/null 2>&1 || die "cannot delete $TARGET"
+    settle "$PDISK"
+    exit 0 ;;
+format)
+    [ "$YES" = 1 ] || die "this erases $TARGET; pass --yes to confirm"
+    check_part "$TARGET"
+    case "$(kind_of "$(part_type "$TARGET")")" in
+        system|msr|boot) die "this partition is used to start the computer and cannot be formatted" ;;
+    esac
+    mkfs.ext4 -F -q "$TARGET" >/dev/null 2>&1 || die "cannot format $TARGET"
+    reprobe "$TARGET"
+    exit 0 ;;
+esac
 
-[ -n "$DISK" ] || die "--disk is required"
+# --- install: what, and for whom --------------------------------------------
+n=0
+[ -n "$TARGET" ] && n=$((n + 1)); [ -n "$FREE" ] && n=$((n + 1)); [ -n "$DISK" ] && n=$((n + 1))
+[ "$n" = 1 ] || die "say where to install: one of --target, --free or --disk"
 [ -n "$USER_NAME" ] || die "--user is required"
 [ "$PASS_STDIN" = 1 ] || die "--password-stdin is required: a password on the command line is visible to every process"
-[ "$YES" = 1 ] || die "this erases $DISK; pass --yes to confirm"
+[ "$YES" = 1 ] || die "this erases what is there; pass --yes to confirm"
 
 # The account name: what useradd accepts, and not a system name.
 case "$USER_NAME" in
-    root|sgsystem|nobody|daemon|sguser) die "'$USER_NAME' is reserved" ;;
+    root|sgsystem|nobody|daemon|sguser|live|sggreet|sgrdp) die "'$USER_NAME' is reserved" ;;
 esac
 printf '%s' "$USER_NAME" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "'$USER_NAME' is not a valid account name (lower case, digits, - and _)"
 printf '%s' "$HOSTNAME_NEW" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$' || die "'$HOSTNAME_NEW' is not a valid host name"
+[ -z "$KEYBOARD" ] || printf '%s' "$KEYBOARD" | grep -Eq '^[a-z]{2,3}$' || die "'$KEYBOARD' is not a keyboard layout"
+case "$FULL_NAME" in *:*|*"$TAB"*) die "the full name cannot contain ':' or a tab" ;; esac
 IFS= read -r PASSWORD || true
 [ -n "$PASSWORD" ] || die "empty password"
 
-# The source must be read-only: a block copy of a file system that is being
+# The source must be read-only: a copy of a file system that is being
 # written to is not a consistent file system.
 SRC_ROOT=$(source_root)
 [ -n "$SRC_ROOT" ] || die "not running live (boot the 'live' entry): the root file system is writable, so it cannot be copied safely"
 [ "$(ext4_state "$SRC_ROOT")" != rw ] || die "the live root $SRC_ROOT is mounted read-write"
 SRC_ESP=$(source_esp)
-[ -n "$SRC_ESP" ] || die "cannot find the ESP this system booted from"
+[ -n "$SRC_ESP" ] || die "cannot find the EFI system partition this system booted from"
+SRC_ESP_DIR=$(findmnt -n -r -o TARGET -t vfat -S "$SRC_ESP" | head -1)
+[ -n "$SRC_ESP_DIR" ] || die "the EFI system partition this system booted from is not mounted"
 
-# The target: a whole disk, not the one we run from, big enough, not in use.
-[ -b "$DISK" ] || die "$DISK is not a block device"
-[ "$(lsblk -d -n -o TYPE "$DISK")" = disk ] || die "$DISK is not a whole disk"
-[ "$DISK" != "$(boot_disk)" ] || die "$DISK is the disk this system is running from"
-size=$(lsblk -d -n -b -o SIZE "$DISK")
-[ "$size" -ge "$MIN_BYTES" ] || die "$DISK is too small ($size bytes; at least 16 GiB)"
-if lsblk -n -o MOUNTPOINTS "$DISK" | grep -q .; then die "$DISK has mounted file systems"; fi
+# --- where: a root partition, an EFI system partition, and a place for the
+# kernels ($BOOT: the ESP itself, or an extended boot loader partition of ours
+# when the ESP is another system's) -------------------------------------------
+ROOT_PART="" ESP_PART="" BOOT_PART="" OWN_ESP=0
+if [ -n "$DISK" ]; then
+    check_disk "$DISK"
+    size=$(lsblk -d -n -b -o SIZE "$DISK")
+    [ "$size" -ge $((MIN_ROOT_BYTES + ESP_BYTES + 2 * MIB)) ] || die "$DISK is too small ($size bytes; at least $((MIN_ROOT_BYTES / GIB + 1)) GiB)"
+    if lsblk -n -o MOUNTPOINTS "$DISK" | grep -q .; then die "$DISK has mounted file systems"; fi
+    progress 2 "Preparing $DISK"
+    wipefs -a -q "$DISK" 2>/dev/null || die "cannot wipe $DISK"
+    printf 'label: gpt\n' | sfdisk -q "$DISK" >/dev/null || die "cannot create a partition table on $DISK"
+    settle "$DISK"
+    FREE="$DISK:$(free_regions "$DISK" | head -1 | tr ' ' ':')"
+fi
+if [ -n "$FREE" ]; then
+    fd=${FREE%%:*}; rest=${FREE#*:}; fs=${rest%%:*}; fn=${rest#*:}
+    printf '%s%s' "$fs" "$fn" | grep -Eq '^[0-9]+$' || die "--free is DISK:START:SECTORS"
+    check_disk "$fd"; check_gpt "$fd"; check_free "$fd" "$fs" "$fn"
+    ss=$(sector_size "$fd")
+    s=$fs; left=$fn
+    ESP_PART=$(esp_of "$fd")
+    if [ -z "$ESP_PART" ]; then need=$(( (ESP_BYTES + MIN_ROOT_BYTES) / ss ))
+    else need=$(( (XBOOT_BYTES + MIN_ROOT_BYTES) / ss )); fi
+    [ "$left" -ge "$need" ] || die "the unallocated space is too small: Stained Glass OS needs $(( need * ss / GIB + 1 )) GB"
+    progress 3 "Creating partitions"
+    if [ -z "$ESP_PART" ]; then
+        ESP_PART=$(make_part "$fd" "$s" $((ESP_BYTES / ss)) "$ESP_TYPE" "EFI system partition")
+        mkfs.vfat -F 32 -n SYSTEM "$ESP_PART" >/dev/null || die "cannot format the system partition"
+        OWN_ESP=1
+        s=$((s + ESP_BYTES / ss)); left=$((left - ESP_BYTES / ss))
+    else
+        BOOT_PART=$(make_part "$fd" "$s" $((XBOOT_BYTES / ss)) "$XBOOT_TYPE" "Stained Glass OS boot")
+        mkfs.vfat -F 32 -n SGBOOT "$BOOT_PART" >/dev/null || die "cannot format the boot partition"
+        s=$((s + XBOOT_BYTES / ss)); left=$((left - XBOOT_BYTES / ss))
+    fi
+    ROOT_PART=$(make_part "$fd" "$s" "$left" "$ROOT_TYPE" "Stained Glass OS")
+    TDISK=$fd
+fi
+if [ -n "$TARGET" ]; then
+    check_part "$TARGET"; check_gpt "$PDISK"
+    case "$(kind_of "$(part_type "$TARGET")")" in
+        system|msr|boot|recovery) die "Stained Glass OS cannot be installed to this partition: it is used by the system" ;;
+    esac
+    size=$(lsblk -d -n -b -o SIZE "$TARGET")
+    [ "$size" -ge "$MIN_ROOT_BYTES" ] || die "this partition is too small: Stained Glass OS needs $((MIN_ROOT_BYTES / GIB)) GB"
+    ESP_PART=$(esp_of "$PDISK")
+    [ -n "$ESP_PART" ] || die "Setup was unable to create a new system partition or locate an existing system partition"
+    sfdisk -q --part-type --no-reread "$PDISK" "$PNUM" "$ROOT_TYPE" >/dev/null 2>&1 || die "cannot set the type of $TARGET"
+    sfdisk -q --part-label --no-reread "$PDISK" "$PNUM" "Stained Glass OS" >/dev/null 2>&1 || :
+    settle "$PDISK"
+    ROOT_PART=$TARGET TDISK=$PDISK
+fi
+# The root is named on the kernel command line (root=PARTUUID=), so another
+# root partition on the same disk cannot be mistaken for this one.
+{ [ -b "$ROOT_PART" ] && [ -b "$ESP_PART" ]; } || die "the partitions to install to did not appear"
+if [ "$(esp_of "$(boot_disk)")" = "$ESP_PART" ]; then die "that is the installation media's system partition"; fi
 
-# --- 1. partition and copy -------------------------------------------------
 WORK=$(mktemp -d /run/sg-install.XXXXXX)
 cleanup() {
-    for m in "$WORK/esp" "$WORK/root"; do mountpoint -q "$m" 2>/dev/null && umount "$m"; done
+    [ -n "${CP_PID:-}" ] && kill "$CP_PID" 2>/dev/null
+    for m in "$WORK/boot" "$WORK/esp" "$WORK/root" "$WORK/src"; do
+        mountpoint -q "$m" 2>/dev/null && umount "$m"
+    done
     rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
-mkdir -p "$WORK/repart" "$WORK/root" "$WORK/esp"
-cat > "$WORK/repart/00-esp.conf" <<EOF
-[Partition]
-Type=esp
-CopyBlocks=$SRC_ESP
-SizeMinBytes=512M
-SizeMaxBytes=512M
-EOF
-cat > "$WORK/repart/10-root.conf" <<EOF
-[Partition]
-Type=root
-CopyBlocks=$SRC_ROOT
-GrowFileSystem=yes
-EOF
+mkdir -p "$WORK/src" "$WORK/root" "$WORK/esp" "$WORK/boot"
 
-progress 5 "Preparing $DISK"
-wipefs -a -q "$DISK" 2>/dev/null || die "cannot wipe $DISK"
-progress 10 "Copying the system"
-systemd-repart --dry-run=no --empty=force --definitions="$WORK/repart" --no-pager "$DISK" >"$WORK/repart.log" 2>&1 \
-    || { cat "$WORK/repart.log" >&2; die "systemd-repart failed"; }
-udevadm settle
-progress 70 "Making it yours"
-
-part_of_type() {
-    lsblk -n -o PATH,PARTTYPE "$DISK" | awk -v t="$1" 'tolower($2) == t {print $1; exit}'
-}
-T_ROOT=$(part_of_type "$ROOT_TYPE")
-T_ESP=$(part_of_type "$ESP_TYPE")
-if [ -z "$T_ROOT" ] || [ -z "$T_ESP" ]; then die "the new partitions did not appear"; fi
-# A block copy keeps the file system's UUID; the copy must not be mistaken for
-# the stick it came from if both are ever attached.
-e2fsck -f -p "$T_ROOT" >/dev/null 2>&1 || true
-tune2fs -U random "$T_ROOT" >/dev/null || die "cannot give the new root its own UUID"
-mount "$T_ROOT" "$WORK/root"
-mount "$T_ESP" "$WORK/esp"
+# --- 1. the files ------------------------------------------------------------
+progress 5 "Formatting the partition"
+mkfs.ext4 -F -q -L StainedGlass "$ROOT_PART" >/dev/null 2>&1 || die "cannot format $ROOT_PART"
+mount -o ro "$SRC_ROOT" "$WORK/src" || die "cannot read the live system's files"
+mount "$ROOT_PART" "$WORK/root" || die "cannot mount $ROOT_PART"
 R="$WORK/root"
+total=$(df -B1 --output=used "$WORK/src" | tail -1 | tr -d ' ')
+[ "$(df -B1 --output=avail "$R" | tail -1)" -gt "$total" ] || die "the partition is too small for the files"
+progress 6 "Copying Stained Glass OS files"
+cp -a "$WORK/src/." "$R/" 2>"$WORK/cp.err" &
+CP_PID=$!
+while kill -0 "$CP_PID" 2>/dev/null; do
+    used=$(df -B1 --output=used "$R" | tail -1 | tr -d ' ')
+    pct=$(( 6 + 54 * used / (total + 1) )); [ "$pct" -le 59 ] || pct=59
+    progress "$pct" "Copying Stained Glass OS files"
+    sleep 2
+done
+wait "$CP_PID" || { cat "$WORK/cp.err" >&2; CP_PID=""; die "copying the files failed"; }
+CP_PID=""
+umount "$WORK/src"
 
-# --- 2. a machine of its own -----------------------------------------------
+# --- 2. the boot loader and kernels ------------------------------------------
+progress 60 "Getting files ready for installation"
+mount "$ESP_PART" "$WORK/esp" || die "cannot mount the system partition $ESP_PART"
+E="$WORK/esp"
+if [ -n "$BOOT_PART" ]; then mount "$BOOT_PART" "$WORK/boot" || die "cannot mount $BOOT_PART"; B="$WORK/boot"
+else B="$E"; fi
+TOKEN=debian
+# A system partition shared with another system gets its kernels under a name
+# of ours, so they can never collide with that system's.
+if [ "$OWN_ESP" = 0 ] && [ -z "$BOOT_PART" ]; then TOKEN=$TOKEN_SHARED; fi
+ROOT_PARTUUID=$(lsblk -n -o PARTUUID "$ROOT_PART" | head -1)
+[ -n "$ROOT_PARTUUID" ] || die "cannot find the new root partition's PARTUUID"
+S="$SRC_ESP_DIR"
+
+# The kernels: everything of the live ESP that is not the loader itself
+# (Debian's /boot files, and the entry token's directory).
+need=0
+for f in "$S"/*; do
+    case "${f##*/}" in EFI|loader|'*') continue ;; esac
+    need=$(( need + $(du -sb "$f" | cut -f1) ))
+done
+avail=$(df -B1 --output=avail "$B" | tail -1 | tr -d ' ')
+[ "$avail" -gt $((need + 8 * MIB)) ] || die "there is not enough space in the system partition for Stained Glass OS's boot files ($((need / MIB)) MB needed)"
+for f in "$S"/*; do
+    name=${f##*/}
+    case "$name" in EFI|loader|'*') continue ;; esac
+    if [ "$name" = debian ]; then rm -rf "${B:?}/$TOKEN"; cp -r "$f" "$B/$TOKEN"; else cp -r "$f" "$B/"; fi
+done
+mkdir -p "$B/loader/entries"
+opts=""
+for e in "$S"/loader/entries/*.conf; do
+    [ -f "$e" ] || continue
+    case "$e" in *-live.conf) continue ;; esac
+    base=${e##*/}
+    dest="$B/loader/entries/$TOKEN-${base#debian-}"
+    sed -e "s#^\(linux\|initrd\) /debian/#\1 /$TOKEN/#" \
+        -e "s#^options \(.*\)\$#options root=PARTUUID=$ROOT_PARTUUID rw \1#" \
+        -e 's/^title .*/title Stained Glass OS/' "$e" > "$dest"
+    [ -n "$opts" ] || opts=$(sed -n 's/^options //p' "$dest")
+done
+[ -n "$opts" ] || die "the live system has no boot entry to install"
+# Later kernels get the same command line and the same place.
+mkdir -p "$R/etc/kernel"
+printf '%s\n' "$opts" > "$R/etc/kernel/cmdline"
+printf '%s\n' "$TOKEN" > "$R/etc/kernel/entry-token"
+
+# The boot loader. Another system's loaders are never replaced: the firmware's
+# fallback path is ours only where nothing is there yet.
+mkdir -p "$E/EFI/systemd" "$E/EFI/BOOT" "$E/loader"
+cp "$S/EFI/systemd/systemd-bootx64.efi" "$E/EFI/systemd/systemd-bootx64.efi"
+if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/EFI/BOOT/BOOTX64.EFI" ]; then
+    cp "$S/EFI/systemd/systemd-bootx64.efi" "$E/EFI/BOOT/BOOTX64.EFI"
+fi
+others=0
+[ -e "$E/EFI/Microsoft/Boot/bootmgfw.efi" ] && others=1
+if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/loader/loader.conf" ] || grep -q '^# Stained Glass OS' "$E/loader/loader.conf"; then
+    {
+        echo "# Stained Glass OS"
+        echo "default $TOKEN-*"
+        # With another system on the disk the menu is shown, as Windows shows
+        # its own when there is a choice.
+        if [ "$others" = 1 ]; then echo "timeout 5"; else echo "timeout 0"; fi
+    } > "$E/loader/loader.conf"
+fi
+rm -f "$E/loader/random-seed"
+# And the firmware is told, where it can be: first in its boot order, as
+# Windows Setup does.
+if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null; then
+    for b in $(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} Stained Glass OS.*/\1/p'); do
+        efibootmgr -q -b "$b" -B >/dev/null 2>&1 || :
+    done
+    efibootmgr -q -c -d "$TDISK" -p "$(part_number "$ESP_PART")" -L "Stained Glass OS" \
+        -l '\EFI\systemd\systemd-bootx64.efi' >/dev/null 2>&1 || echo "sg-install: could not add a firmware boot entry" >&2
+fi
+
+# --- 3. a machine of its own -------------------------------------------------
+progress 75 "Installing features"
 # machine-id: empty, so the first boot creates one (the copy must not share
 # the stick's, or every machine installed from it would look alike).
 : > "$R/etc/machine-id"
 rm -f "$R/var/lib/systemd/random-seed" "$R/var/lib/dbus/machine-id"
-rm -f "$WORK/esp/loader/random-seed"
 printf '%s\n' "$HOSTNAME_NEW" > "$R/etc/hostname"
 if [ -d "$R/etc/ssh" ]; then
     # host keys belong to a machine: generated on its first boot
@@ -195,14 +575,28 @@ EOF
     mkdir -p "$R/etc/systemd/system/multi-user.target.wants"
     ln -sf ../sg-ssh-hostkeys.service "$R/etc/systemd/system/multi-user.target.wants/sg-ssh-hostkeys.service"
 fi
-
-# The live entry is for the stick; an installed machine boots its own root.
-rm -f "$WORK"/esp/loader/entries/*-live.conf
+if [ -n "$KEYBOARD" ]; then
+    printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' "$KEYBOARD" \
+        > "$R/etc/default/keyboard"
+    printf 'KEYMAP=%s\n' "$KEYBOARD" > "$R/etc/vconsole.conf"
+fi
 mkdir -p "$R/etc/stained-glass"
-printf 'installed %s from %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SRC_ROOT" > "$R/etc/stained-glass/installed"
+printf 'installed %s from %s onto %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SRC_ROOT" "$ROOT_PART" \
+    > "$R/etc/stained-glass/installed"
 
-# --- 3. the owner ------------------------------------------------------------
-progress 85 "Creating $USER_NAME"
+# Third-party drivers (Setup's checkbox): installed at the first boot by
+# sg-drivers.service, on the running system, where DKMS and the boot
+# partitions are real. With Secure Boot on, the module signing key is made and
+# enrolled now, so its password can be shown here.
+if [ "$DRIVERS" = 1 ]; then
+    progress 80 "Installing features: third-party drivers"
+    printf 'recommended\n' > "$R/etc/stained-glass/drivers.pending"
+    sg-drivers --secure-boot-enroll --root "$R" \
+        || echo "sg-install: Secure Boot module signing was not set up; drivers built by DKMS will not load until it is" >&2
+fi
+
+# --- 4. the owner ------------------------------------------------------------
+progress 85 "Setting up $USER_NAME"
 if [ "$KEEP_LAB" = 0 ] && grep -q '^sguser:' "$R/etc/passwd"; then
     # userdel -r exits non-zero when the account had no home or mail spool,
     # after removing it; what matters is that it is gone.
@@ -210,6 +604,9 @@ if [ "$KEEP_LAB" = 0 ] && grep -q '^sguser:' "$R/etc/passwd"; then
     ! grep -q '^sguser:' "$R/etc/passwd" || die "cannot remove the lab account"
     rm -rf "$R/home/sguser"
 fi
+# The live session's account is made at each live boot, in the overlay: it is
+# never on the stick's root. Make sure.
+! grep -q '^live:' "$R/etc/passwd" || die "the live account is on the installation media's root"
 groups=""
 for g in sgwine sg-admins sudo; do
     grep -q "^$g:" "$R/etc/group" && groups="${groups:+$groups,}$g"
@@ -219,8 +616,9 @@ useradd -R "$R" -m -s /bin/bash -c "${FULL_NAME:-$USER_NAME}" ${groups:+-G "$gro
 printf '%s:%s\n' "$USER_NAME" "$PASSWORD" | chpasswd -R "$R" || die "cannot set the password"
 PASSWORD=""
 
-# --- 4. done -------------------------------------------------------------------
-progress 95 "Finishing"
+# --- 5. done -------------------------------------------------------------------
+progress 95 "Finishing up"
 sync
+[ "$B" = "$E" ] || umount "$WORK/boot"
 umount "$WORK/esp" "$WORK/root"
 progress 100 "Installed. Remove the installation media and restart."
