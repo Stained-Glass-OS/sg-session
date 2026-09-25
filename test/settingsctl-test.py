@@ -74,6 +74,12 @@ stand_in("wlr-randr", "[ \"$1\" = --json ] && cat %s/outputs.json; exit 0" % tmp
 stand_in("wlsunset", "exec sleep 300")
 stand_in("swayidle", "exec sleep 300")
 stand_in("wlopm", "")
+stand_in("sg-lockctl", "echo 'OK locked'")
+stand_in("systemctl", "[ -f %s/polkit-no ] && { echo 'Access denied' >&2; exit 1; }; exit 0" % tmp)
+stand_in("busctl", """case "$*" in
+  *CanSuspend) echo 's "yes"' ;;
+  *CanHibernate) echo 's "challenge"' ;;
+esac""")
 stand_in("apt", """cat <<EOF
 Listing...
 libfoo1/stable-security 1.2-3+deb13u1 amd64 [upgradable from: 1.2-3]
@@ -207,6 +213,39 @@ code, lines = ctl("power", "--sleep", "30")
 code, lines = ctl("session-start")
 time.sleep(0.3)
 check("session-start: the idle timers again", code == 0 and any(x.startswith("swayidle") for x in calls()), lines)
+
+# ---- lock before sleep, and Start's Sleep
+LENV = dict(ENV, SG_LOCK_CONTROL=os.path.join(tmp, "control.sock"))
+calls()
+code, lines = ctl("power", "--screen", "0", "--sleep", "0", env=LENV)
+time.sleep(0.3)
+c = calls()
+check("power never/never in a session: swayidle still locks before sleep",
+      code == 0 and lines[0] == "POWER 0\t0\tyes\tyes" and
+      any(x.startswith("swayidle -w before-sleep ") and x.endswith("sg-lockctl LOCK after-resume wlopm --on '*'")
+          and "timeout" not in x for x in c), (lines, c))
+code, lines = ctl("power", "--screen", "10", env=LENV)
+time.sleep(0.3)
+c = calls()
+check("power: screen timeout and the lock together",
+      any(x.startswith("swayidle -w timeout 600 wlopm --off '*' resume wlopm --on '*' before-sleep ") for x in c), c)
+code, lines = ctl("sleep-caps", env=LENV)
+check("sleep-caps: logind's CanSuspend/CanHibernate",
+      code == 0 and lines[:2] == ["CAN suspend yes", "CAN hibernate challenge"], lines)
+calls()
+code, lines = ctl("sleep", env=LENV)
+c = calls()
+check("sleep: locks, then systemctl suspend", code == 0 and
+      [x.split(" ")[0] + " " + x.split(" ")[1] for x in c] == ["sg-lockctl LOCK", "systemctl suspend"], c)
+code, lines = ctl("sleep", "hibernate", env=LENV)
+check("sleep hibernate: systemctl hibernate", code == 0 and "systemctl hibernate" in calls(), lines)
+open(os.path.join(tmp, "polkit-no"), "w").close()
+code, lines = ctl("sleep", env=LENV)
+check("sleep refused by polkit is reported", code == 1 and lines[-1].startswith("ERROR failed systemctl"), lines)
+os.unlink(os.path.join(tmp, "polkit-no"))
+calls()
+code, lines = ctl("sleep", "--now", env=LENV)
+check("sleep refuses anything but suspend|hibernate", code == 2 and "systemctl" not in " ".join(calls()), lines)
 
 # ---- updates
 code, lines = ctl("updates")

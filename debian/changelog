@@ -1,3 +1,12 @@
+sg-session (0.1.0-22) unstable; urgency=medium
+
+  * sg-settingsctl: sleep-caps (logind CanSuspend/CanHibernate) and sleep
+    suspend|hibernate (lock, then systemctl), for Start's Sleep; swayidle runs
+    for the whole session and locks before any sleep (before-sleep
+    sg-lockctl LOCK, after-resume wlopm --on), whatever the timeouts.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 11:31:18 -0700
+
 sg-session (0.1.0-21) unstable; urgency=medium
 
   * Voice typing: the speech model packaged as sg-speech-model-parakeet

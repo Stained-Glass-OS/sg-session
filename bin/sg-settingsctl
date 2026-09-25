@@ -31,9 +31,13 @@
 #       NIGHTLIGHT on|off\t<K>\t<available yes|no>\t<running yes|no>
 #   sg-settingsctl power [--screen MIN] [--sleep MIN]         (0 = never)
 #       POWER <screen min>\t<sleep min>\t<available yes|no>\t<running yes|no>
+#   sg-settingsctl sleep-caps
+#       CAN suspend|hibernate <logind: yes|no|challenge|na>
+#   sg-settingsctl sleep [suspend|hibernate]    lock, then systemctl suspend|hibernate
 #   sg-settingsctl updates
 #       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
 #   sg-settingsctl session-start      apply night light and the idle timers
+#                                     (swayidle also locks before any sleep)
 #
 # Settings are the user's: ~/.config/stained-glass/settings.json.
 #
@@ -70,7 +74,7 @@ def tool(name):
     found = shutil.which(name)
     if found:
         return found
-    for d in ("/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin"):
+    for d in ("/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin", "/usr/libexec/stained-glass"):
         p = os.path.join(d, name)
         if os.access(p, os.X_OK):
             return p
@@ -385,9 +389,22 @@ def power_state(c):
     return int(p.get("screen", 10)), int(p.get("sleep", 0))
 
 
+def lock_command():
+    """The command that locks this session (sg-lockctl to the compositor's
+    control socket), or None outside a Stained Glass session."""
+    lockctl = tool("sg-lockctl")
+    if lockctl and os.environ.get("SG_LOCK_CONTROL"):
+        return "%s LOCK" % lockctl
+    return None
+
+
 def apply_power(c):
+    """swayidle runs for the whole session when it can: the screen and sleep
+    timeouts Settings chose, and -- whatever they are -- the lock before any
+    sleep (lid, Start's Sleep, the timer), since Windows asks for the password
+    when the PC wakes. -w makes logind wait for the lock before sleeping."""
     screen, sleep = power_state(c)
-    if not os.environ.get("WAYLAND_DISPLAY") or not tool("swayidle") or (not screen and not sleep):
+    if not os.environ.get("WAYLAND_DISPLAY") or not tool("swayidle"):
         stop("sg-idle")
         return
     argv = ["swayidle", "-w"]
@@ -395,6 +412,11 @@ def apply_power(c):
         argv += ["timeout", str(screen * 60), "wlopm --off '*'", "resume", "wlopm --on '*'"]
     if sleep:
         argv += ["timeout", str(sleep * 60), "systemctl suspend"]
+    lock = lock_command()
+    if lock:
+        argv += ["before-sleep", lock]
+        if tool("wlopm"):
+            argv += ["after-resume", "wlopm --on '*'"]
     if len(argv) > 2:
         start("sg-idle", argv)
     else:
@@ -425,6 +447,36 @@ def power(args):
     return ["POWER %d\t%d\t%s\t%s" % (screen, sleep, yn(avail), yn(pid_alive("sg-idle")))]
 
 
+# ---- sleep and hibernate (logind, which asks polkit) ------------------------------------
+
+def logind_can(what):
+    """logind's answer to Can<What>: yes, no, challenge (polkit would ask for a
+    password -- no agent runs in our session, so Start treats it as no) or na."""
+    text = run(["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager", "Can" + what], timeout=10, check=False)
+    m = re.match(r's\s+"(\w+)"', text.strip())
+    return m.group(1) if m else "na"
+
+
+def sleep_caps(args):
+    if args:
+        raise Fail("invalid", "usage: sleep-caps")
+    return ["CAN suspend %s" % logind_can("Suspend"), "CAN hibernate %s" % logind_can("Hibernate")]
+
+
+def sleep_now(args):
+    """Start's Sleep/Hibernate: lock first, then ask logind (through systemctl;
+    polkit decides -- an inactive or remote session is refused)."""
+    if len(args) > 1 or (args and args[0] not in ("suspend", "hibernate")):
+        raise Fail("invalid", "usage: sleep [suspend|hibernate]")
+    verb = args[0] if args else "suspend"
+    lock = lock_command()
+    if lock:
+        run(lock.split(" "), timeout=10, check=False)
+    run(["systemctl", verb], timeout=30)
+    return []
+
+
 # ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
 
 def updates(args):
@@ -452,7 +504,8 @@ def session_start(args):
 
 
 COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
-            "power": power, "updates": updates, "session-start": session_start}
+            "power": power, "updates": updates, "session-start": session_start,
+            "sleep-caps": sleep_caps, "sleep": sleep_now}
 
 
 def main(argv):

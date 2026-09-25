@@ -780,6 +780,8 @@ sg-settingsctl display                        OUTPUT <name>\t<WxH@Hz>\t<scale>\t
 sg-settingsctl display mode OUTPUT WxH[@Hz] | scale OUTPUT S
 sg-settingsctl nightlight [on|off] [--temp K] NIGHTLIGHT on|off\t<K>\t<available>\t<running>
 sg-settingsctl power [--screen MIN] [--sleep MIN]   POWER <screen>\t<sleep>\t<available>\t<running>
+sg-settingsctl sleep-caps                     CAN suspend|hibernate <logind: yes|no|challenge|na>
+sg-settingsctl sleep [suspend|hibernate]      lock, then systemctl suspend|hibernate (Start's Sleep)
 sg-settingsctl updates                        UPDATE <pkg>\t<installed>\t<new>, STAGED yes|no
 sg-settingsctl session-start                  night light and idle timers again (sg-run-explorer)
 ```
@@ -802,8 +804,21 @@ child, so Settings reads files, as it does sg-dictate's.
 - **Inputs are validated** before a tool hears of them: device and output
   names (no leading `-`, so no option smuggling), MAC addresses, numbers in
   range, modes and scales by pattern; an output must exist.
-- **wlopm needs wlr-output-power-management, which sg-compositor does not
-  offer yet**: the screen-off timer's command fails harmlessly; sleep works.
+- **Power & sleep**: `swayidle -w` runs for the whole session: the screen
+  timeout (`wlopm --off '*'`, resume `--on`; sg-compositor 0.2.0+sg5 has
+  wlr-output-power-management and wakes the screen on any input itself),
+  the sleep timeout (`systemctl suspend`), and -- whatever the timeouts,
+  even never/never -- `before-sleep sg-lockctl LOCK` and `after-resume
+  wlopm --on`, so every sleep (lid, Start, timer) wakes to the lock screen,
+  as Windows asks for the password on waking. `-w` makes logind wait for
+  the lock. sg-lockctl is found in `/usr/libexec/stained-glass` and needs
+  the session's `SG_LOCK_CONTROL`.
+- **Sleep and Hibernate** (sg-shell's Start): `sleep-caps` asks logind's
+  `CanSuspend`/`CanHibernate` (busctl); Start shows an item only for "yes"
+  -- "challenge" would need a polkit agent, which our session has none of,
+  and logind refuses an inactive or remote session. `sleep` locks first,
+  then `systemctl suspend|hibernate`; polkit's refusal comes back as
+  `ERROR failed`.
 - **Gate: `test/settingsctl-test.py`** (in `make lint`): stand-in tools record
   what they are asked -- the parsed answers Settings reads, the exact
   commands, and every refusal. Seen red: device names that start with `-`
