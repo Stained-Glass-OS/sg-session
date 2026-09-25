@@ -25,6 +25,7 @@ Recommends: sg-shell,
          procps,
          greetd,
          adduser
+Breaks: wine-sg (<< 10.0-61)
 Description: Stained Glass OS session glue
  Brings up a Stained Glass desktop session: a compositor hosting Wine's
  explorer as the shell, running against a system-wide Wine prefix rather than

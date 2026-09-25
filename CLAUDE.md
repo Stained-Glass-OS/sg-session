@@ -1388,6 +1388,19 @@ letters go when the user's last session ends: `user-runtime-dir@.service`'s
 ExecStop (a drop-in), because a session logind ends leaves no PAM close.
 The user service manager's own PAM session (`systemd-user`) is skipped.
 
+**A domain user's Windows identity is the domain's.** Before any of that,
+sg-domain-logon writes `/run/stained-glass/domain-sids/<uid>` from winbind:
+`user <SID> DOMAIN\name`, `group <SID> DOMAIN\group` lines (the primary
+group -- from the uid's gid -- first, then `--user-domgroups`), and `name`
+lines for the domain's well-known groups the user is not in (512-520, so
+ACLs can name them). Root's, 0644, in a 0755 root directory: **wine-sg's
+server (0205, `server/token.c`) reads it and refuses one anyone else could
+have written** -- the file is an interface, change both together. The
+server then gives the uid that SID (token, files, HKCU) and the groups.
+Then, as SYSTEM against the machine's running Windows system,
+`ProfileList\<SID>` gets `ProfileImagePath=%SystemDrive%\users\<name>`.
+If winbind cannot answer, the account keeps a SID of this machine's.
+
 `domain/sg-gpo-user` (Python, root, from sg-domain-logon) is the Group Policy
 client for a user. Samba's `get_gpo_list` (machine account) decides which
 GPOs apply: the OU chain, link order, enforced links, and security filtering
@@ -1418,10 +1431,21 @@ GPOs apply to the computer account. It fetches each one's
 into the machine policy directory as `60-domain-NN-{GUID}.pol`, in
 application order, and removes the file of a GPO that no longer applies.
 `sg_apply_policy` imports the files as SYSTEM, at boot (sg-services-start)
-and from `sg-gpupdate` (gpupdate, root), which `sg-gpupdate.timer` runs every
-90 minutes. Not yet: removing the *values* a GPO that stopped applying had
-set (Windows rewrites the policy keys on each refresh), and machine startup
-scripts.
+and from `sg-gpupdate` (gpupdate, root), which `sg-gpupdate.service` runs at
+boot (after the network, winbind and the machine's wineserver -- computer
+policy at startup, fetched fresh) and `sg-gpupdate.timer` every 90 minutes.
+Values a GPO no longer sets are de-tattooed (above).
+
+**Computer startup scripts**: sg-gpo-machine also fetches each GPO's
+`Machine\Scripts\scripts.ini` [Startup] entries and the scripts they name
+(relative: the GPO's `Machine\Scripts\Startup`; or a UNC path, fetched from
+that share with the machine account) into `/var/lib/stained-glass/gpo-startup`,
+listed in order in `startup.list` (path TAB parameters). sg-gpupdate runs them
+**once per boot** (`/run/stained-glass/gpo-startup-ran`) as SYSTEM with `wine
+cmd /c`, ten minutes each, asynchronously to the login screen. A script runs
+from a local copy; what it does on the network, it does as the machine's
+Windows system, which has no domain credentials yet. Shutdown scripts: not
+yet.
 
 **The Start menu and the logon scripts wait for the shell's desktop window.**
 A Wine GUI program started before the shell makes Wine create the desktop

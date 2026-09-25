@@ -1,3 +1,20 @@
+sg-session (0.1.0-42) unstable; urgency=medium
+
+  * sg-domain-logon: a domain user's Windows identity from winbind at
+    sign-in -- /run/stained-glass/domain-sids/<uid> (SID, primary and domain
+    groups, the domain's well-known groups by name), which wine-sg 0205
+    turns into their SID, groups and names on the Windows side -- and
+    ProfileList\<SID> in the machine's registry.
+  * Machine Group Policy: computer startup scripts (a GPO's
+    Machine\Scripts\scripts.ini [Startup]) fetched with the machine account
+    and run once per boot as SYSTEM; sg-gpupdate.service applies the
+    computer's policy at boot, not only from the 90-minute timer.
+  * sg-sid-probe.exe, the domain gate's Windows identity probe.
+  * Breaks wine-sg << 10.0-61: before its 0211 a domain user's session
+    left display keys the login screen could not delete, and it spun.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 18:51:37 -0700
+
 sg-session (0.1.0-41) unstable; urgency=medium
 
   * Printing works: the machine's print spool (system32\spool\printers)

@@ -13,6 +13,9 @@
 # The script itself is run by the session (lib/sg-run-explorer), as the
 # user, once the desktop is starting: this only records where it is.
 set -u
+# pam_exec's PATH may not have the sbin directories (runuser)
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 grep -qx 'role=member' /etc/stained-glass/role 2>/dev/null || exit 0
 # The per-user service manager's own PAM session (user@.service) is not a
 # sign-in: it would map everything again, and it outlives the real session.
@@ -30,6 +33,66 @@ log() { logger -t sg-domain-logon -- "$*"; }
 # user-runtime-dir@.service's ExecStop removes them (a drop-in in this
 # package), since a session ended by logind leaves no PAM close to run.
 [ "${PAM_TYPE:-}" = open_session ] || exit 0
+
+# The account's Windows identity: its domain SID, its primary group and its
+# domain groups, with their names, from winbind -- before the session's first
+# Windows program, since the Windows system (wine-sg's server) reads this to
+# give the user a token, files, an HKCU and a profile under the domain's SID
+# rather than a SID of this machine's. The record is root's and read-only
+# for everyone else: whoever could write it could be anyone on the Windows
+# side. The first group line is the primary group; name lines are groups the
+# account is not in, known by name only (wine-sg's server/token.c reads it).
+SIDS=/run/stained-glass/domain-sids
+write_identity() {
+    usid=$(wbinfo --name-to-sid "$user" 2>/dev/null | awk '{print $1}')
+    case "$usid" in S-1-5-21-*) ;; *) return 1 ;; esac
+    uname=$(wbinfo --sid-to-name "$usid" 2>/dev/null | sed 's/ [0-9]*$//')
+    case "$uname" in *\\*) ;; *) return 1 ;; esac
+    gid=$(id -g "$user" 2>/dev/null)
+    psid=$(wbinfo --gid-to-sid "$gid" 2>/dev/null)
+    mkdir -p "$SIDS" && chmod 0755 /run/stained-glass "$SIDS" || return 1
+    tmp=$(mktemp "$SIDS/.new.XXXXXX") || return 1
+    {
+        printf 'user %s %s\n' "$usid" "$uname"
+        # the primary group first, then the rest of the account's domain groups
+        held=""
+        for g in $psid $(wbinfo --user-domgroups="$usid" 2>/dev/null | grep -vxF "$psid"); do
+            case "$g" in S-1-5-21-*) ;; *) continue ;; esac
+            gname=$(wbinfo --sid-to-name "$g" 2>/dev/null | sed 's/ [0-9]*$//')
+            case "$gname" in *\\*) printf 'group %s %s\n' "$g" "$gname"; held="$held $g" ;; esac
+        done
+        # the domain's well-known groups, by name only (not held): so that an
+        # ACL can name Domain Admins, Enterprise Admins, ...
+        for rid in 512 513 514 515 516 518 519 520; do
+            g="${usid%-*}-$rid"
+            case " $held " in *" $g "*) continue ;; esac
+            gname=$(wbinfo --sid-to-name "$g" 2>/dev/null | sed 's/ [0-9]*$//')
+            case "$gname" in *\\*) printf 'name %s %s\n' "$g" "$gname" ;; esac
+        done
+    } > "$tmp"
+    if ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$SIDS/$uid"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    log "$user: Windows identity $usid ($uname)"
+}
+write_identity || log "$user: no domain SID from winbind; the account keeps a SID of this machine's"
+
+# The profile's entry in ProfileList under that SID, as Windows' profile
+# service writes it at first logon -- in the machine's registry, as SYSTEM,
+# against the Windows system that is already running. Best effort.
+if [ -n "${usid:-}" ] && systemctl is-active --quiet sg-wineserver.service 2>/dev/null; then
+    SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+    # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+    if ! out=$(timeout 30 runuser -u "${SG_SYSTEM_USER:-sgsystem}" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+        SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" SID="$usid" NAME="$user" \
+        sh -c '. "$SG_LIB/sg-common.sh"; sg_wine_env
+               key="HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\$SID"
+               wine reg add "$key" /v ProfileImagePath /t REG_EXPAND_SZ /d "%SystemDrive%\\users\\$NAME" /f &&
+               wine reg add "$key" /v Flags /t REG_DWORD /d 0 /f' </dev/null 2>&1); then
+        log "$user: ProfileList not updated: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+    fi
+fi
 
 attrs=$(timeout 20 net ads search -P "(sAMAccountName=$user)" homeDirectory homeDrive scriptPath 2>/dev/null) || exit 0
 attr() { printf '%s\n' "$attrs" | sed -n "s/^$1: //p" | head -n 1 | tr -d '\r'; }

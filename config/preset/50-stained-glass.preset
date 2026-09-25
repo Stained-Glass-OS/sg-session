@@ -22,3 +22,7 @@ enable sg-oobe-browser.service
 enable sg-devices-apply.service
 # The Print to PDF printer (runs only with cups-pdf installed).
 enable sg-print-setup.service
+# Machine Group Policy on a domain member, at boot and every 90 minutes (both
+# do nothing on a machine without a role).
+enable sg-gpupdate.service
+enable sg-gpupdate.timer
