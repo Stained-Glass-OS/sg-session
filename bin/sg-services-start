@@ -45,14 +45,18 @@ wine services.exe &
 
 # Wait for the SCM to answer rather than assuming it is up. A session that
 # starts before the SCM is ready sees no services and looks broken.
-waited=0
-while [ "$waited" -lt "${SG_SERVICES_TIMEOUT:-60}" ]; do
-    if wine sc query >/dev/null 2>&1; then
+# Bounded by the clock, not by counting tries: on a slow machine (or an
+# emulated one) each sc query itself takes seconds, and the unit's start
+# timeout must never be reached -- systemd would kill the whole server.
+start=$(date +%s)
+while :; do
+    waited=$(( $(date +%s) - start ))
+    [ "$waited" -lt "${SG_SERVICES_TIMEOUT:-60}" ] || break
+    if timeout 30 wine sc query >/dev/null 2>&1; then
         sg_log "SCM is answering after ${waited}s"
         exit 0
     fi
     sleep 2
-    waited=$((waited + 2))
 done
 
 sg_log "WARNING: the SCM did not answer within ${SG_SERVICES_TIMEOUT:-60}s"

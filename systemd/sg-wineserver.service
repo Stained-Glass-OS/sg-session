@@ -33,6 +33,11 @@ ExecStart=/usr/bin/sg-wineserver
 # The SCM is started once the server is up, not by the server itself: services
 # belong to the Windows system, not to the process that happens to host it.
 ExecStartPost=/usr/bin/sg-services-start
+# sg-services-start (registry protection, machine policy, the SCM) takes a
+# minute or two on a slow or emulated machine; the default 90 s start timeout
+# killed the whole server there -- and the lock screen with it. Its own waits
+# are bounded well inside this.
+TimeoutStartSec=5min
 Restart=on-failure
 RestartSec=5s
 

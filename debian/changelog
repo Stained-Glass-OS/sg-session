@@ -1,3 +1,14 @@
+sg-session (0.1.0-18) unstable; urgency=medium
+
+  * sg-wineserver: TimeoutStartSec=5min. On a slow or emulated machine
+    sg-services-start ran past the default 90 s, and systemd killed the
+    machine wineserver -- and the lock screen with it (CI boot gate: the
+    password typed at the lock screen was never checked).
+  * sg-services-start bounds its wait for the SCM by the clock, not by
+    counting tries, each of which can take seconds there.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 06:44:08 -0700
+
 sg-session (0.1.0-17) unstable; urgency=medium
 
   * sg-install installs from the Stained Glass ISO (sg.live=iso): the root
