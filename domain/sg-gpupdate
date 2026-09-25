@@ -4,7 +4,9 @@
 # Root. On a domain member, sg-gpo-machine fetches the computer's GPOs'
 # registry policy into the machine policy directory; then the machine policy
 # is applied to the running Windows system as SYSTEM, as it is at boot
-# (sg-services-start). sg-gpupdate.timer runs this every 90 minutes.
+# (sg-services-start), and -- once per boot -- the computer's GPO startup
+# scripts. sg-gpupdate.service runs this at boot; sg-gpupdate.timer every 90
+# minutes.
 set -u
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
@@ -22,3 +24,31 @@ systemctl is-active --quiet sg-wineserver.service || exit 0
 runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
     SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" \
     sh -c '. "$SG_LIB/sg-common.sh"; sg_wine_env; sg_apply_policy'
+
+# The computer's startup scripts from its GPOs (sg-gpo-machine fetched them):
+# once per boot, as SYSTEM, in order -- Windows runs them at startup, not at
+# each refresh. Each in its own folder, with at most ten minutes (Windows'
+# default script timeout is longer; a startup script that hangs must not hold
+# every later refresh).
+STARTUP_DIR="${SG_GPO_STARTUP_DIR:-/var/lib/stained-glass/gpo-startup}"
+RAN=/run/stained-glass/gpo-startup-ran
+if [ -f "$STARTUP_DIR/startup.list" ] && [ ! -e "$RAN" ]; then
+    mkdir -p /run/stained-glass && chmod 0755 /run/stained-glass
+    : > "$RAN"
+    tab=$(printf '\t')
+    while IFS="$tab" read -r script params; do
+        [ -n "$script" ] || continue
+        # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+        if timeout 600 runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+            SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" SCRIPT="$script" PARAMS="$params" \
+            sh -c '. "$SG_LIB/sg-common.sh"; sg_wine_env
+                   case "$SCRIPT" in [A-Za-z]:*) win=$SCRIPT ;; *) win=$(winepath -w "$SCRIPT") ;; esac
+                   case "$SCRIPT" in /*) cd "$(dirname "$SCRIPT")" || exit 1 ;; esac
+                   # shellcheck disable=SC2086  # the parameters are words
+                   wine cmd /c "$win" $PARAMS' </dev/null >/dev/null 2>&1; then
+            logger -t sg-gpupdate -- "startup script ran: $script"
+        else
+            logger -t sg-gpupdate -- "startup script failed: $script"
+        fi
+    done < "$STARTUP_DIR/startup.list"
+fi

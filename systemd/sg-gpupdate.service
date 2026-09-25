@@ -1,4 +1,6 @@
-# Machine Group Policy from the domain (sg-gpupdate): fetched and applied.
+# Machine Group Policy from the domain (sg-gpupdate): fetched and applied --
+# at boot, as Windows applies computer policy at startup (with the computer's
+# startup scripts), and again by sg-gpupdate.timer every 90 minutes.
 [Unit]
 Description=Stained Glass machine Group Policy refresh
 After=network-online.target winbind.service sg-wineserver.service
@@ -8,3 +10,8 @@ ConditionPathExists=/etc/stained-glass/role
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/sg-gpupdate
+# startup scripts may take a while; each has its own ten-minute limit
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

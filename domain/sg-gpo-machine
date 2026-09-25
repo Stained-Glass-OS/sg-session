@@ -14,18 +14,31 @@
 # machine's policy machinery (sg-session's sg_apply_policy, as SYSTEM)
 # imports it into HKLM. A GPO that stops applying loses its file.
 #
+# Computer startup scripts: each GPO's Machine\Scripts\scripts.ini
+# [Startup] entries, with the scripts they name (in the GPO's
+# Machine\Scripts\Startup folder, or a UNC path), are fetched the same way
+# into STARTUP_DIR, and STARTUP_DIR/startup.list names them in order
+# (path, TAB, parameters). sg-gpupdate runs them as SYSTEM once per boot, as
+# Windows does at startup. The machine account fetches them; a script that
+# itself reaches the network does so as the machine's Windows system, which
+# has no domain credentials of its own yet.
+#
 # Best effort: a failure leaves the policy the machine had.
 #
 # Copyright (C) 2026 Stained Glass OS contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import configparser
 import glob
 import os
+import re
+import shutil
 import subprocess
 import sys
 import syslog
 import tempfile
 
 POLICY_DIR = os.environ.get("SG_POLICY_DIR", "/etc/stained-glass/policy.d")
+STARTUP_DIR = os.environ.get("SG_GPO_STARTUP_DIR", "/var/lib/stained-glass/gpo-startup")
 PREFIX = "60-domain-"
 
 
@@ -33,12 +46,90 @@ def log(msg):
     syslog.syslog(syslog.LOG_INFO, msg)
 
 
-def fetch(dc, path, dest):
-    """Fetch path (relative to SYSVOL) with the machine account."""
+def fetch(dc, path, dest, share="sysvol"):
+    """Fetch path (relative to the share, SYSVOL by default) with the machine account."""
+    if '"' in path or '"' in dest:
+        return False
     cmd = 'get "%s" "%s"' % (path.replace("/", "\\"), dest)
-    r = subprocess.run(["smbclient", "//%s/sysvol" % dc, "-P", "-c", cmd],
+    r = subprocess.run(["smbclient", "//%s/%s" % (dc, share), "-P", "-c", cmd],
                        capture_output=True, text=True, timeout=60)
     return r.returncode == 0 and os.path.isfile(dest) and os.path.getsize(dest) > 0
+
+
+def read_ini(data):
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        text = data.decode("utf-16")
+    else:
+        text = data.decode("utf-8", "replace")
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    parser.read_string(text)
+    return parser
+
+
+def startup_entries(ini_data):
+    """[Startup] nCmdLine / nParameters, in order."""
+    try:
+        ini = read_ini(ini_data)
+    except Exception:
+        return []
+    section = next((s for s in ini.sections() if s.lower() == "startup"), None)
+    if not section:
+        return []
+    keys = {k.lower(): v for k, v in ini.items(section)}
+    out, n = [], 0
+    while ("%dcmdline" % n) in keys:
+        cmd = keys["%dcmdline" % n].strip()
+        if cmd:
+            out.append((cmd, keys.get("%dparameters" % n, "").strip()))
+        n += 1
+    return out
+
+
+def safe_name(name):
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+    return name.lstrip(".") or "script"
+
+
+def fetch_startup_scripts(dc, gpos_rel, lines):
+    """Each GPO's startup scripts into STARTUP_DIR; returns the list's lines."""
+    tmp = tempfile.mkdtemp()
+    try:
+        for n, rel in gpos_rel:
+            ini = os.path.join(tmp, "%02d.ini" % n)
+            if not fetch(dc, rel + "/Machine/Scripts/scripts.ini", ini):
+                continue
+            with open(ini, "rb") as f:
+                entries = startup_entries(f.read())
+            for i, (cmd, params) in enumerate(entries):
+                base = cmd.replace("/", "\\").split("\\")[-1]
+                dest_dir = os.path.join(STARTUP_DIR, "%02d" % n)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, "%d-%s" % (i, safe_name(base)))
+                if cmd.startswith("\\\\"):
+                    parts = [p for p in cmd.split("\\") if p]
+                    if len(parts) < 3 or ".." in parts:
+                        continue
+                    ok = fetch(parts[0], "/".join(parts[2:]), dest, share=parts[1])
+                elif re.match(r"^[A-Za-z]:", cmd):
+                    # a path on the machine itself
+                    lines.append("%s\t%s" % (cmd, params))
+                    continue
+                else:
+                    parts = [p for p in cmd.replace("/", "\\").split("\\") if p]
+                    if ".." in parts:
+                        continue
+                    ok = fetch(dc, rel + "/Machine/Scripts/Startup/" + "/".join(parts), dest)
+                if ok:
+                    os.chmod(dest, 0o644)
+                    lines.append("%s\t%s" % (dest, params))
+                    log("startup script from GPO %02d: %s" % (n, cmd))
+                else:
+                    log("startup script %s could not be fetched" % cmd)
+    finally:
+        for f in glob.glob(os.path.join(tmp, "*")):
+            os.unlink(f)
+        os.rmdir(tmp)
 
 
 def main():
@@ -63,6 +154,7 @@ def main():
 
     os.makedirs(POLICY_DIR, exist_ok=True)
     keep = set()
+    gpos_rel = []
     tmp = tempfile.mkdtemp()
     try:
         for n, gpo in enumerate(gpos):
@@ -72,6 +164,7 @@ def main():
             low = [p.lower() for p in parts]
             if "sysvol" not in low or ".." in parts:
                 continue
+            gpos_rel.append((n, "/".join(parts[low.index("sysvol") + 1:])))
             rel = "/".join(parts[low.index("sysvol") + 1:] + ["Machine", "Registry.pol"])
             local = os.path.join(tmp, "%02d.pol" % n)
             if not fetch(dc, rel, local):
@@ -96,6 +189,17 @@ def main():
         if os.path.basename(path) not in keep:
             os.unlink(path)
             log("removed %s" % os.path.basename(path))
+
+    # the computer's startup scripts: fetched afresh, the list replaced
+    if os.path.isdir(STARTUP_DIR):
+        shutil.rmtree(STARTUP_DIR)
+    os.makedirs(STARTUP_DIR, mode=0o755)
+    lines = []
+    fetch_startup_scripts(dc, gpos_rel, lines)
+    with open(os.path.join(STARTUP_DIR, "startup.list.new"), "w") as f:
+        f.write("".join(line + "\n" for line in lines))
+    os.chmod(os.path.join(STARTUP_DIR, "startup.list.new"), 0o644)
+    os.replace(os.path.join(STARTUP_DIR, "startup.list.new"), os.path.join(STARTUP_DIR, "startup.list"))
     return 0
 
 

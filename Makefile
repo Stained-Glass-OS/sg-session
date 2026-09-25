@@ -117,6 +117,10 @@ install: d3d-probe greeter token-probe procagent rdp
 	@if [ -f build/sg-sspi-probe.exe ]; then \
 	    install -m 0755 build/sg-sspi-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The Windows identity probe for the domain gate (a domain account's SID).
+	@if [ -f build/sg-sid-probe.exe ]; then \
+	    install -m 0755 build/sg-sid-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
 	@# Machine policy drop-in directory (Group Policy). Ships the README and a
 	@# disabled example; an administrator adds .reg files here.
 	install -d $(DESTDIR)/etc/stained-glass/policy.d
@@ -259,6 +263,7 @@ token-probe:
 	        build/sg-token-probe-admin.res -ladvapi32 && \
 	    $(MINGW64) -O2 -o build/sg-policy-probe.exe test/sg-policy-probe.c -lshell32 && \
 	    $(MINGW64) -O2 -municode -o build/sg-sspi-probe.exe test/sg-sspi-probe.c -lsecur32 && \
+	    $(MINGW64) -O2 -o build/sg-sid-probe.exe test/sg-sid-probe.c -ladvapi32 -lsecur32 && \
 	    echo "built: build/sg-token-probe.exe build/sg-token-probe-admin.exe build/sg-policy-probe.exe"; \
 	fi
 
