@@ -34,6 +34,23 @@ if grep -qw systemd.volatile=overlay /proc/cmdline 2>/dev/null && [ "${SG_SETUP:
     exit 0
 fi
 
+# The first boot of an installed machine shows the first-run setup (the OOBE:
+# region, keyboard, network, account, privacy, a browser) here, before anyone
+# signs in, as Windows' out-of-box experience does. sg-install leaves the
+# marker; sg-oobed, behind its socket, applies the choices and removes it.
+# Whatever happens, this greeter then ends: greetd starts it again, and it
+# shows the login screen (with the keyboard just chosen) or, if the first-run
+# setup did not finish, the first-run setup again. SG_OOBE=0 skips it.
+OOBE_PENDING="${SG_OOBE_PENDING:-/etc/stained-glass/oobe.pending}"
+if [ -f "$OOBE_PENDING" ] && [ "${SG_OOBE:-1}" != 0 ] \
+        && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-oobe64.exe" ]; then
+    systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" --oobe \
+        "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-oobe64.exe"
+    # A crash loop must not hammer the machine: greetd restarts us at once.
+    [ -f "$OOBE_PENDING" ] && sleep 2
+    exit 0
+fi
+
 # Wine prefers its Wayland driver whenever WAYLAND_DISPLAY is set, and the
 # compositor always sets it; the greeter is drawn through XWayland like the
 # desktop is (ADR 0003), so the greeter command drops it.

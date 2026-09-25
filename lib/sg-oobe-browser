@@ -1,0 +1,41 @@
+#!/bin/sh
+# The web browser chosen in the first-run setup, installed for everyone on the
+# machine: downloaded from its publisher (never shipped in the image) and run
+# silently as SYSTEM in the machine's Windows system. With winget installed
+# (the user's own), winget does it; otherwise the publisher's download link.
+# Run as root by sg-oobe-browser.service -- started by sg-oobed, and at each
+# boot while the request is still there (offline: it tries again).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+REQ="${SG_OOBE_BROWSER_REQ:-/var/lib/stained-glass/oobe-browser}"
+[ -r "$REQ" ] || exit 0
+id=$(head -1 "$REQ")
+case "$id" in
+    Mozilla.Firefox)     url='https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
+    Mozilla.Firefox.ESR) url='https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
+    *) sg_log "oobe-browser: '$id' is not offered; nothing to do"; rm -f "$REQ"; exit 0 ;;
+esac
+sg_log "oobe-browser: installing $id"
+# shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+    SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" ID="$id" URL="$url" sh -c '
+    . "$SG_LIB/sg-common.sh"; sg_wine_env
+    if wine cmd /c "where winget" >/dev/null 2>&1; then
+        exec wine winget install -e --id "$ID" --scope machine --silent \
+            --accept-package-agreements --accept-source-agreements
+    fi
+    d=$(mktemp -d /var/tmp/sg-oobe-browser.XXXXXX) || exit 1
+    trap "rm -rf \"$d\"" EXIT
+    curl -fsSL --proto =https --retry 3 --max-time 1200 -o "$d/setup.exe" "$URL" || exit 1
+    wine "$d/setup.exe" /S' 2>&1 | sed 's/^/oobe-browser: /' >&2
+if [ -f "$SG_PREFIX/drive_c/Program Files/$exe" ]; then
+    sg_log "oobe-browser: $id is installed"
+    rm -f "$REQ"
+    exit 0
+fi
+sg_log "oobe-browser: $id was not installed; trying again at the next boot"
+exit 1

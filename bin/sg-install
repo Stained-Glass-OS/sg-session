@@ -598,6 +598,9 @@ fi
 mkdir -p "$R/etc/stained-glass"
 printf 'installed %s from %s onto %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SRC_ROOT" "$ROOT_PART" \
     > "$R/etc/stained-glass/installed"
+# The first boot shows the first-run setup (region, keyboard, network,
+# privacy, a browser) before the login screen; sg-oobed removes this.
+: > "$R/etc/stained-glass/oobe.pending"
 
 # Third-party drivers (Setup's checkbox): installed at the first boot by
 # sg-drivers.service, on the running system, where DKMS and the boot

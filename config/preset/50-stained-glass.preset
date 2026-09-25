@@ -12,3 +12,8 @@ enable sg-live.service
 enable sg-drivers.service
 # Voice typing's model installer: the socket everywhere, a service per request.
 enable sg-speechd.socket
+# The first-run setup's service: its socket exists only while it is pending
+# (ConditionPathExists), and the browser it may ask for is installed at boot
+# only while that request is there.
+enable sg-oobed.socket
+enable sg-oobe-browser.service

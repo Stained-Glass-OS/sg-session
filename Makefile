@@ -20,7 +20,8 @@ BINS         = bin/sg-install bin/sg-drivers domain/sg-dc-provision domain/sg-do
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui
+LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+               lib/sg-oobe-user lib/sg-oobe-browser
 
 .PHONY: all install lint test test-session test-multiuser deb clean
 
@@ -80,6 +81,13 @@ install: d3d-probe greeter token-probe procagent rdp
 	@if [ -f build/sg-setup64.exe ]; then \
 	    install -m 0755 build/sg-setup64.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The first-run setup (OOBE): the wizard, and the root service behind the
+	@# bridge's --oobe mode, which applies what it asks for.
+	@if [ -f build/sg-oobe64.exe ]; then \
+	    install -m 0755 build/sg-oobe64.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
+	fi
+	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
+	install -m 0755 setup/sg-oobed $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
 	install -m 0755 setup/sg-installd setup/sg-live-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-polimport ]; then \
@@ -141,7 +149,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
 	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
-	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service $(UNITDIR)
+	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
+	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
@@ -155,7 +164,7 @@ install: d3d-probe greeter token-probe procagent rdp
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
 lint:
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/polimport-test.sh
@@ -169,7 +178,7 @@ lint:
 	@python3 test/settingsctl-test.py
 	@sh test/drivers-test.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
@@ -203,7 +212,7 @@ clean:
 	rm -rf test/tmp
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
 	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub
-	rm -f build/sg-setup64.exe build/sg-setup-bridge build/sg-setup.ico build/sg-setup-res.o
+	rm -f build/sg-setup64.exe build/sg-setup-bridge build/sg-setup.ico build/sg-setup-res.o build/sg-oobe64.exe
 
 # --- the D3D probe ---------------------------------------------------------
 #
@@ -265,6 +274,7 @@ greeter:
 	python3 setup/make-icon.py build/sg-setup.ico
 	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
 	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c build/sg-setup-res.o -lcomctl32 -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-oobe64.exe setup/sg-oobe.c -lgdi32 -luser32
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-setup-bridge setup/sg-setup-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
@@ -384,6 +394,12 @@ test-consent: greeter rdp procagent vkbd
 .PHONY: test-setup
 test-setup: greeter
 	@sh test/setup-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The first-run setup (OOBE) end to end: the real wizard, bridge and sg-oobed,
+# with stand-ins for the network, the account tools and HKLM.
+.PHONY: test-oobe
+test-oobe: greeter
+	@sh test/oobe-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # The login screen end to end, with the real Wine greeter against a greetd stub.
 .PHONY: test-login

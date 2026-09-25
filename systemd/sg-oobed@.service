@@ -1,0 +1,11 @@
+[Unit]
+Description=Stained Glass first-run setup
+CollectMode=inactive-or-failed
+# HKLM is written as SYSTEM, in the machine's Windows system.
+After=sg-wineserver.service
+
+[Service]
+ExecStart=/usr/libexec/stained-glass/sg-oobed
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

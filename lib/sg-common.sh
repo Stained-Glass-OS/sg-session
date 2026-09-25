@@ -235,6 +235,21 @@ if [ -z "${SG_COMPOSITOR:-}" ]; then
 fi
 export SG_COMPOSITOR
 
+# The keyboard layouts chosen in Setup and the first-run setup, for every
+# compositor started from here (xkbcommon reads XKB_DEFAULT_*), so the login
+# screen, the session and the lock screen type what the keys say. Debian's
+# /etc/default/keyboard, read and never sourced. Two layouts switch with
+# Windows logo key + Space (XKBOPTIONS grp:win_space_toggle).
+sg_keyboard_env() {
+    _kf="${SG_KEYBOARD_FILE:-/etc/default/keyboard}"
+    [ -r "$_kf" ] || return 0
+    for _v in LAYOUT VARIANT OPTIONS MODEL; do
+        _val=$(sed -n "s/^XKB$_v=\"\{0,1\}\([A-Za-z0-9_,:()+-]*\)\"\{0,1\}\$/\1/p" "$_kf" | tail -1)
+        if [ -n "$_val" ]; then export "XKB_DEFAULT_$_v=$_val"; else unset "XKB_DEFAULT_$_v"; fi
+    done
+}
+sg_keyboard_env
+
 # Where a session's compositor puts its privileged and control sockets: one
 # directory per session user, named by uid, under a seat directory that
 # tmpfiles creates 1770 root:sgwine. Per-uid because the sticky bit would stop

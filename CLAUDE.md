@@ -46,7 +46,7 @@ separately.
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
 | `systemd/sg-wineserver.service` | runs the machine-level server before greetd |
 | `bin/sg-install` | installs the live system onto a disk (see below) |
-| `setup/` | Setup: the wizard, its bridge, and `sg-installd` |
+| `setup/` | Setup: the wizard, its bridge, and `sg-installd`; the first-run setup (OOBE): `sg-oobe`, `sg-oobed` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
 | `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
@@ -547,6 +547,86 @@ which runs it again, windowed (`SG_SETUP_BRIDGED` tells them apart).
   Windows boot manager, MSR and data partitions and their table entries
   byte-identical afterwards), each followed by the full boot gate on the
   installed disk alone.
+
+## The first-run setup (OOBE): sg-oobe and sg-oobed
+
+The installed machine's first boot shows Windows 10's out-of-box experience
+**in the login screen's place, before anyone signs in** -- the choice made:
+Windows' OOBE runs before any user session too, and here that keeps it off
+any user's desktop (nothing of a session exists yet to be observed), reuses
+Setup's proven shape (a Windows program the bridge feeds, a root service that
+decides), and needs no autologin. sg-install writes
+`/etc/stained-glass/oobe.pending` into the machine it installs; `sg-login-ui`
+sees it and runs `sg-setup-bridge --oobe "wine sg-oobe64.exe"` in a
+compositor; whatever happens it then exits, and greetd starts it again: the
+login screen (with the keyboard just chosen), or the first-run setup again if
+it did not finish. `SG_OOBE=0` skips it.
+
+Pages (`setup/sg-oobe.c`, our own drawing: a stained-glass backdrop, a card
+with the page's picture and Basics / Network / Account / Services on the left,
+the page on the right, purple buttons): **region** ("Let's start with region.
+Is this right?", preselected from Setup's keyboard) -> **keyboard** (Setup's
+layout preselected) -> **a second layout?** (Add layout / Skip; two layouts
+switch with Windows logo key + Space, `grp:win_space_toggle`) -> **network**
+(the wired adapter and Wi-Fi networks from sg-netctl, a key field for a
+secured one, Connect; Next when online, "Skip for now" when not) ->
+**account** (only when there is no administrator; Setup always makes one) ->
+**privacy** (Location, Microphone -- voice typing --, Tailored experiences,
+Advertising ID switches; diagnostic data is *none*, stated, not offered) ->
+**a web browser** (Firefox, Firefox ESR, or none; offline: none, said so) ->
+"Hi. We're setting things up" -> "All set." and it closes.
+
+`setup/sg-oobed` (root, `sg-oobed.socket`, `/run/stained-glass-oobe/oobed.sock`,
+root:**sgsetup** 0660 -- the login screen's account; `ConditionPathExists=` the
+marker) answers `STATE`, `NETWORKS`, `CONNECT`+`KEY` (sg-netctl, the key on
+its stdin), `ACCOUNT`+`PASSWORD` (refused when an administrator exists;
+sg-install's name rules; useradd into sgwine/sg-admins/sudo, chpasswd on
+stdin) and `FINISH`. It refuses everything once the marker is gone. FINISH
+checks each value against a fixed list or pattern (locale `xx-YY`, a numeric
+country, known layouts, 0/1 switches, an offered browser) before writing:
+
+- `/etc/default/keyboard` (+ `/etc/vconsole.conf`). **Nothing read that file
+  before**: the compositor's keymap came from nowhere, so Setup's keyboard
+  choice never reached the desktop. `sg-common.sh` now exports
+  `XKB_DEFAULT_LAYOUT/VARIANT/OPTIONS/MODEL` from it for every compositor
+  (login screen, session, and so the lock screen too).
+- HKLM as SYSTEM (runuser sgsystem, `reg import`): the device's microphone
+  and location ConsentStore switches, `Policies\Microsoft\Windows\DataCollection`
+  `AllowTelemetry=0`.
+- `/etc/stained-glass/oobe.conf`: the region (locale, country), layouts and
+  their Windows ids, the per-user switches, a stamp. `lib/sg-oobe-user`
+  (sg-run-explorer, before the shell) applies it to each user's HKCU once, at
+  their first sign-in: `Control Panel\International` LocaleName and
+  `Geo\Nation`/`Name`, `Keyboard Layout\Preload`, ConsentStore (and
+  NonPackaged), AdvertisingInfo, Privacy; marked in `HKCU\Software\Stained
+  Glass\OOBE\Applied`. **The format only sticks with wine-sg 0168**: Wine
+  rewrote `International` to the Unix locale at every process start.
+- The browser: `/var/lib/stained-glass/oobe-browser` and
+  `sg-oobe-browser.service` (also at each boot while the request is there):
+  `lib/sg-oobe-browser`, as SYSTEM, `winget install --scope machine` when
+  the user has installed winget, else the publisher's own download link
+  (Mozilla's, HTTPS only) run silently. Nothing is shipped in the image.
+
+Keys as in Setup (Enter/Escape on release, for a press seen on the page); a
+privacy switch turns with Space, Enter there accepts the page. It logs
+`sg-oobe: page <name>`, `selected <row>`, `networks N online=yes|no`,
+`toggle <switch> on|off`, `done` (journal tag `sg-oobe`), which the gates
+wait on.
+
+**Gates:** `make test-oobe` (`test/oobe-e2e.sh`, xvfb): the real wizard,
+bridge and sg-oobed with stand-ins for sg-netctl, nmcli, the account tools,
+systemctl and the HKLM import -- region preselection, United Kingdom, US +
+German, a Wi-Fi key on sg-netctl's stdin only, no account page with an owner,
+the switches, Firefox handed to the service, the marker gone and the window
+closed; then no administrator and offline: skip, the account page, a
+mismatch refused, the account's groups and password on stdin, no browser;
+sg-oobed refusing after done and outside its lists. Screenshots in
+`build/artifacts-oobe/`. Mutants seen red: the wizard ignoring `ACCOUNT no`,
+sg-oobed without its done check, without the console keymap. sg-image's
+`make install-test` walks it in QEMU after the installed disk's first boot
+(`test/oobe-walk.sh`) and checks the owner's session got the region
+(`en-GB`, dd/MM/yyyy, country 242), layouts and switches;
+`SG_MUTANT_NO_OOBE=1` removes the marker before the restart and must fail.
 
 ## Third-party drivers: sg-drivers
 

@@ -1,0 +1,258 @@
+#!/bin/sh
+# The privileged half of the first-run setup (the OOBE): applies what the
+# owner chose at the installed machine's first boot.
+#
+# Socket-activated, one instance per connection (sg-oobed.socket), as root.
+# The socket exists only while /etc/stained-glass/oobe.pending does (sg-install
+# writes it into the machine it installs), and only the login screen's account
+# (group sgsetup) may connect: the first-run setup takes the login screen's
+# place, as Windows' out-of-box experience comes before anyone signs in. The
+# wizard (sg-oobe.exe) decides nothing; every value is checked here against a
+# fixed list or pattern before anything is written, and this refuses to do
+# anything at all once the first-run setup is done.
+#
+# Protocol on stdin/stdout, one request per line:
+#
+#   <- HELLO
+#   -> STATE          <- KEYBOARD <layout>  ACCOUNT yes|no  ONLINE yes|no  END
+#   -> NETWORKS       <- WIRED <dev>\t<state>   WIFI <sg-netctl wifi scan line>
+#                        ONLINE yes|no  END
+#   -> CONNECT <ssid hex>\t<open|wpa-psk|sae>
+#   -> KEY <network key, may be empty>   <- OK | FAILED <text>
+#   -> ACCOUNT <name>\t<full name>       (only when there is no administrator)
+#   -> PASSWORD <password>               <- OK | FAILED <text>
+#   -> FINISH <locale>\t<geo>\t<layouts>\t<location 0|1>\t<microphone 0|1>\t
+#             <tailored 0|1>\t<advertising 0|1>\t<browser>
+#                                        <- DONE | FAILED <text>
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+PENDING="${SG_OOBE_PENDING:-/etc/stained-glass/oobe.pending}"
+CONF="${SG_OOBE_CONF:-/etc/stained-glass/oobe.conf}"
+ETC="${SG_OOBE_ETC:-/etc}"
+BROWSER_REQ="${SG_OOBE_BROWSER_REQ:-/var/lib/stained-glass/oobe-browser}"
+NETCTL="${SG_NETCTL:-sg-netctl}"
+SYSTEMCTL="${SG_SYSTEMCTL:-systemctl}"
+# How HKLM is written: as SYSTEM in the machine's Windows system. The gate
+# stands in a recorder.
+HKLM_IMPORT="${SG_OOBE_HKLM_IMPORT:-}"
+# Account tools; the gate stands in its own (it is not root).
+GETENT="${SG_GETENT:-getent}"
+USERADD="${SG_USERADD:-useradd}"
+USERDEL="${SG_USERDEL:-userdel}"
+CHPASSWD="${SG_CHPASSWD:-chpasswd}"
+TAB=$(printf '\t')
+
+say() { printf '%s\n' "$*"; }
+log() { printf 'sg-oobed: %s\n' "$*" >&2; }
+
+# The keyboard layouts the first-run setup offers (the XKB names), and their
+# Windows keyboard layout identifiers for HKCU\Keyboard Layout\Preload.
+LAYOUTS="us:00000409 gb:00000809 de:00000407 fr:0000040c es:0000040a it:00000410 pt:00000816
+br:00000416 nl:00000413 be:0000080c ch:00000807 se:0000041d no:00000414 dk:00000406 fi:0000040b
+pl:00000415 cz:00000405 hu:0000040e jp:00000411 ca:00001009 latam:0000080a ie:00001809"
+BROWSERS="none Mozilla.Firefox Mozilla.Firefox.ESR"
+
+klid_of() {
+    for _l in $LAYOUTS; do [ "${_l%%:*}" = "$1" ] && { echo "${_l#*:}"; return 0; }; done
+    return 1
+}
+
+known_layout() {
+    for _l in $LAYOUTS; do [ "${_l%%:*}" = "$1" ] && return 0; done
+    return 1
+}
+
+[ -f "$PENDING" ] || { say "FAILED The first-run setup is already done."; exit 1; }
+say HELLO
+
+# Is there an administrator a person can sign in as? (Setup makes the owner;
+# a machine installed some other way may have none yet.)
+has_admin() {
+    for _u in $("$GETENT" group sg-admins | cut -d: -f4 | tr ',' ' '); do
+        case "$_u" in live|sguser|sggreet|sgsystem|root) continue ;; esac
+        _uid=$("$GETENT" passwd "$_u" | cut -d: -f3)
+        [ -n "$_uid" ] || continue
+        [ "$_uid" -ge 1000 ] && return 0
+    done
+    return 1
+}
+
+online() {
+    case "$(nmcli -t -f CONNECTIVITY general 2>/dev/null)" in full|limited) echo yes ;; *) echo no ;; esac
+}
+
+current_layout() {
+    sed -n 's/^XKBLAYOUT="\{0,1\}\([a-z,]*\)"\{0,1\}$/\1/p' "$ETC/default/keyboard" 2>/dev/null | cut -d, -f1
+}
+
+# HKLM as SYSTEM: the device-wide privacy switches and the diagnostic data
+# policy. A .reg file in the machine prefix's own temp, imported by reg.exe.
+hklm_import() {
+    if [ -n "$HKLM_IMPORT" ]; then "$HKLM_IMPORT" "$1"; return; fi
+    # shellcheck source=lib/sg-common.sh
+    . "$SG_LIB/sg-common.sh"
+    _f=$(mktemp /tmp/sg-oobe-hklm.XXXXXX.reg) || return 1
+    cat "$1" > "$_f"; chmod 644 "$_f"
+    # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+    runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
+        SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" F="$_f" sh -c '
+        . "$SG_LIB/sg-common.sh"; sg_wine_env
+        wine reg import "$(winepath -w "$F")"' >/dev/null 2>&1
+    _rc=$?
+    rm -f "$_f"
+    return $_rc
+}
+
+allow() { [ "$1" = 1 ] && echo Allow || echo Deny; }
+
+finish() {
+    set -f; _old=$IFS; IFS=$TAB
+    # shellcheck disable=SC2086  # split on tabs, globbing off
+    set -- $1
+    IFS=$_old; set +f
+    [ "$#" -eq 8 ] || { say "FAILED The choices were incomplete."; return 1; }
+    locale=$1 geo=$2 layouts=$3 location=$4 mic=$5 tailored=$6 adid=$7 browser=$8
+    printf '%s' "$locale" | grep -Eq '^[a-z]{2,3}-[A-Z]{2}$' || { say "FAILED That region is not known."; return 1; }
+    printf '%s' "$geo" | grep -Eq '^[0-9]{1,6}$' || { say "FAILED That region is not known."; return 1; }
+    printf '%s' "$layouts" | grep -Eq '^[a-z]{2,5}(,[a-z]{2,5})?$' || { say "FAILED That keyboard layout is not known."; return 1; }
+    for _l in $(echo "$layouts" | tr ',' ' '); do
+        known_layout "$_l" || { say "FAILED That keyboard layout is not known."; return 1; }
+    done
+    for _v in "$location" "$mic" "$tailored" "$adid"; do
+        case "$_v" in 0|1) ;; *) say "FAILED The privacy choices were not understood."; return 1 ;; esac
+    done
+    _ok=0; for _b in $BROWSERS; do [ "$_b" = "$browser" ] && _ok=1; done
+    [ "$_ok" = 1 ] || { say "FAILED That browser is not offered."; return 1; }
+
+    # The keyboard: the console's and the compositor's (sg-common exports it
+    # to every compositor from /etc/default/keyboard). Two layouts switch with
+    # Windows+Space, as on Windows.
+    first=${layouts%%,*}
+    opts=""; [ "$first" != "$layouts" ] && opts="grp:win_space_toggle"
+    mkdir -p "$ETC/default"
+    printf 'XKBMODEL="pc105"\nXKBLAYOUT="%s"\nXKBVARIANT=""\nXKBOPTIONS="%s"\nBACKSPACE="guess"\n' "$layouts" "$opts" \
+        > "$ETC/default/keyboard.new" && mv "$ETC/default/keyboard.new" "$ETC/default/keyboard"
+    printf 'KEYMAP=%s\n' "$first" > "$ETC/vconsole.conf"
+
+    # The device's own switches, as Settings > Privacy keeps them (HKLM).
+    reg=$(mktemp) || { say "FAILED Out of resources."; return 1; }
+    cs='HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
+    {
+        printf 'Windows Registry Editor Version 5.00\r\n\r\n'
+        printf '[%s\\microphone]\r\n"Value"="%s"\r\n\r\n' "$cs" "$(allow "$mic")"
+        printf '[%s\\location]\r\n"Value"="%s"\r\n\r\n' "$cs" "$(allow "$location")"
+        # Diagnostic data: none. Nothing in Stained Glass OS collects any; the
+        # policy says so to programs that ask.
+        printf '[HKEY_LOCAL_MACHINE\\Software\\Policies\\Microsoft\\Windows\\DataCollection]\r\n"AllowTelemetry"=dword:00000000\r\n\r\n'
+    } > "$reg"
+    if ! hklm_import "$reg"; then rm -f "$reg"; say "FAILED The privacy settings could not be saved."; return 1; fi
+    rm -f "$reg"
+
+    # The record every user's first sign-in applies (sg-oobe-user): the
+    # region, the layouts, the per-user privacy switches.
+    {
+        echo "# The first-run setup's choices (sg-oobed). Applied to each user at their first sign-in."
+        echo "REGION_LOCALE=$locale"
+        echo "REGION_GEO=$geo"
+        echo "KEYBOARDS=$layouts"
+        _ids=""; for _l in $(echo "$layouts" | tr ',' ' '); do _ids="${_ids:+$_ids,}$(klid_of "$_l")"; done
+        echo "KEYBOARD_IDS=$_ids"
+        echo "LOCATION=$location"
+        echo "MICROPHONE=$mic"
+        echo "TAILORED=$tailored"
+        echo "ADVERTISING=$adid"
+        echo "DIAGNOSTICS=none"
+        echo "BROWSER=$browser"
+        echo "STAMP=$(date +%s)"
+    } > "$CONF.new" && chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
+
+    if [ "$browser" != none ]; then
+        mkdir -p "$(dirname "$BROWSER_REQ")"
+        printf '%s\n' "$browser" > "$BROWSER_REQ"
+        "$SYSTEMCTL" start --no-block sg-oobe-browser.service >/dev/null 2>&1 || log "could not start the browser installation"
+    fi
+    rm -f "$PENDING"
+    log "done: region $locale ($geo), keyboard $layouts, browser $browser"
+    say DONE
+}
+
+ssid="" sec="" acct="" full=""
+while IFS= read -r line; do
+    [ -f "$PENDING" ] || { say "FAILED The first-run setup is already done."; exit 1; }
+    case "$line" in
+    STATE)
+        say "KEYBOARD $(current_layout)"
+        if has_admin; then say "ACCOUNT yes"; else say "ACCOUNT no"; fi
+        say "ONLINE $(online)"
+        say END
+        ;;
+    NETWORKS)
+        "$NETCTL" adapters 2>/dev/null | awk '
+            /^ADAPTER / { dev = $2; type = ""; state = "" }
+            /^TYPE / { type = $2 }
+            /^STATE / { state = $2 }
+            /^END/ { if (type == "ethernet") printf "WIRED %s\t%s\n", dev, state }'
+        "$NETCTL" wifi scan 2>/dev/null | grep '^WIFI '
+        say "ONLINE $(online)"
+        say END
+        ;;
+    "CONNECT "*)
+        set -f; old=$IFS; IFS=$TAB
+        # shellcheck disable=SC2086  # split on tabs, globbing off
+        set -- ${line#CONNECT }
+        IFS=$old; set +f
+        ssid=${1:-} sec=${2:-}
+        ;;
+    "KEY "*|KEY)
+        key=${line#KEY}; key=${key# }
+        line=""
+        if ! printf '%s' "$ssid" | grep -Eq '^([0-9a-f]{2}){1,32}$'; then key=""; say "FAILED Choose a network first."; continue; fi
+        case "$sec" in open|wpa-psk|sae) ;; *) key=""; say "FAILED That network's security is not supported here."; continue ;; esac
+        err=$(mktemp)
+        if [ "$sec" = open ]; then
+            "$NETCTL" wifi connect --ssid-hex "$ssid" --security open >"$err" 2>&1; rc=$?
+        else
+            printf '%s\n' "$key" | "$NETCTL" wifi connect --ssid-hex "$ssid" --security "$sec" --password-stdin >"$err" 2>&1; rc=$?
+        fi
+        key=""
+        if [ "$rc" = 0 ]; then log "joined a Wi-Fi network"; say OK
+        else
+            why=$(grep '^ERROR' "$err" | tail -1 | cut -d' ' -f3-)
+            [ -n "$why" ] || why="Can't connect to this network."
+            say "FAILED $why"
+        fi
+        rm -f "$err"
+        ;;
+    "ACCOUNT "*)
+        set -f; old=$IFS; IFS=$TAB
+        # shellcheck disable=SC2086  # split on tabs, globbing off
+        set -- ${line#ACCOUNT }
+        IFS=$old; set +f
+        acct=${1:-} full=${2:-}
+        ;;
+    "PASSWORD "*)
+        pw=${line#PASSWORD }
+        line=""
+        if has_admin; then pw=""; say "FAILED This PC already has an administrator."; continue; fi
+        case "$acct" in root|sgsystem|nobody|daemon|sguser|live|sggreet|sgrdp|"") pw=""; say "FAILED That name is reserved."; continue ;; esac
+        if ! printf '%s' "$acct" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$'; then pw=""; say "FAILED That account name is not valid."; continue; fi
+        case "$full" in *:*) pw=""; say "FAILED The name cannot contain ':'."; continue ;; esac
+        [ -n "$pw" ] || { say "FAILED Choose a password."; continue; }
+        if "$GETENT" passwd "$acct" >/dev/null; then pw=""; say "FAILED That account already exists."; continue; fi
+        groups=""
+        for g in sgwine sg-admins sudo; do "$GETENT" group "$g" >/dev/null && groups="${groups:+$groups,}$g"; done
+        if "$USERADD" -m -s /bin/bash -c "${full:-$acct}" ${groups:+-G "$groups"} "$acct" \
+                && printf '%s:%s\n' "$acct" "$pw" | "$CHPASSWD"; then
+            log "made the owner's account $acct"; say OK
+        else
+            "$USERDEL" -r "$acct" >/dev/null 2>&1
+            say "FAILED The account could not be created."
+        fi
+        pw=""
+        ;;
+    "FINISH "*) finish "${line#FINISH }" ;;
+    *) say "ERROR unknown request" ;;
+    esac
+done

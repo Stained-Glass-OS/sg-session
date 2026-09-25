@@ -1,0 +1,20 @@
+# The first-run setup's service (sg-oobed). Only while the first-run setup is
+# pending -- sg-install writes the marker into the machine it installs, and
+# sg-oobed removes it when the owner has finished -- and only for the login
+# screen's account (group sgsetup), in whose place the first-run setup runs.
+# Not under /run/stained-glass: that is sg-wineserver's RuntimeDirectory.
+[Unit]
+Description=Stained Glass first-run setup socket
+ConditionPathExists=/etc/stained-glass/oobe.pending
+
+[Socket]
+ListenStream=/run/stained-glass-oobe/oobed.sock
+SocketUser=root
+SocketGroup=sgsetup
+SocketMode=0660
+DirectoryMode=0755
+Accept=yes
+MaxConnections=2
+
+[Install]
+WantedBy=sockets.target

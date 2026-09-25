@@ -8,6 +8,10 @@
  * socket.
  *
  *   sg-setup-bridge <wizard command>
+ *   sg-setup-bridge --oobe <first-run setup command>
+ *
+ * With --oobe it serves the first-run setup (sg-oobe.exe) instead, in front
+ * of sg-oobed, with that service's requests.
  *
  * Only the requests the service knows are passed on, one line each. Nothing
  * the wizard sends is logged except the fact that it is ready: one of the lines
@@ -52,13 +56,15 @@ static int write_all( int fd, const char *p, size_t len )
     return 0;
 }
 
+static int oobe;     /* --oobe: the first-run setup and sg-oobed */
+
 static int connect_service( void )
 {
-    const char *path = getenv( "SG_INSTALLD_SOCK" );
+    const char *path = getenv( oobe ? "SG_OOBED_SOCK" : "SG_INSTALLD_SOCK" );
     struct sockaddr_un addr;
     int fd;
 
-    if (!path) path = "/run/stained-glass-setup/installd.sock";
+    if (!path) path = oobe ? "/run/stained-glass-oobe/oobed.sock" : "/run/stained-glass-setup/installd.sock";
     if ((fd = socket( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0 )) < 0) return -1;
     memset( &addr, 0, sizeof(addr) );
     addr.sun_family = AF_UNIX;
@@ -73,12 +79,15 @@ struct buf { char data[LINE_MAX_LEN]; size_t len; };
 static int allowed( const char *line )
 {
     static const char *const ok[] = { "LIST", "LAYOUT", "DRIVERS", "NEW ", "DELETE ", "FORMAT ", "INSTALL ",
-                                      "PASSWORD ", "REBOOT", "POWEROFF" };
+                                      "PASSWORD ", "REBOOT", "POWEROFF", NULL };
+    static const char *const ok_oobe[] = { "STATE", "NETWORKS", "CONNECT ", "KEY", "KEY ", "ACCOUNT ",
+                                           "PASSWORD ", "FINISH ", NULL };
+    const char *const *list = oobe ? ok_oobe : ok;
     size_t i;
-    for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+    for (i = 0; list[i]; i++)
     {
-        size_t n = strlen( ok[i] );
-        if (ok[i][n - 1] == ' ' ? !strncmp( line, ok[i], n ) : !strcmp( line, ok[i] )) return 1;
+        size_t n = strlen( list[i] );
+        if (list[i][n - 1] == ' ' ? !strncmp( line, list[i], n ) : !strcmp( line, list[i] )) return 1;
     }
     return 0;
 }
@@ -139,10 +148,10 @@ static void from_wizard( char *line, void *ctx )
     {
         /* The window exists and takes input: a real readiness signal for
          * anything waiting on it -- the install gate, remote support. */
-        logmsg( "setup ready" );
+        logmsg( oobe ? "oobe ready" : "setup ready" );
         return;
     }
-    if (!strcmp( line, "TRY" ))
+    if (!oobe && !strcmp( line, "TRY" ))
     {
         /* "Try Stained Glass OS": not the installer service's business. The
          * login screen script reads the answer when the wizard has closed,
@@ -156,7 +165,7 @@ static void from_wizard( char *line, void *ctx )
     if (!allowed( line )) return;
     if (service < 0)
     {
-        to_wizard( "FAILED The installer service is not available." );
+        to_wizard( oobe ? "FAILED The setup service is not available." : "FAILED The installer service is not available." );
         return;
     }
     n = strlen( line );
@@ -179,7 +188,8 @@ int main( int argc, char **argv )
     int from_ui;
     pid_t child;
 
-    if (argc < 2) { logmsg( "usage: sg-setup-bridge <wizard command>" ); return 2; }
+    if (argc > 2 && !strcmp( argv[1], "--oobe" )) { oobe = 1; argv++; argc--; }
+    if (argc < 2) { logmsg( "usage: sg-setup-bridge [--oobe] <wizard command>" ); return 2; }
     signal( SIGPIPE, SIG_IGN );
     if (pipe( up ) < 0 || pipe( down ) < 0) { logmsg( "pipe: %s", strerror( errno ) ); return 1; }
     if ((child = fork()) < 0) { logmsg( "fork: %s", strerror( errno ) ); return 1; }

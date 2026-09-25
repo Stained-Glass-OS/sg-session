@@ -134,6 +134,12 @@ if [ -r "$_netdir/user-policy.reg" ] || [ -f "$_upstate" ]; then
     sg_apply_user_policy "$_netdir/user-policy.reg" "$_upstate"
 fi
 
+# The first-run setup's choices (region, keyboard layouts, privacy), applied to
+# this user once, before the shell: at their first sign-in.
+if [ -r "${SG_OOBE_CONF:-/etc/stained-glass/oobe.conf}" ] && [ -x "$SG_LIB/sg-oobe-user" ]; then
+    "$SG_LIB/sg-oobe-user" || sg_log "the first-run setup's choices were not applied"
+fi
+
 # What starts alongside the shell waits until the shell owns the desktop.
 # A GUI program started first makes Wine create the desktop itself (a bare
 # `explorer /desktop`); the shell's own explorer then found it taken, exited

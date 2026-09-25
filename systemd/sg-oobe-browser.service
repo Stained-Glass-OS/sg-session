@@ -1,0 +1,15 @@
+# The web browser chosen in the first-run setup, downloaded from its publisher
+# and installed for everyone, in the background, once. Started by sg-oobed.
+[Unit]
+Description=Install the web browser chosen in the first-run setup
+ConditionPathExists=/var/lib/stained-glass/oobe-browser
+Wants=network-online.target
+After=network-online.target sg-wineserver.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/stained-glass/sg-oobe-browser
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target
