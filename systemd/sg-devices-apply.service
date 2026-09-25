@@ -1,0 +1,15 @@
+[Unit]
+Description=Stained Glass: keep devices disabled in Device Manager disabled
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# Device Manager's "Disable device" unbinds a PCI device (a driver_override
+# naming no driver) or de-authorizes a USB one; neither survives a reboot, so
+# sg-sysinfo does it again from its list once the devices are there.
+After=systemd-udev-settle.service systemd-udev-trigger.service
+ConditionPathExists=/var/lib/stained-glass-sysinfo/disabled-devices
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-sysinfo --apply-disabled
+
+[Install]
+WantedBy=multi-user.target

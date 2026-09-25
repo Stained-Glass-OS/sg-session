@@ -105,7 +105,9 @@ case "$1" in
         # cannot chown here.
 
         # The Windows profile service: pam_exec runs sg-profile-create as each
-        # session opens (/usr/share/pam-configs/stained-glass-profile).
+        # session opens (/usr/share/pam-configs/stained-glass-profile); and
+        # sg-audit, the Security log's sign-in/sign-out events
+        # (stained-glass-audit).
         pam-auth-update --package
         ;;
 esac

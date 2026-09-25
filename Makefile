@@ -130,6 +130,9 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
 	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
+	@# The Security log's sign-in/sign-out events (sg-audit, pam_exec at session open and close).
+	install -m 0755 bin/sg-audit $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0644 config/pam-configs/stained-glass-audit $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
 	install -m 0755 domain/sg-domain-groups domain/sg-domain-logon domain/sg-gpo-user domain/sg-gpo-machine $(DESTDIR)$(PREFIX)/libexec/stained-glass/
@@ -149,13 +152,13 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
-	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service \
+	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service systemd/sg-devices-apply.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
-	install -m 0644 tmpfiles/sg-session.conf $(TMPFILESDIR)
+	install -m 0644 tmpfiles/sg-session.conf tmpfiles/sg-audit.conf $(TMPFILESDIR)
 	install -d $(UNITDIR)/user-runtime-dir@.service.d
 	install -m 0644 systemd/user-runtime-dir@.service.d/50-stained-glass-drives.conf \
 	    $(UNITDIR)/user-runtime-dir@.service.d/
@@ -175,6 +178,7 @@ lint:
 	@python3 test/netctl-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 test/sysinfo-test.py
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-audit
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
@@ -409,3 +413,14 @@ test-oobe: greeter
 .PHONY: test-login
 test-login: greeter
 	@sh test/login-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# Disk Management's partition changes for real, on a loop device only (needs sudo).
+.PHONY: test-diskops
+test-diskops:
+	@sh test/diskops-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The Security log's Linux side: sg-audit, the broker's events, the log files'
+# modes; SG_WINE=<a wine-sg with 0187> adds the end to end (needs sudo, sgconf).
+.PHONY: test-audit
+test-audit:
+	@sh test/audit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc

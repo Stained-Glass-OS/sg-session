@@ -37,6 +37,22 @@ sg_protect_machine_registry
 sg_log "applying machine policy"
 sg_apply_policy
 
+# The event logs are read only by the Event Log service (SYSTEM), which answers
+# everyone else through its pipe and decides who may read what -- Security
+# only for administrators. At the Linux level the prefix's files are all open
+# to its group (D13), so their directory is made the SYSTEM account's alone:
+# a user reading the prefix through Z: must not get the Security log. Wine
+# cannot make it so itself (a DACL naming SYSTEM maps to user and group bits).
+sg_protect_event_logs() {
+    logs="$SG_PREFIX/drive_c/windows/system32/winevt/Logs"
+    [ -d "$SG_PREFIX/drive_c/windows/system32" ] || return 0
+    mkdir -p "$logs" || return 0
+    chmod 0700 "$logs" || :
+    find "$logs" -mindepth 1 -maxdepth 1 -type f -exec chmod go-rwx {} + 2>/dev/null || :
+}
+sg_log "protecting the event logs"
+sg_protect_event_logs
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this

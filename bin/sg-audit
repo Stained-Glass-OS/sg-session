@@ -1,0 +1,135 @@
+#!/usr/bin/python3
+# sg-audit -- audit events for the Windows Security log (Event Viewer >
+# Windows Logs > Security): signing in and out happens in PAM, outside
+# Windows, so this writes what Windows would log into the audit spool, which
+# wine-sg's Event Log service imports (patch 0187).
+#
+#   sg-audit pam                      from pam_exec (pam-configs
+#                                     stained-glass-audit), as root: a session
+#                                     opening is 4624 (and 4672 for an
+#                                     administrator), closing 4634
+#   sg-audit event ID success|failure CATEGORY STRING...   any one event
+#
+# The spool (SG_AUDIT_SPOOL, default /var/lib/stained-glass-audit) is 0700 and
+# belongs to the SYSTEM account (sgsystem): only root and SYSTEM may write it,
+# so no user can put an event in the Security log. Each event is a file,
+# written under a dot-name and renamed when complete, owned by the spool's
+# owner so the service can read and remove it:
+#
+#   ID 4624 / TYPE success|failure / CATEGORY 12544 / TIME <epoch> / STRING ...
+#
+# The insertion strings are what wevtsvc.dll's messages expect:
+#   4624 logon:    account, domain, logon type, logon process, source
+#   4634 logoff:   account, domain, logon type, logon process
+#   4672 special privileges: account, domain, privileges, process
+# Categories: 12544 Logon, 12545 Logoff, 12548 Special Logon.
+#
+# It never fails a login: every error is logged and it exits 0 under PAM.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import grp
+import os
+import pwd
+import socket
+import sys
+import syslog
+import time
+
+SPOOL = os.environ.get("SG_AUDIT_SPOOL", "/var/lib/stained-glass-audit")
+ADMIN_GROUP = os.environ.get("SG_ADMIN_GROUP", "sg-admins")
+ADMIN_PRIVILEGES = ("SeSecurityPrivilege, SeBackupPrivilege, SeRestorePrivilege, SeTakeOwnershipPrivilege, "
+                    "SeDebugPrivilege, SeSystemEnvironmentPrivilege, SeLoadDriverPrivilege, SeImpersonatePrivilege")
+# PAM service -> Windows' logon type
+LOGON_TYPES = {
+    "greetd": "2 (Interactive)", "login": "2 (Interactive)", "gdm-password": "2 (Interactive)",
+    "stained-glass-lock": "7 (Unlock)", "stained-glass-remote": "10 (RemoteInteractive)",
+    "sshd": "3 (Network)",
+}
+PROCESSES = {"greetd": "greetd (sign-in screen)", "stained-glass-lock": "sg-lockd (lock screen)",
+             "stained-glass-remote": "sg-rdpd (Remote Desktop)", "sshd": "sshd"}
+
+
+def computer():
+    return socket.gethostname().split(".")[0].upper()[:15] or "LOCALHOST"
+
+
+def account(user):
+    """(name, domain) as Windows shows them: DOMAIN\\name, name@realm, or a local one."""
+    if "\\" in user:
+        d, n = user.split("\\", 1)
+        return n, d.upper()
+    if "@" in user:
+        n, d = user.split("@", 1)
+        return n, d.split(".")[0].upper()
+    return user, computer()
+
+
+def is_admin(user):
+    try:
+        pw = pwd.getpwnam(user)
+        gid = grp.getgrnam(ADMIN_GROUP).gr_gid
+    except KeyError:
+        return False
+    return gid in os.getgrouplist(pw.pw_name, pw.pw_gid)
+
+
+def clean(s):
+    return "".join(" " if c in "\r\n" else c for c in str(s))
+
+
+def write_event(event_id, success, category, strings):
+    t = time.time_ns()
+    name = "%d-%d" % (t, os.getpid())
+    tmp = os.path.join(SPOOL, "." + name + ".tmp")
+    path = os.path.join(SPOOL, name + ".evt")
+    st = os.stat(SPOOL)
+    body = "ID %d\nTYPE %s\nCATEGORY %d\nTIME %d\n" % (event_id, "success" if success else "failure", category,
+                                                         t // 1000000000)
+    body += "".join("STRING %s\n" % clean(s) for s in strings)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
+    try:
+        os.write(fd, body.encode("utf-8"))
+        if os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+
+
+def from_pam():
+    kind = os.environ.get("PAM_TYPE", "")
+    user = os.environ.get("PAM_USER", "")
+    service = os.environ.get("PAM_SERVICE", "")
+    if not user or kind not in ("open_session", "close_session"):
+        return
+    name, domain = account(user)
+    logon_type = LOGON_TYPES.get(service, "2 (Interactive)")
+    process = PROCESSES.get(service, service or "-")
+    source = os.environ.get("PAM_RHOST") or os.environ.get("PAM_TTY") or "-"
+    if kind == "open_session":
+        write_event(4624, True, 12544, [name, domain, logon_type, process, source])
+        if is_admin(user):
+            write_event(4672, True, 12548, [name, domain, ADMIN_PRIVILEGES, process])
+    else:
+        write_event(4634, True, 12545, [name, domain, logon_type, process])
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["pam"]:
+        try:
+            from_pam()
+        except Exception as e:  # never stand between a user and their session
+            syslog.openlog("sg-audit")
+            syslog.syslog(syslog.LOG_WARNING, "cannot write the audit event: %r" % e)
+        return 0
+    if len(args) >= 3 and args[0] == "event" and args[1].isdigit() and args[2] in ("success", "failure"):
+        cat = int(args[3]) if len(args) > 3 and args[3].isdigit() else 0
+        write_event(int(args[1]), args[2] == "success", cat, args[4:])
+        return 0
+    print("usage: sg-audit pam | sg-audit event ID success|failure CATEGORY STRING...", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

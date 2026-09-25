@@ -33,6 +33,11 @@
 #   cleanup | clean ID...
 #   mount PART | unmount PART | letter PART X:|none     (administrators)
 #   format PART ntfs|exfat|fat32|ext4 [--label L]      (administrators)
+#   create DISK START SIZE [--fs F] [--label L] | delete PART |
+#   resize PART SIZE | resize-info PART                 (administrators)
+#   smart                                               (SMART health)
+#   device-disable ID | device-enable ID                (administrators)
+#   --apply-disabled                                    (root, at boot)
 #
 # Output: lines -- "KEY value", one block per object ending "END" -- then a
 # last line "OK" or "ERROR <kind> <message>", kind one of denied, invalid,
@@ -68,6 +73,9 @@ PASSWD_FILE = os.environ.get("SG_PASSWD_FILE", "/etc/passwd")
 GROUP_FILE = os.environ.get("SG_GROUP_FILE", "/etc/group")
 SHADOW_FILE = os.environ.get("SG_SHADOW_FILE", "/etc/shadow")
 MEDIA_DIR = os.environ.get("SG_MEDIA_DIR", "/media/stained-glass")
+# Tests only (loop devices): with SG_SYSINFO_DISKS set, these are the only disks
+# anything may change, and loop devices among them are listed as disks.
+TEST_DISKS = set(os.environ.get("SG_SYSINFO_DISKS", "").split())
 MAX_REQUEST = 65536
 EXIT = {"denied": 3, "invalid": 2}
 SBIN = ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
@@ -116,10 +124,11 @@ def read(path, default=""):
         return default
 
 
-def run_cmd(argv, timeout=30, check=False):
+def run_cmd(argv, timeout=30, check=False, input=None):
+    # never the caller's stdin: in sg-sysinfod that is the request's socket
     try:
         p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
-                           env=dict(os.environ, LC_ALL="C"))
+                           env=dict(os.environ, LC_ALL="C"), input=input if input is not None else b"")
     except (OSError, subprocess.TimeoutExpired) as e:
         if check:
             raise Fail("failed", "%s: %s" % (os.path.basename(argv[0]), e))
@@ -394,6 +403,9 @@ PCI_CLASSES = {
     "07": "system", "08": "system", "09": "hid", "0a": "system", "0b": "processor", "0d": "net",
     "0e": "system", "0f": "net", "10": "system", "11": "system", "12": "system", "13": "system",
 }
+# A disabled PCI device: bound to no driver by a driver_override naming none
+# (Device Manager's Disable device, which sg-sysinfod does).
+DISABLED_DRIVER = "sg-disabled"
 NEEDS_DRIVER = {"display", "net", "sound", "storage-controller", "usb", "bluetooth", "camera", "printer"}
 
 
@@ -526,12 +538,14 @@ def devices_list():
              "DRIVER": drv, "MODULE": mod or drv}
         if sub:
             d["SUBSYSTEM-NAME"] = sub
-        if cls in NEEDS_DRIVER and not drv:
+        if read(os.path.join(p, "driver_override")) == DISABLED_DRIVER:
+            d["STATUS"], d["PROBLEM"] = "disabled", "This device is disabled. (Code 22)"
+        elif cls in NEEDS_DRIVER and not drv:
             d["STATUS"] = "nodriver"
             d["PROBLEM"] = "The drivers for this device are not installed."
         else:
             d["STATUS"] = "ok"
-        if slot in drivers:
+        if slot in drivers and d["STATUS"] != "disabled":
             d["SG-DRIVER"], d["SG-DRIVER-NOTE"] = drivers[slot][0], drivers[slot][1]
             if not drv:
                 d["PROBLEM"] = "The drivers for this device are not installed. Stained Glass can install %s." \
@@ -587,7 +601,9 @@ def devices_list():
                  n.split("-")[-1].split(".")[-1] if "-" in n else "0", busnum, devnum),
              "DRIVER": ",".join(idrivers) or driver_of(p)[0], "MODULE": idrivers[0] if idrivers else "",
              "SPEED": read(os.path.join(p, "speed"))}
-        if not idrivers and cls not in ("usb",) and iclasses:
+        if read(os.path.join(p, "authorized")) == "0":
+            d["STATUS"], d["PROBLEM"] = "disabled", "This device is disabled. (Code 22)"
+        elif not idrivers and cls not in ("usb",) and iclasses:
             d["STATUS"], d["PROBLEM"] = "nodriver", "The drivers for this device are not installed."
         else:
             d["STATUS"] = "ok"
@@ -856,9 +872,13 @@ def disk_model():
     disks = []
     for dev in devs:
         typ = dev.get("type")
+        if typ == "loop" and (dev.get("path") or "/dev/" + dev.get("name", "")) in TEST_DISKS:
+            dev = dict(dev, type="disk")      # a test disk
+            typ = "disk"
         if typ not in ("disk", "rom"):
             continue
-        if re.match(r"(zram|ram|loop)", dev.get("name", "")):
+        if re.match(r"(zram|ram|loop)", dev.get("name", "")) and \
+                (dev.get("path") or "/dev/" + dev.get("name", "")) not in TEST_DISKS:
             continue
         parts = [c for c in dev.get("children") or [] if c.get("type") == "part"]
         if not parts and (dev.get("fstype") or mounts_of(dev)):
@@ -1675,13 +1695,432 @@ def cmd_format(pos, opts, emit):
     emit("FORMATTED %s %s" % (p["name"], kind))
 
 
+# --- Device Manager writes: disable and enable a device --------------------------
+
+STATE_DIR = os.environ.get("SG_SYSINFO_STATE", "/var/lib/stained-glass-sysinfo")
+# Classes a device may be disabled in (Windows lets most go; these are the ones
+# whose loss a user can undo from here). Never processors, the machine's
+# buses and bridges, monitors, batteries.
+DISABLE_CLASSES = {"display", "net", "sound", "usb", "hid", "keyboard", "mouse", "camera", "bluetooth", "printer",
+                   "disk", "cdrom", "storage-controller", "other"}
+
+
+def disabled_state():
+    try:
+        with open(os.path.join(STATE_DIR, "disabled-devices"), encoding="utf-8") as f:
+            return [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    except OSError:
+        return []
+
+
+def save_disabled(ids):
+    os.makedirs(STATE_DIR, mode=0o755, exist_ok=True)
+    tmp = os.path.join(STATE_DIR, ".disabled-devices.new")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("# Devices disabled in Device Manager (sg-sysinfo); re-applied at boot.\n")
+        for i in sorted(set(ids)):
+            f.write(i + "\n")
+    os.replace(tmp, os.path.join(STATE_DIR, "disabled-devices"))
+
+
+def write_sys(path, value):
+    with open(path, "w") as f:
+        f.write(value)
+
+
+def system_disk_devices():
+    """sysfs paths (real) of the block devices holding the system -- a device
+    above one of them must never be disabled."""
+    out = []
+    try:
+        model, _, _ = disk_model()
+    except Fail:
+        return out
+    for dev, items, gaps, system in model:
+        if system:
+            out.append(os.path.realpath(os.path.join(SYSFS, "class/block", dev.get("name", ""))))
+    return out
+
+
+def set_device(device_id, enable, emit):
+    devs = {d["DEVICE"]: d for d in devices_list()}
+    d = devs.get(device_id)
+    if not d:
+        raise Fail("notfound", "no device %s" % clean(device_id))
+    kind = device_id.split(":", 1)[0]
+    if kind not in ("pci", "usb"):
+        raise Fail("unsupported", "%s cannot be disabled here" % clean(d.get("NAME", device_id)))
+    path = d["SYSFS"]
+    if not enable:
+        if d.get("CLASS") not in DISABLE_CLASSES:
+            raise Fail("denied", "%s is needed by the computer and cannot be disabled" % clean(d.get("NAME")))
+        if kind == "usb" and d.get("VENDOR-ID") == "0x1d6b":
+            raise Fail("denied", "a USB root hub cannot be disabled")
+        for sysdisk in system_disk_devices():
+            if sysdisk == path or sysdisk.startswith(path.rstrip("/") + "/"):
+                raise Fail("denied", "%s holds the disk the system is on and cannot be disabled"
+                           % clean(d.get("NAME")))
+    try:
+        if kind == "usb":
+            write_sys(os.path.join(path, "authorized"), "1" if enable else "0")
+        else:
+            slot = os.path.basename(path)
+            if enable:
+                write_sys(os.path.join(path, "driver_override"), "\n")
+                probe = os.path.join(SYSFS, "bus/pci/drivers_probe")
+                if os.path.exists(probe):
+                    write_sys(probe, slot)
+            else:
+                write_sys(os.path.join(path, "driver_override"), DISABLED_DRIVER)
+                if os.path.exists(os.path.join(path, "driver", "unbind")):
+                    write_sys(os.path.join(path, "driver", "unbind"), slot)
+    except OSError as e:
+        raise Fail("failed", "%s: %s" % (clean(d.get("NAME")), e.strerror))
+    ids = [i for i in disabled_state() if i != device_id]
+    if not enable:
+        ids.append(device_id)
+    save_disabled(ids)
+    emit("%s %s" % ("ENABLED" if enable else "DISABLED", device_id))
+
+
+def apply_disabled():
+    """At boot (sg-devices-apply.service): disable again what Device Manager disabled."""
+    for i in disabled_state():
+        try:
+            set_device(i, False, lambda line: None)
+        except Fail as e:
+            syslog.syslog(syslog.LOG_WARNING, "cannot disable %s again: %s" % (i, e.message))
+    return 0
+
+
+# --- Disk Management writes: new, delete, extend, shrink; SMART ---------------------
+
+MIB = 1024 * 1024
+# GPT types: Microsoft basic data (NTFS, exFAT, FAT32), Linux file system (ext4)
+GPT_BASIC_DATA = "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
+GPT_LINUX = "0fc63daf-8483-4772-8e79-3d69d8477de4"
+MBR_TYPES = {"ntfs": "7", "exfat": "7", "fat32": "c", "ext4": "83"}
+
+
+def find_disk(name):
+    if not re.fullmatch(r"[A-Za-z0-9]{1,32}", name or ""):
+        raise Fail("invalid", "no such disk")
+    model, letters, owners = disk_model()
+    for dev, items, gaps, system in model:
+        if dev.get("name") == name and dev.get("type") == "disk":
+            return dev, items, gaps, system
+    raise Fail("notfound", "no disk called %s" % clean(name))
+
+
+def check_changeable(dev, system):
+    """A disk whose partitions may be created, deleted or resized."""
+    path = dev.get("path") or "/dev/" + dev.get("name", "")
+    if system:
+        raise Fail("denied", "Windows cannot change the partitions of the disk the system is on")
+    if TEST_DISKS and path not in TEST_DISKS:
+        raise Fail("denied", "%s is not one of the test disks (SG_SYSINFO_DISKS)" % clean(path))
+    if re.match(r"/dev/(loop|ram|zram)", path) and path not in TEST_DISKS:
+        raise Fail("denied", "%s is not a disk" % clean(path))
+    if dev.get("ro"):
+        raise Fail("denied", "the disk is write-protected")
+    return path
+
+
+def sfdisk_json(path):
+    p = run_cmd((tool("SFDISK", "sfdisk") or ["sfdisk"]) + ["-J", path], timeout=30)
+    if not p or p.returncode != 0:
+        return {}
+    try:
+        return json.loads(p.stdout.decode("utf-8", "replace")).get("partitiontable", {})
+    except ValueError:
+        return {}
+
+
+def settle(path):
+    """The kernel's and udev's view of the disk after its table changed."""
+    for cmd in ((tool("PARTX", "partx") or ["partx"]) + ["-u", path],
+                (tool("PARTX", "partx") or ["partx"]) + ["-a", path],
+                (tool("UDEVADM", "udevadm") or ["udevadm"]) + ["settle", "--timeout=10"]):
+        run_cmd(cmd, timeout=30)
+
+
+def part_node(disk_path, number):
+    """/dev/sdb1, /dev/nvme0n1p1, /dev/loop0p1 for partition `number`."""
+    sep = "p" if disk_path[-1:].isdigit() else ""
+    return "%s%s%d" % (disk_path, sep, number)
+
+
+def wait_node(node):
+    for _ in range(40):
+        if os.path.exists(node):
+            return True
+        time.sleep(0.25)
+    return os.path.exists(node)
+
+
+def cmd_create(pos, opts, emit):
+    """create DISK START SIZE [--fs F] [--label L]: a new simple volume in
+    unallocated space (bytes), formatted as asked."""
+    if len(pos) != 3 or not pos[1].isdigit() or not pos[2].isdigit():
+        raise Fail("invalid", "create DISK START SIZE [--fs ntfs|exfat|fat32|ext4] [--label L]")
+    fs = (opts.get("fs") or "ntfs").lower()
+    if fs not in FORMATS:
+        raise Fail("invalid", "file systems: ntfs, exfat, fat32, ext4")
+    dev, items, gaps, system = find_disk(pos[0])
+    path = check_changeable(dev, system)
+    start, size = int(pos[1]), int(pos[2])
+    # inside one unallocated region, whole MiBs
+    start = (start + MIB - 1) // MIB * MIB
+    size = size // MIB * MIB
+    if size < 8 * MIB:
+        raise Fail("invalid", "a volume must be at least 8 MB")
+    if not any(g_start <= start and start + size <= g_start + g_size + MIB for g_start, g_size in gaps):
+        raise Fail("invalid", "there is no unallocated space of that size there")
+    pt = sfdisk_json(path)
+    label = pt.get("label") or ""
+    sfd = tool("SFDISK", "sfdisk") or ["sfdisk"]
+    if not label:
+        # a disk with no partition table: initialise it as GPT, as Windows does
+        proc = subprocess.run(sfd + ["-q", path], input=b"label: gpt\n", stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=60)
+        if proc.returncode != 0:
+            raise Fail("failed", "cannot initialise the disk: %s" % clean(proc.stderr.decode("utf-8", "replace")))
+        label = "gpt"
+        pt = sfdisk_json(path)
+    ss = int(pt.get("sectorsize") or 512)
+    if label == "dos":
+        if len(pt.get("partitions", [])) >= 4:
+            raise Fail("unsupported", "this disk already has four primary partitions")
+        ptype = MBR_TYPES[fs]
+    elif label == "gpt":
+        ptype = GPT_LINUX if fs == "ext4" else GPT_BASIC_DATA
+    else:
+        raise Fail("unsupported", "the disk's partition table (%s) is not supported" % clean(label))
+    line = "start=%d, size=%d, type=%s\n" % (start // ss, size // ss, ptype)
+    proc = subprocess.run(sfd + ["-q", "--append", "--no-reread", "--wipe-partitions", "always", path],
+                          input=line.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    if proc.returncode != 0:
+        raise Fail("failed", "cannot create the partition: %s" % clean(proc.stderr.decode("utf-8", "replace")))
+    settle(path)
+    number = None
+    for p_ in sfdisk_json(path).get("partitions", []):
+        if int(p_.get("start", -1)) == start // ss:
+            m = re.search(r"(\d+)$", p_["node"])
+            number = int(m.group(1)) if m else None
+    if number is None:
+        raise Fail("failed", "the new partition did not appear")
+    node = part_node(path, number)
+    if not wait_node(node):
+        raise Fail("failed", "the new partition %s did not appear" % node)
+    run_cmd((tool("WIPEFS", "wipefs") or ["wipefs"]) + ["-a", "-q", node], timeout=30)
+    prog, args = FORMATS[fs]
+    cmd = tool("MKFS_" + fs.upper(), prog)
+    if not cmd:
+        raise Fail("unsupported", "%s is not installed" % prog)
+    lab = opts.get("label", "")
+    limit = 11 if fs == "fat32" else 15 if fs == "exfat" else 32 if fs == "ntfs" else 16
+    if not re.fullmatch(r"[A-Za-z0-9 _.-]{0,%d}" % limit, lab):
+        raise Fail("invalid", "a volume label is up to %d letters, digits, spaces, _ . -" % limit)
+    run_cmd(cmd + args(node, lab), timeout=1800, check=True)
+    run_cmd((tool("UDEVADM", "udevadm") or ["udevadm"]) + ["trigger", "--action=change", "--settle", node], timeout=30)
+    emit("CREATED %s %s" % (os.path.basename(node), fs))
+
+
+def part_in_disk(name):
+    dev, it, system, letters = find_part(name)
+    p = it["part"]
+    if p.get("_whole"):
+        raise Fail("invalid", "%s is a whole disk, not a partition" % p["name"])
+    path = check_changeable(dev, system)
+    if it["mounts"] or it["letters"]:
+        raise Fail("denied", "%s is in use: remove its drive letter and unmount it first" % p["name"])
+    if "esp" in it["flags"]:
+        raise Fail("denied", "an EFI system partition is protected and cannot be changed here")
+    if p.get("children"):
+        raise Fail("denied", "%s is in use (it holds other volumes)" % p["name"])
+    return dev, it, path
+
+
+def cmd_delete(pos, emit):
+    if len(pos) != 1:
+        raise Fail("invalid", "delete PART")
+    dev, it, path = part_in_disk(pos[0])
+    number = int(it["part"].get("partn") or 0)
+    if not number:
+        raise Fail("failed", "cannot find the partition's number")
+    proc = subprocess.run((tool("SFDISK", "sfdisk") or ["sfdisk"]) + ["-q", "--no-reread", "--delete", path,
+                                                                      str(number)],
+                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    if proc.returncode != 0:
+        raise Fail("failed", "cannot delete %s: %s" % (it["part"]["name"],
+                                                        clean(proc.stderr.decode("utf-8", "replace"))))
+    run_cmd((tool("PARTX", "partx") or ["partx"]) + ["-d", "--nr", str(number), path], timeout=30)
+    settle(path)
+    emit("DELETED %s" % it["part"]["name"])
+
+
+def fs_kind(it):
+    t = (it["fs"].get("fstype") or it["part"].get("fstype") or "").lower()
+    return {"ntfs": "ntfs", "ntfs3": "ntfs", "ext4": "ext4", "ext3": "ext4", "ext2": "ext4",
+            "vfat": "fat", "exfat": "exfat"}.get(t, t)
+
+
+def min_size(it, node):
+    """The smallest the volume's file system can shrink to, in bytes."""
+    kind = fs_kind(it)
+    if kind == "ext4":
+        run_cmd((tool("E2FSCK", "e2fsck") or ["e2fsck"]) + ["-f", "-y", "-p", node], timeout=1800)
+        p = run_cmd((tool("RESIZE2FS", "resize2fs") or ["resize2fs"]) + ["-P", node], timeout=300, check=True)
+        m = re.search(r"minimum size of the filesystem:\s*(\d+)", p.stdout.decode("utf-8", "replace"))
+        d = run_cmd((tool("DUMPE2FS", "dumpe2fs") or ["dumpe2fs"]) + ["-h", node], timeout=60, check=True)
+        b = re.search(r"Block size:\s*(\d+)", d.stdout.decode("utf-8", "replace"))
+        if not m or not b:
+            raise Fail("failed", "cannot tell how far the volume can shrink")
+        return int(m.group(1)) * int(b.group(1))
+    if kind == "ntfs":
+        p = run_cmd((tool("NTFSRESIZE", "ntfsresize") or ["ntfsresize"]) + ["--info", "--force", "--no-progress-bar",
+                                                                             node], timeout=600, check=True)
+        m = re.search(r"You might resize at (\d+) bytes", p.stdout.decode("utf-8", "replace"))
+        if not m:
+            raise Fail("failed", "cannot tell how far the volume can shrink")
+        return int(m.group(1))
+    raise Fail("unsupported", "only NTFS and ext4 volumes can be extended or shrunk")
+
+
+def cmd_resize_info(pos, emit):
+    """resize-info PART: SIZE, MIN-SIZE (shrink), MAX-SIZE (extend into the
+    unallocated space right after it)."""
+    if len(pos) != 1:
+        raise Fail("invalid", "resize-info PART")
+    dev, it, path = part_in_disk(pos[0])
+    node = it["part"].get("path") or "/dev/" + it["part"]["name"]
+    _, _, gaps, _ = find_disk(dev.get("name"))
+    end = it["start"] + it["size"]
+    after = max([g_size for g_start, g_size in gaps if abs(g_start - end) < MIB] or [0]) // MIB * MIB
+    emit("SIZE %d" % it["size"])
+    emit("MIN-SIZE %d" % ((min_size(it, node) + MIB - 1) // MIB * MIB + 16 * MIB))
+    emit("MAX-SIZE %d" % (it["size"] + after))
+
+
+def cmd_resize(pos, emit):
+    """resize PART NEWSIZE: extend into the unallocated space after the volume,
+    or shrink it (the file system first); NTFS and ext4, unmounted."""
+    if len(pos) != 2 or not pos[1].isdigit():
+        raise Fail("invalid", "resize PART SIZE")
+    dev, it, path = part_in_disk(pos[0])
+    node = it["part"].get("path") or "/dev/" + it["part"]["name"]
+    kind = fs_kind(it)
+    if kind not in ("ntfs", "ext4"):
+        raise Fail("unsupported", "only NTFS and ext4 volumes can be extended or shrunk")
+    new = int(pos[1]) // MIB * MIB
+    old = it["size"]
+    if new == old:
+        emit("RESIZED %s %d" % (it["part"]["name"], new))
+        return
+    number = int(it["part"].get("partn") or 0)
+    pt = sfdisk_json(path)
+    ss = int(pt.get("sectorsize") or 512)
+    sfd = tool("SFDISK", "sfdisk") or ["sfdisk"]
+
+    def set_partition(size):
+        proc = subprocess.run(sfd + ["-q", "--no-reread", "-N", str(number), path],
+                              input=(", %d\n" % (size // ss)).encode(), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=60)
+        if proc.returncode != 0:
+            raise Fail("failed", "cannot resize the partition: %s" % clean(proc.stderr.decode("utf-8", "replace")))
+        settle(path)
+
+    if new > old:
+        _, _, gaps, _ = find_disk(dev.get("name"))
+        end = it["start"] + old
+        after = max([g_size for g_start, g_size in gaps if abs(g_start - end) < MIB] or [0])
+        if new - old > after + MIB:
+            raise Fail("invalid", "there is not that much unallocated space after the volume")
+        set_partition(new)
+        if kind == "ext4":
+            run_cmd((tool("E2FSCK", "e2fsck") or ["e2fsck"]) + ["-f", "-y", "-p", node], timeout=1800)
+            run_cmd((tool("RESIZE2FS", "resize2fs") or ["resize2fs"]) + [node], timeout=3600, check=True)
+        else:
+            run_cmd((tool("NTFSRESIZE", "ntfsresize") or ["ntfsresize"]) + ["--force", "--no-progress-bar", node],
+                    timeout=3600, check=True, input=b"y\n")
+    else:
+        if new < min_size(it, node) + 16 * MIB // 2:
+            raise Fail("invalid", "the volume cannot shrink that far: its files need more room")
+        # the file system first, a little inside the new partition
+        fs_new = new - MIB
+        if kind == "ext4":
+            run_cmd((tool("RESIZE2FS", "resize2fs") or ["resize2fs"]) + [node, "%dK" % (fs_new // 1024)],
+                    timeout=3600, check=True)
+        else:
+            run_cmd((tool("NTFSRESIZE", "ntfsresize") or ["ntfsresize"]) + ["--force", "--no-progress-bar",
+                                                                             "-s", str(fs_new), node],
+                    timeout=3600, check=True, input=b"y\n")
+        set_partition(new)
+    run_cmd((tool("UDEVADM", "udevadm") or ["udevadm"]) + ["trigger", "--action=change", "--settle", node], timeout=30)
+    emit("RESIZED %s %d" % (it["part"]["name"], new))
+
+
+def smart_of(path):
+    """SMART health of one disk (smartctl's JSON): {key: value}."""
+    cmd = tool("SMARTCTL", "smartctl")
+    if not cmd:
+        return {"HEALTH": "unknown", "NOTE": "smartmontools is not installed"}
+    p = run_cmd(cmd + ["-H", "-A", "-i", "--json=c", path], timeout=60)
+    try:
+        j = json.loads(p.stdout.decode("utf-8", "replace")) if p else {}
+    except ValueError:
+        j = {}
+    out = {}
+    st = j.get("smart_status")
+    if isinstance(st, dict) and "passed" in st:
+        out["HEALTH"] = "ok" if st["passed"] else "failing"
+    else:
+        msgs = [m.get("string", "") for m in (j.get("smartctl") or {}).get("messages", []) if isinstance(m, dict)]
+        out["HEALTH"] = "unsupported"
+        if msgs:
+            out["NOTE"] = clean(msgs[0])
+    t = (j.get("temperature") or {}).get("current")
+    if t is not None:
+        out["TEMPERATURE"] = str(t)
+    h = (j.get("power_on_time") or {}).get("hours")
+    if h is not None:
+        out["POWER-ON-HOURS"] = str(h)
+    for a in ((j.get("ata_smart_attributes") or {}).get("table") or []):
+        if a.get("id") in (5, 197, 198):
+            key = {5: "REALLOCATED", 197: "PENDING", 198: "UNCORRECTABLE"}[a["id"]]
+            out[key] = str((a.get("raw") or {}).get("value", 0))
+    nv = j.get("nvme_smart_health_information_log") or {}
+    if nv:
+        if "percentage_used" in nv:
+            out["WEAR"] = str(nv["percentage_used"])
+        if "media_errors" in nv:
+            out["MEDIA-ERRORS"] = str(nv["media_errors"])
+    if j.get("model_name"):
+        out["MODEL"] = clean(j["model_name"])
+    return out
+
+
+def cmd_smart(emit):
+    model, _, _ = disk_model()
+    for dev, items, gaps, system in model:
+        if dev.get("type") != "disk":
+            continue
+        path = dev.get("path") or "/dev/" + dev.get("name", "")
+        emit("SMART %s" % clean(dev.get("name")))
+        for k, v in smart_of(path).items():
+            emit("%s %s" % (k, v))
+        emit("END")
+
+
 # --- requests ------------------------------------------------------------------
 
 LOCAL_COMMANDS = {"whoami", "system", "devices", "disks", "units", "users", "groups", "shares",
                   "processes", "connections", "cleanup"}
 SERVICE_COMMANDS = {"journal": "user", "sessions": "admin", "openfiles": "admin", "cleanup-system": "user",
                     "clean-system": "admin", "mount": "admin", "unmount": "admin", "letter": "admin",
-                    "format": "admin"}
+                    "format": "admin", "create": "admin", "delete": "admin", "resize": "admin",
+                    "resize-info": "admin", "smart": "user", "device-disable": "admin",
+                    "device-enable": "admin"}
 
 
 def parse_opts(argv, valued):
@@ -1758,6 +2197,21 @@ def run_service(argv, uid, emit):
     elif cmd == "format":
         pos, opts = parse_opts(argv[1:], {"label"})
         cmd_format(pos, opts, emit)
+    elif cmd == "create":
+        pos, opts = parse_opts(argv[1:], {"label", "fs"})
+        cmd_create(pos, opts, emit)
+    elif cmd == "delete":
+        cmd_delete(argv[1:], emit)
+    elif cmd == "resize":
+        cmd_resize(argv[1:], emit)
+    elif cmd == "resize-info":
+        cmd_resize_info(argv[1:], emit)
+    elif cmd == "smart":
+        cmd_smart(emit)
+    elif cmd in ("device-disable", "device-enable"):
+        if len(argv) != 2:
+            raise Fail("invalid", "%s DEVICE" % cmd)
+        set_device(argv[1], cmd == "device-enable", emit)
 
 
 def ask_service(argv, emit):
@@ -1932,6 +2386,11 @@ def main():
     args = sys.argv[1:]
     if args[:1] == ["--serve"]:
         return serve()
+    if args[:1] == ["--apply-disabled"]:
+        if os.geteuid() != 0:
+            print("sg-sysinfo: --apply-disabled must run as root", file=sys.stderr)
+            return 3
+        return apply_disabled()
     if args[:1] == ["--bridge"]:
         if len(args) < 2:
             print("usage: sg-sysinfo --bridge PROGRAM [ARGS...]", file=sys.stderr)
@@ -1939,7 +2398,8 @@ def main():
         return bridge(args[1:])
     if not args or args[0] in ("-h", "--help"):
         print("usage: sg-sysinfo whoami|system|devices|disks|units|journal|users|groups|shares|sessions|"
-              "openfiles|processes|connections|cleanup|clean|mount|unmount|letter|format ...", file=sys.stderr)
+              "openfiles|processes|connections|cleanup|clean|mount|unmount|letter|format|create|delete|resize|"
+              "resize-info|smart|device-disable|device-enable ...", file=sys.stderr)
         return 2
     return answer(lambda: run(args, lambda line: print(line, flush=True)), lambda line: print(line, flush=True))
 

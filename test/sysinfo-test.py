@@ -113,6 +113,22 @@ def make_sysfs(root):
     write(os.path.join(inp, "id/vendor"), "0001\n")
     write(os.path.join(inp, "id/product"), "0001\n")
     link("../../devices/platform/i8042/serio0/input/input1", os.path.join(root, "class/input/input1"))
+    # Device Manager's Disable/Enable: the network driver can unbind; a SATA
+    # controller holding the system disk (sda); a USB camera
+    write(os.path.join(root, "bus/pci/drivers/virtio-pci/unbind"), "")
+    write(os.path.join(root, "bus/pci/drivers_probe"), "")
+    write(os.path.join(net, "driver_override"), "(null)\n")
+    sata = pci("0000:00:06.0", "8086", "2922", "010601", "ahci", "ahci")
+    sd = os.path.join(sata, "ata1/host0/target0:0:0/0:0:0:0/block/sda")
+    write(os.path.join(sd, "size"), "134217728\n")
+    link(os.path.relpath(sd, os.path.join(root, "class/block")), os.path.join(root, "class/block/sda"))
+    usb = os.path.join(root, "devices/pci0000:00/0000:00:1d.0/usb1/1-2")
+    for k, v in (("idVendor", "046d"), ("idProduct", "0825"), ("product", "Webcam C270"), ("manufacturer", "Logitech"),
+                 ("bDeviceClass", "ef"), ("busnum", "1"), ("devnum", "3"), ("authorized", "1")):
+        write(os.path.join(usb, k), v + "\n")
+    write(os.path.join(usb, "1-2:1.0/bInterfaceClass"), "0e\n")
+    write(os.path.join(usb, "1-2:1.0/bInterfaceProtocol"), "00\n")
+    link("../../../devices/pci0000:00/0000:00:1d.0/usb1/1-2", os.path.join(root, "bus/usb/devices/1-2"))
     write(os.path.join(root, "class/dmi/id/sys_vendor"), "QEMU\n")
     write(os.path.join(root, "class/dmi/id/product_name"), "Standard PC (Q35 + ICH9, 2009)\n")
     return nv
@@ -537,6 +553,107 @@ print(json.dumps({"sessions": {"1": {"username": "alice", "remote_machine": "10.
           "processes: this test's own process, with its user")
     out, rc = cli("connections", env=dict(base, SG_PROCFS="/proc"))
     check(rc == 0 and out[-1] == "OK", "connections answers")
+
+    # --- Disk Management: new, delete, extend, shrink (the real ones: diskops-test.sh) ---
+    reset()
+    out = serve(["create", "sdb", str(8 * 1024 ** 3 + 1024 ** 2), str(1024 ** 3), "--fs", "ntfs"])
+    check(out[-1].startswith("ERROR denied") and not any(c[0] == "sfdisk" for c in calls()),
+          "create: refused to a standard user")
+    out = serve(["create", "sda", str(61 * 1024 ** 3 + 1050624 * 512), str(1024 ** 2 * 100)], admin=True)
+    check(out[-1].startswith("ERROR denied") and "system is on" in out[-1], "create: refused on the system disk")
+    out = serve(["create", "sdb", str(2048 * 512), str(1024 ** 3)], admin=True)
+    check(out[-1].startswith("ERROR invalid") and not any(c[0] == "sfdisk" for c in calls()),
+          "create: refused where there is no unallocated space")
+    out = serve(["delete", "sdb2"], admin=True)
+    check(out[-1].startswith("ERROR denied") and "in use" in out[-1], "delete: refused on a mounted volume")
+    out = serve(["delete", "sda3"], admin=True)
+    check(out[-1].startswith("ERROR denied"), "delete: refused on the system disk")
+    out = serve(["delete", "sdb1"])
+    check(out[-1].startswith("ERROR denied"), "delete: refused to a standard user")
+    out = serve(["resize", "sdb1", str(9 * 1024 ** 3)])
+    check(out[-1].startswith("ERROR denied") and "administrator" in out[-1], "resize: refused to a standard user")
+    out = serve(["resize-info", "sdb1"])
+    check(out[-1].startswith("ERROR denied") and "administrator" in out[-1], "resize-info: refused to a standard user")
+    out = serve(["resize", "sda3", str(2 * 1024 ** 3)], admin=True)
+    check(out[-1].startswith("ERROR denied"), "resize: refused on the system disk")
+    base["SG_SYSINFO_DISKS"] = "/dev/loop7"
+    out = serve(["delete", "sdb1"], admin=True)
+    del base["SG_SYSINFO_DISKS"]
+    check(out[-1].startswith("ERROR denied") and "test disks" in out[-1] and not any(c[0] == "sfdisk" for c in calls()),
+          "SG_SYSINFO_DISKS: nothing but the test disks may change")
+
+    # --- SMART ----------------------------------------------------------------
+    script(os.path.join(fake, "smartctl"), rec + r'''
+dev = sys.argv[-1]
+if dev == "/dev/sda":
+    print(json.dumps({"model_name": "SYSDISK", "smart_status": {"passed": True}, "temperature": {"current": 35},
+                      "power_on_time": {"hours": 1200},
+                      "ata_smart_attributes": {"table": [{"id": 5, "raw": {"value": 0}}]}}))
+elif dev == "/dev/sdb":
+    print(json.dumps({"smart_status": {"passed": False}, "ata_smart_attributes": {"table": [
+        {"id": 5, "raw": {"value": 12}}, {"id": 197, "raw": {"value": 3}}]}}))
+    sys.exit(8)
+else:
+    print(json.dumps({"smartctl": {"messages": [{"string": "Unable to detect device type"}]}}))
+    sys.exit(1)
+''')
+    e = dict(base, SG_SMARTCTL=os.path.join(fake, "smartctl"))
+    base_saved = dict(base)
+    base.update(e)
+    out = serve(["smart"])
+    sm = {b["_"]: b for b in blocks(out, "SMART")}
+    check(out[-1] == "OK" and sm.get("sda", {}).get("HEALTH") == ["ok"] and sm["sda"].get("TEMPERATURE") == ["35"]
+          and sm["sda"].get("POWER-ON-HOURS") == ["1200"], "smart: a healthy disk, its temperature and hours")
+    check(sm.get("sdb", {}).get("HEALTH") == ["failing"] and sm["sdb"].get("REALLOCATED") == ["12"]
+          and sm["sdb"].get("PENDING") == ["3"], "smart: a failing disk and its reallocated sectors")
+    check("sr0" not in sm, "smart: only disks")
+    base.update(SG_SMARTCTL="")
+    out = serve(["smart"])
+    check(out[-1] == "OK" and all(b.get("HEALTH") == ["unknown"] for b in blocks(out, "SMART")),
+          "smart: without smartmontools, unknown")
+    out = serve(["smart"], user=False)
+    check(out[-1].startswith("ERROR denied"), "smart: an account with no Windows session gets nothing")
+    base.clear()
+    base.update(base_saved)
+
+    # --- Device Manager: disable and enable ---------------------------------
+    state = os.path.join(tmp, "state")
+    base["SG_SYSINFO_STATE"] = state
+    net = os.path.join(sysfs, "devices/pci0000:00/0000:00:03.0")
+    out = serve(["device-disable", "pci:0000:00:03.0"])
+    check(out[-1].startswith("ERROR denied") and open(os.path.join(net, "driver_override")).read() == "(null)\n",
+          "device-disable: refused to a standard user")
+    out = serve(["device-disable", "pci:0000:00:03.0"], admin=True)
+    check(out[-1] == "OK" and open(os.path.join(net, "driver_override")).read() == "sg-disabled"
+          and open(os.path.join(sysfs, "bus/pci/drivers/virtio-pci/unbind")).read() == "0000:00:03.0",
+          "device-disable: a PCI device is unbound and held by a driver_override naming no driver")
+    check("pci:0000:00:03.0" in open(os.path.join(state, "disabled-devices")).read(),
+          "device-disable: remembered for the next boot")
+    out, rc = cli("devices")
+    devs = {b["_"]: b for b in blocks(out, "DEVICE")}
+    check(devs["pci:0000:00:03.0"].get("STATUS") == ["disabled"]
+          and devs["pci:0000:00:03.0"].get("PROBLEM") == ["This device is disabled. (Code 22)"],
+          "devices: a disabled device says Code 22")
+    out = serve(["device-enable", "pci:0000:00:03.0"], admin=True)
+    check(out[-1] == "OK" and open(os.path.join(net, "driver_override")).read() == "\n"
+          and open(os.path.join(sysfs, "bus/pci/drivers_probe")).read() == "0000:00:03.0"
+          and "pci:0000:00:03.0" not in open(os.path.join(state, "disabled-devices")).read(),
+          "device-enable: the override is cleared, the kernel probes it again, forgotten")
+    out = serve(["device-disable", "usb:1-2"], admin=True)
+    usbdev = os.path.join(sysfs, "devices/pci0000:00/0000:00:1d.0/usb1/1-2")
+    out2, rc = cli("devices")
+    cam = {b["_"]: b for b in blocks(out2, "DEVICE")}.get("usb:1-2", {})
+    check(out[-1] == "OK" and open(os.path.join(usbdev, "authorized")).read() == "0" and cam.get("STATUS") == ["disabled"],
+          "device-disable: a USB camera is de-authorized, and shown disabled")
+    out = serve(["device-enable", "usb:1-2"], admin=True)
+    check(out[-1] == "OK" and open(os.path.join(usbdev, "authorized")).read() == "1", "device-enable: USB authorized again")
+    out = serve(["device-disable", "pci:0000:00:06.0"], admin=True)
+    check(out[-1].startswith("ERROR denied") and "system is on" in out[-1],
+          "device-disable: the controller of the system disk is refused")
+    out = serve(["device-disable", "pci:0000:00:1f.0"], admin=True)
+    check(out[-1].startswith("ERROR denied"), "device-disable: a bridge the computer needs is refused")
+    out = serve(["device-disable", "cpu:0"], admin=True)
+    check(out[-1].startswith("ERROR"), "device-disable: a processor is refused")
 
     # --- the bridge -----------------------------------------------------------
     child = os.path.join(tmp, "child.py")

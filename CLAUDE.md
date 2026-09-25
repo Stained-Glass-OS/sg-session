@@ -855,6 +855,13 @@ mount PART                 MOUNTED <part> <dir>          (admin)
 unmount PART               UNMOUNTED <part>              (admin)
 letter PART X:|none        REMOVED <X:>* LETTER <X:>     (admin)
 format PART ntfs|exfat|fat32|ext4 [--label L]  FORMATTED <part> <fs>   (admin)
+create DISK START SIZE [--fs F] [--label L]    CREATED <part> <fs>      (admin; bytes, in a FREE region)
+delete PART                DELETED <part>                (admin)
+resize-info PART           SIZE MIN-SIZE MAX-SIZE        (admin; NTFS/ext4, unmounted)
+resize PART SIZE           RESIZED <part> <bytes>        (admin; extend into the space after it, or shrink)
+smart         SMART <disk> HEALTH ok|failing|unsupported|unknown [NOTE] [TEMPERATURE] [POWER-ON-HOURS]
+                           [REALLOCATED PENDING UNCORRECTABLE] [WEAR MEDIA-ERRORS] [MODEL]  END   (any session user)
+device-disable ID | device-enable ID    DISABLED|ENABLED <id>        (admin; pci:/usb: devices)
 ```
 
 - **Names**: PCI names from udev's hwdb data (`/run/udev/data`), else
@@ -895,9 +902,73 @@ format PART ntfs|exfat|fat32|ext4 [--label L]  FORMATTED <part> <fs>   (admin)
   real root socket (`systemd-socket-activate --inetd`) with real accounts: a
   non-session account denied, an sgwine member reading the journal and
   refused `format`, SYSTEM refused unmounting `/`.
-- **Not yet**: resizing, creating or deleting partitions (sg-install's
-  partitioner is root-only and live-boot-only; Disk Management's New/Delete
-  would reuse it through here); SMART health; per-device enable/disable.
+- **Partitions (Disk Management's New Simple Volume, Delete, Extend,
+  Shrink)** follow sg-install's partitioner (sfdisk `--append` in a free
+  region, `--delete`, `-N n` to resize; `partx`, `udevadm settle`): a blank
+  disk becomes GPT; types Microsoft basic data (NTFS/exFAT/FAT32) or Linux
+  file system (ext4), MBR 07/0c/83 and at most four primaries; the new
+  volume formatted with its label. Refused: the system disk, a mounted or
+  lettered volume, an ESP, anything outside a FREE region. Resizing is NTFS
+  and ext4 only (as Windows: not FAT/exFAT), unmounted; shrinking resizes the
+  file system first (resize2fs / ntfsresize `-s`), extending after the
+  partition. **`SG_SYSINFO_DISKS`** (tests: loop devices) lists the only
+  disks anything may change -- and makes those loop devices visible as disks;
+  loop/ram devices are otherwise never changed. **Commands never get the
+  service's stdin** (the request socket): `ntfsresize` asks "Are you sure"
+  there and hung the service; `run_cmd` feeds `y` or nothing.
+- **SMART** (`smart`, sg-sysinfod: root reads the disks) is `smartctl -H -A
+  -i --json=c` per disk; `SG_SMARTCTL` stands in; without smartmontools the
+  health is `unknown`.
+- **Disable/Enable device**: a PCI device gets `driver_override` =
+  `sg-disabled` (no such driver) and is unbound; enabling clears it and
+  writes `drivers_probe`. A USB device's `authorized` goes 0/1. Both show
+  `STATUS disabled`, "This device is disabled. (Code 22)". Refused: the
+  controller above the system disk, bridges/processors/monitors/batteries,
+  USB root hubs. Remembered in `/var/lib/stained-glass-sysinfo/disabled-devices`
+  (`SG_SYSINFO_STATE`) and re-applied at boot by `sg-devices-apply.service`
+  (`sg-sysinfo --apply-disabled`, root).
+- **Gates**: `test/sysinfo-test.py` (fakes: refusals, SMART, disable/enable
+  on a made-up sysfs; mutants without the system-disk check, the admin check
+  on resize, the controller guard, the Code 22 status, failing SMART, the
+  allow-list each turn it red) and **`make test-diskops`** (`test/diskops-test.sh`,
+  sudo, a 512 MB **loop device** only): a standard user refused and the disk
+  untouched, GPT initialised, ext4 and NTFS volumes created with labels and
+  types, both shrunk and extended with e2fsck/ntfsresize confirming the file
+  systems, over-extending and mounted volumes refused, both deleted. A mutant
+  that shrinks the partition without the file system fails e2fsck.
+
+## The Security log: sg-audit and the audit spool
+
+Signing in and out and elevation happen in PAM and in sg-brokerd, not in
+Windows, so they reach Event Viewer's Security log through the **audit
+spool** `/var/lib/stained-glass-audit` (tmpfiles `sg-audit.conf`: 0700
+sgsystem -- only root and SYSTEM can write it, so no user can forge an
+audit event), which wine-sg's Event Log service imports (0187; file format
+there and in `bin/sg-audit`'s header).
+
+- **`sg-audit pam`** (pam-configs `stained-glass-audit`, pam_exec at session
+  open/close, root): 4624 with Windows' logon type from the PAM service
+  (greetd 2 Interactive, `stained-glass-lock` 7 Unlock, `stained-glass-remote`
+  10 RemoteInteractive, sshd 3), 4672 for an administrator (sg-admins),
+  4634 at close. Files are written under a dot-name, renamed, and chowned to
+  the spool's owner (root's 0600 files were unreadable to the service). It
+  never fails a login.
+- **sg-brokerd** (running as SYSTEM, writes itself): consent = 4672 for the
+  administrator with the program; a standard user elevating with an
+  administrator's credentials = 4648 + 4672; wrong credentials = 4625 (audit
+  failure). The password never reaches the spool.
+- **The log files at the Linux level**: sg-services-start makes
+  `winevt/Logs` 0700 and its files 0600 before the SCM starts (Wine maps a
+  DACL naming SYSTEM to user *and group* bits, so wevtsvc cannot).
+- **Not seen**: failed sign-ins at the login screen (a pam_exec in the auth
+  stack runs only on success paths).
+- **Gate: `make test-audit`** (`test/audit-test.sh`, sudo, `sgconf`):
+  sg-audit's events for each PAM service, admin vs standard, modes and owner,
+  auth ignored, an unwritable spool not failing; the broker built and run in
+  test mode for consent, credentials and a wrong password (no password in the
+  spool); the log directory's modes; and with `SG_WINE=<a wine-sg with 0187>`
+  the sign-in read back from Wine's Security log, worded. Mutants: no chown,
+  4672 for everyone, no 4625 from the broker, no chmod -- each red.
 
 ## Settings' native half: sg-settingsctl
 

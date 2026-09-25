@@ -1,3 +1,21 @@
+sg-session (0.1.0-26) unstable; urgency=medium
+
+  * sg-sysinfo: Disk Management's New Simple Volume, Delete, Extend and
+    Shrink (create, delete, resize, resize-info; NTFS and ext4 resizing,
+    the file system first when shrinking), SMART health (smart), Device
+    Manager's Disable/Enable device (driver_override / USB authorized, Code
+    22, re-applied at boot by sg-devices-apply.service). SG_SYSINFO_DISKS
+    limits every change to test loop devices.
+  * The Security log: sg-audit (pam_exec) spools 4624/4672/4634 at session
+    open and close, sg-brokerd 4672/4648/4625 for elevation; the audit spool
+    /var/lib/stained-glass-audit is 0700 sgsystem; sg-services-start makes
+    the event logs' directory the SYSTEM account's alone.
+  * Recommends smartmontools, ntfs-3g, exfatprogs, dosfstools.
+  * Gates: test/diskops-test.sh (make test-diskops, loop device),
+    test/audit-test.sh (make test-audit), test/sysinfo-test.py extended.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 12:03:27 -0700
+
 sg-session (0.1.0-25) unstable; urgency=medium
 
   * sg-pdf: the PDF Viewer's Linux half -- Debian's poppler (GObject

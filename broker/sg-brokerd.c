@@ -109,6 +109,59 @@ static int check_password(const char *user, const char *pass)
     return ok == 1;
 }
 
+/* ---- the Security log ---------------------------------------------------- */
+/* Elevation is privilege use: each decision goes to the Windows Security log
+ * through the audit spool, a directory only root and the SYSTEM account (which
+ * this process runs as) may write; the Event Log service imports it (wine-sg
+ * 0187; the format is in sg-audit). */
+static void audit(unsigned id, int success, unsigned category, const char *const *strings, int n)
+{
+    const char *dir = getenv("SG_AUDIT_SPOOL");
+    char tmp[512], path[512];
+    struct timespec ts;
+    FILE *f;
+    int i, fd;
+
+    if (!dir) dir = "/var/lib/stained-glass-audit";
+    clock_gettime(CLOCK_REALTIME, &ts);
+    snprintf(tmp, sizeof(tmp), "%s/.%lld%09ld-%d.tmp", dir, (long long)ts.tv_sec, ts.tv_nsec, (int)getpid());
+    snprintf(path, sizeof(path), "%s/%lld%09ld-%d.evt", dir, (long long)ts.tv_sec, ts.tv_nsec, (int)getpid());
+    if ((fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) < 0 || !(f = fdopen(fd, "w"))) {
+        if (fd >= 0) close(fd);
+        logmsg("audit: cannot write to %s: %s", dir, strerror(errno));
+        return;
+    }
+    fprintf(f, "ID %u\nTYPE %s\nCATEGORY %u\nTIME %lld\n", id, success ? "success" : "failure", category,
+            (long long)ts.tv_sec);
+    for (i = 0; i < n; i++) {
+        const char *c;
+        fputs("STRING ", f);
+        for (c = strings[i] ? strings[i] : ""; *c; c++) fputc(*c == '\n' || *c == '\r' ? ' ' : *c, f);
+        fputc('\n', f);
+    }
+    if (fclose(f) != 0 || rename(tmp, path) != 0) {
+        logmsg("audit: cannot write %s: %s", path, strerror(errno));
+        unlink(tmp);
+    }
+}
+
+/* the computer's name, as Windows' local account domain */
+static const char *computer_name(void)
+{
+    static char name[64];
+    char *dot;
+    int i;
+    if (name[0]) return name;
+    if (gethostname(name, sizeof(name) - 1) != 0) strcpy(name, "localhost");
+    if ((dot = strchr(name, '.'))) *dot = 0;
+    for (i = 0; name[i]; i++) if (name[i] >= 'a' && name[i] <= 'z') name[i] -= 32;
+    return name;
+}
+
+#define ADMIN_PRIVILEGES "SeSecurityPrivilege, SeBackupPrivilege, SeRestorePrivilege, SeTakeOwnershipPrivilege, " \
+                         "SeDebugPrivilege, SeSystemEnvironmentPrivilege, SeLoadDriverPrivilege, SeImpersonatePrivilege"
+#define BROKER_PROCESS "sg-brokerd (Run as administrator)"
+
 /* ---- the principal model ------------------------------------------------ */
 /* is this user a member of the administrators group (primary or supplementary)? */
 static int is_admin_name(const char *name)
@@ -322,8 +375,13 @@ static int obtain_consent(int requester_admin, const char *requester, uid_t uid,
             const char *u = getenv("SG_BROKER_TEST_ADMIN_USER");
             const char *p = getenv("SG_BROKER_TEST_ADMIN_PASS");
             if (!u || !p) return 0;
-            if (!is_admin_name(u)) { logmsg("credential prompt: %s is not an administrator", u); return 0; }
-            if (!check_password(u, p)) { logmsg("credential prompt: wrong password for %s", u); return 0; }
+            if (!is_admin_name(u) || !check_password(u, p)) {
+                const char *st[6] = { u, computer_name(), "2 (Interactive)", "Unknown user name or bad password.",
+                                      BROKER_PROCESS, "-" };
+                logmsg("credential prompt: %s refused", u);
+                audit(4625, 0, 12544, st, 6);
+                return 0;
+            }
             snprintf(who, wholen, "%s", u);
             return 1;
         }
@@ -359,6 +417,12 @@ static int obtain_consent(int requester_admin, const char *requester, uid_t uid,
                 ok = is_admin_name(user) && ok;
             }
             if (ok) memcpy(who, user, strlen(user) + 1);   /* fits: checked above */
+            else {
+                /* 4625: the typed account failed to log on (the password never leaves) */
+                const char *st[6] = { pass ? user : "", computer_name(), "2 (Interactive)",
+                                      "Unknown user name or bad password.", BROKER_PROCESS, "-" };
+                audit(4625, 0, 12544, st, 6);
+            }
             explicit_bzero(line, sizeof(line));
             if (ok) {
                 allowed = 1;
@@ -503,6 +567,17 @@ int main(void)
         logmsg("request from %s (%s): %s", rpw->pw_name, admin ? "administrator" : "standard user", argv[0]);
 
         if (obtain_consent(admin, rpw->pw_name, cred.uid, argv, who, sizeof(who))) {
+            const char *by = who[0] ? who : rpw->pw_name;
+            if (strcmp(by, rpw->pw_name)) {
+                /* 4648: a standard user's program ran on an administrator's credentials */
+                const char *st[5] = { rpw->pw_name, computer_name(), by, computer_name(), argv[0] };
+                audit(4648, 1, 12544, st, 5);
+            }
+            {
+                /* 4672: the elevated program has an administrator's privileges */
+                const char *st[4] = { by, computer_name(), ADMIN_PRIVILEGES, argv[0] };
+                audit(4672, 1, 12548, st, 4);
+            }
             launch(argv, envp, cwd, g_system_user);
             status = 0;
             logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);
