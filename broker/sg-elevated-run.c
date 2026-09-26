@@ -179,6 +179,10 @@ int main(int argc, char **argv)
      * for: the display lives as long as any of it. */
     prctl(PR_SET_CHILD_SUBREAPER, 1);
     signal(SIGPIPE, SIG_IGN);
+    /* The broker ignores SIGCHLD, and an ignored disposition survives exec:
+     * without this the kernel reaps our children itself and waitpid never
+     * sees the program's exit status. */
+    signal(SIGCHLD, SIG_DFL);
 
     if (!mkdtemp(dir)) { logmsg("mkdtemp: %s", strerror(errno)); return 125; }
     snprintf(cookie, sizeof(cookie), "%s/Xauthority", dir);
