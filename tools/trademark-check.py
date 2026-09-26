@@ -44,6 +44,8 @@ def technical(s, m):
         return True       # a path: ...\Windows\..., ...\Windows NT\..., C:/Windows
     if before == "." or (after == "." and m.end() + 1 < len(s) and s[m.end() + 1].isalpha()):
         return True       # Microsoft.Windows.Common-Controls, Windows.Foundation
+    if before == "-" or after == "-":
+        return True       # Microsoft-Windows-Security-Auditing (an event provider's name)
     if before == "_" or after == "_":
         return True
     return False
