@@ -398,7 +398,10 @@ static void handle_bridge_line( HWND hwnd, char *line )
             want_focus( g_user );
         }
         EnableWindow( g_submit, TRUE );
-        set_status( line + 8, TRUE );
+        /* the lock screen's user is fixed: only the password can be wrong */
+        if (g_lock_user && !strcmp( line + 8, "The user name or password is incorrect. Try again." ))
+            set_status( "The password is incorrect. Try again.", TRUE );
+        else set_status( line + 8, TRUE );
     }
     else if (!strncmp( line, "ERROR ", 6 ))
     {

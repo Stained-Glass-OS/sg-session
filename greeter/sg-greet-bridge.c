@@ -202,8 +202,31 @@ static int from_ui( char *buf, size_t max )
 
 /* --- the exchange -------------------------------------------------------- */
 
+/* greetd's error, as a sentence (see the "error" case) */
+static const char *failure_words( const char *etype, const char *text )
+{
+    static const struct { const char *code, *words; } pam[] = {
+        { "AUTH_ERR", "The user name or password is incorrect. Try again." },
+        { "USER_UNKNOWN", "The user name or password is incorrect. Try again." },
+        { "PERM_DENIED", "The user name or password is incorrect. Try again." },
+        { "MAXTRIES", "Too many attempts. Wait a moment, then try again." },
+        { "ACCT_EXPIRED", "Your account has expired. Ask your administrator." },
+        { "NEW_AUTHTOK_REQD", "Your password must be changed. Ask your administrator." },
+        { "AUTHINFO_UNAVAIL", "Sign-in is not available right now. Try again later." },
+    };
+    size_t i;
+    if (!strcmp( etype, "auth_error" )) return "The user name or password is incorrect. Try again.";
+    for (i = 0; i < sizeof(pam) / sizeof(pam[0]); i++)
+        if (strstr( text, pam[i].code )) return pam[i].words;
+    if (!strncmp( text, "pam_", 4 ) || strstr( text, "PAM" ))
+        return "Sign-in did not work. Try again, or ask your administrator.";
+    return text;
+}
+
 /* Drives one greetd message and tells the UI what happened. Returns 1 when the
  * session has started and we are done. */
+
+
 static int handle_greetd_reply( const char *cmd_for_session )
 {
     char *msg = greetd_recv();
@@ -256,10 +279,13 @@ static int handle_greetd_reply( const char *cmd_for_session )
         json_string( msg, "error_type", etype, sizeof(etype) );
         if (!json_string( msg, "description", text, sizeof(text) ))
             snprintf( text, sizeof(text), "Authentication failed." );
-        /* An auth error means wrong credentials; anything else is the service
-         * itself being unhappy, and saying so saves a lot of guessing. */
-        to_ui( "FAILURE %s", !strcmp( etype, "auth_error" )
-               ? "The user name or password is incorrect." : text );
+        /* Words a person understands, never PAM's codes: greetd's "error"
+         * for an unknown user was "pam_authenticate: AUTH_ERR", shown as it
+         * came. Wrong credentials (auth_error, or PAM saying so) are
+         * Windows' sentence; the greeter says "password" alone at the lock
+         * screen. Anything else is the service itself being unhappy, and
+         * saying so -- without its internals -- saves a lot of guessing. */
+        to_ui( "FAILURE %s", failure_words( etype, text ) );
         greetd_send( "{\"type\":\"cancel_session\"}" );
         free( greetd_recv() );
     }

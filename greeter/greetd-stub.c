@@ -74,9 +74,16 @@ int main( int argc, char **argv )
         if (strstr( m, "\"create_session\"" ))
         {
             fprintf( stderr, "stub: create_session %s\n", m );
-            sendmsg_json( fd, "{\"type\":\"auth_message\",\"auth_message_type\":\"secret\","
-                              "\"auth_message\":\"Password:\"}" );
-            asked = 1;
+            /* an account PAM does not know: what greetd really sends */
+            if (strstr( m, "\"username\":\"nosuchuser\"" ))
+                sendmsg_json( fd, "{\"type\":\"error\",\"error_type\":\"error\","
+                                  "\"description\":\"pam_authenticate: AUTH_ERR\"}" );
+            else
+            {
+                sendmsg_json( fd, "{\"type\":\"auth_message\",\"auth_message_type\":\"secret\","
+                                  "\"auth_message\":\"Password:\"}" );
+                asked = 1;
+            }
         }
         else if (strstr( m, "\"post_auth_message_response\"" ))
         {

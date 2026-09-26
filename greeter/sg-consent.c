@@ -1,4 +1,4 @@
-/* The elevation consent prompt (User Account Control), ADR 0012.
+/* The elevation consent prompt (the permission prompt), ADR 0012.
  *
  * Runs on the compositor's secure surface: its own X server on the privileged
  * socket, while the compositor shows and sends input to nothing else (SECURE
@@ -52,7 +52,7 @@ static RECT g_panel_rc;
 static WPARAM g_armed;       /* the answer key whose press we saw */
 static DWORD g_shown_at;
 
-/* The panel: white, with the project's purple along the top -- UAC's banner. */
+/* The panel: white, with the project's purple along the top -- the prompt's banner. */
 static const COLORREF COL_DIM    = RGB(0x10, 0x10, 0x18);
 static const COLORREF COL_PANEL  = RGB(0xFF, 0xFF, 0xFF);
 static const COLORREF COL_ACCENT = RGB(0x7B, 0x2F, 0xBE);
@@ -296,11 +296,11 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     py = (sh - ph) / 2;
     SetRect( &g_panel_rc, px, py, px + PANEL_W, py + ph );
 
-    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", "User Account Control", WS_POPUP | WS_VISIBLE,
+    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", "Permission required", WS_POPUP | WS_VISIBLE,
                               0, 0, sw, sh, NULL, NULL, inst, NULL );
 
     y = py + 22;
-    make_label( g_main, "User Account Control", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+    make_label( g_main, "Stained Glass needs your permission", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
     y += 28;
     make_label( g_main, "Do you want to allow this app to make changes to your device?",
                 px + 24, y, PANEL_W - 48, 56, g_font_big, 0 );

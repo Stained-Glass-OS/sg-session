@@ -94,7 +94,7 @@ find_prompt() {   # sets PN to the display showing the prompt
     while [ $_w -lt 60 ]; do
         for d in /tmp/.X11-unix/X*; do
             n=":${d##*/X}"; [ "$n" = "$XD" ] && continue
-            DISPLAY="$n" xdotool search --name 'User Account Control' >/dev/null 2>&1 && { PN="$n"; return 0; }
+            DISPLAY="$n" xdotool search --name 'Permission required' >/dev/null 2>&1 && { PN="$n"; return 0; }
         done
         sleep 1; _w=$((_w+1))
     done
@@ -102,7 +102,7 @@ find_prompt() {   # sets PN to the display showing the prompt
 }
 prompt_gone() {
     sleep 2
-    ! { [ -n "$PN" ] && DISPLAY="$PN" xdotool search --name 'User Account Control' >/dev/null 2>&1; }
+    ! { [ -n "$PN" ] && DISPLAY="$PN" xdotool search --name 'Permission required' >/dev/null 2>&1; }
 }
 
 # Teeth.
@@ -122,7 +122,7 @@ start_broker "$(id -gn)"
 request a1
 find_prompt && pass "the consent prompt appears (on its own X server, $PN)" || fail "no consent prompt appeared"
 [ "$(ctl STATUS)" = "OK secure" ] && pass "the compositor is in SECURE mode while it asks" || fail "not in SECURE mode during the prompt"
-DISPLAY="$XD" xdotool search --name 'User Account Control' >/dev/null 2>&1 \
+DISPLAY="$XD" xdotool search --name 'Permission required' >/dev/null 2>&1 \
     && fail "the prompt is on the requester's own display" || pass "the prompt is not on the requester's display"
 sleep 2
 inj -k Shift_L; inj -k Escape

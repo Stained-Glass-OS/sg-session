@@ -2,7 +2,8 @@
 # The first-run setup's choices, applied to this user: at their first sign-in
 # (sg-run-explorer runs this before the shell), and again only if the
 # first-run setup is run again. The region (format and country), the keyboard
-# layouts Windows programs see, and the per-user privacy switches, into HKCU
+# layouts Windows programs see, the per-user privacy switches and voice typing
+# (on with the microphone), into HKCU
 # with one reg.exe import. A user's later changes in Settings stay theirs.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -47,6 +48,12 @@ cs='HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccess
         printf '[%s\\%s]\r\n"Value"="%s"\r\n\r\n' "$cs" "$cap" "$(onoff "$v")"
         printf '[%s\\%s\\NonPackaged]\r\n"Value"="%s"\r\n\r\n' "$cs" "$cap" "$(onoff "$v")"
     done
+    # The microphone page names voice typing ("Let voice typing (Start key +
+    # H) and other programs use the microphone"): On turns voice typing on
+    # too -- it has a switch of its own, off by default, and Win+H said
+    # "Voice typing is off" after the user had just said yes.
+    [ "$(get MICROPHONE)" = 1 ] && \
+        printf '[HKEY_CURRENT_USER\\Software\\Stained Glass\\Speech]\r\n"Enabled"=dword:00000001\r\n\r\n'
     v=$(get ADVERTISING); case "$v" in 0|1)
         printf '[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo]\r\n"Enabled"=dword:0000000%s\r\n\r\n' "$v" ;; esac
     v=$(get TAILORED); case "$v" in 0|1)

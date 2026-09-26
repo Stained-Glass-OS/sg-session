@@ -190,10 +190,11 @@ lint:
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@sh test/oobe-user-test.sh
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh \
+		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh \
 		    test/rdp-stream-e2e.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

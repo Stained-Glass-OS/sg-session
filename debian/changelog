@@ -1,3 +1,15 @@
+sg-session (0.1.0-38) unstable; urgency=medium
+
+  * The consent prompt is "Stained Glass needs your permission" (window
+    "Permission required"), not Microsoft's "User Account Control" (QA T6).
+  * Sign-in failures in words: greetd's PAM codes ("pam_authenticate:
+    AUTH_ERR") become "The user name or password is incorrect. Try again."
+    ("The password is incorrect" at the lock screen) (QA B47).
+  * The first-run setup's microphone On turns voice typing on too (QA B58).
+  * trademark-check also flags Microsoft's feature names.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Sat, 26 Sep 2026 00:54:54 -0700
+
 sg-session (0.1.0-37) unstable; urgency=medium
 
   * Setup follows the app mode: its page is dark when its controls are

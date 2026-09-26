@@ -56,6 +56,8 @@ run_case() {
 run_case "a correct password authenticates"        sguser PASS     SUCCESS
 run_case "a wrong password is refused"             sguser WRONGPW  FAILURE
 run_case "quotes in a password cannot break the JSON" sguser 'a"b\c' FAILURE
+run_case "a wrong password is said in words" sguser WRONGPW "FAILURE The user name or password is incorrect. Try again."
+run_case "an unknown user gets words, not PAM's code" nosuchuser x "FAILURE The user name or password is incorrect. Try again."
 
 # What runs after a successful login is the bridge's argument, never something
 # the greeter asked for. A greeter that has been tampered with must not be able

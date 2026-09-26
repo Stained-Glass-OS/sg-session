@@ -6,7 +6,10 @@
 # in C and resource scripts, the data of .reg files, .desktop Name/Comment,
 # manifest descriptions, messages in Python and shell tools, and the lines
 # wine-sg's patches ADD -- for the word "Windows" (capital W) and fails on any
-# that is not a technical identifier or explicitly allowed.
+# that is not a technical identifier or explicitly allowed -- and the same for
+# Microsoft's feature names ("User Account Control", "SmartScreen", ...), and,
+# with --brand, another word in the files it names ("Wine" in the dialogs the
+# shell shows as its own: its Run dialog said "Wine will open it for you").
 #
 # Technical identifiers pass by themselves: a registry or file path (the word
 # next to a backslash or slash: Software\Microsoft\Windows\..., C:\Windows,
@@ -18,7 +21,8 @@
 #
 # matched against the file (relative to the repository) and the string.
 #
-#   tools/trademark-check.py [--allow FILE] [--patches DIR] [--root DIR] PATH...
+#   tools/trademark-check.py [--allow FILE] [--patches DIR] [--root DIR]
+#                            [--brand GLOB WORD]... PATH...
 #   (--root: paths are named, and matched, relative to DIR -- a Wine tree)
 #   (directories are walked; test/ trees and generated build/ trees are skipped)
 #
@@ -33,6 +37,9 @@ import sys
 import tokenize
 
 WORD = re.compile(r"(?<![A-Za-z0-9_])Windows(?![A-Za-z0-9_])")
+# Microsoft's feature names: as much a slip as "Windows" when we use them
+# for our own things (the consent prompt was titled "User Account Control")
+FEATURES = re.compile(r"(?<![A-Za-z0-9_])(User Account Control|SmartScreen|Cortana|BitLocker|OneDrive)(?![A-Za-z0-9_])")
 
 
 def technical(s, m):
@@ -52,8 +59,15 @@ def technical(s, m):
     return False
 
 
-def findings_in(s):
-    return [m for m in WORD.finditer(s) if not technical(s, m)]
+def findings_in(s, brand=None):
+    """The occurrences of "Windows" and Microsoft's feature names -- and, with
+    brand, that word too (Wine, in the dialogs our shell shows as its own) --
+    that are not technical identifiers."""
+    hits = [m for m in WORD.finditer(s) if not technical(s, m)]
+    hits += [m for m in FEATURES.finditer(s) if not technical(s, m)]
+    if brand:
+        hits += [m for m in brand.finditer(s) if not technical(s, m)]
+    return hits
 
 
 # ---- extractors: (line, text) of what a person may see ---------------------------------
@@ -248,7 +262,7 @@ def allowed(allow, path, s, used):
 
 
 def main(argv):
-    allow_path, patches, root, paths = None, None, None, []
+    allow_path, patches, root, paths, brands = None, None, None, [], []
     it = iter(argv)
     for a in it:
         if a == "--allow":
@@ -257,6 +271,9 @@ def main(argv):
             patches = next(it)
         elif a == "--root":
             root = next(it)
+        elif a == "--brand":
+            # --brand GLOB WORD: WORD is a slip too in the files GLOB names
+            brands.append((next(it), re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(next(it)))))
         else:
             paths.append(a)
     allow, used, bad = load_allow(allow_path), set(), []
@@ -279,8 +296,12 @@ def main(argv):
             text = open(path, encoding="utf-8", errors="replace").read()
         except OSError:
             continue
+        brand = None
+        for glob, rx in brands:
+            if fnmatch.fnmatch(rel, glob):
+                brand = rx
         for no, s in fn(text):
-            if findings_in(s) and not allowed(allow, rel, s, used):
+            if findings_in(s, brand) and not allowed(allow, rel, s, used):
                 bad.append("%s:%d: %s" % (rel, no, s.strip()[:160]))
 
     if patches:
@@ -299,7 +320,7 @@ def main(argv):
     for no in stale:
         print("trademark: %s:%d: allowlist entry matches nothing (remove it)" % (allow_path, no))
     if bad or stale:
-        print("trademark-check: FAIL -- %d user-visible \"Windows\"%s" % (len(bad), " and stale allowlist entries" if stale else ""))
+        print("trademark-check: FAIL -- %d user-visible \"Windows\" or another name that is not ours%s" % (len(bad), " and stale allowlist entries" if stale else ""))
         return 1
     print("trademark-check: OK")
     return 0
