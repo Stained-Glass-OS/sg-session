@@ -28,8 +28,9 @@ def check(cond, what):
         FAILS += 1
 
 
-def make_pdf(path):
-    """Two Letter pages; page 1 links to page 2; an outline of two entries."""
+def make_pdf(path, outline=True):
+    """Two Letter pages; page 1 links to page 2; an outline of two entries
+    (or, outline=False, no outline at all -- most PDFs have none)."""
     def text_page(lines):
         ops = ["BT /F1 24 Tf"]
         for x, y, s in lines:
@@ -54,6 +55,9 @@ def make_pdf(path):
         b"<< /Title (First part) /Parent 9 0 R /Next 11 0 R /Dest [3 0 R /XYZ 0 792 0] >>",
         b"<< /Title (Second part) /Parent 9 0 R /Prev 10 0 R /Dest [4 0 R /XYZ 0 792 0] >>",
     ]
+    if not outline:
+        objs[0] = b"<< /Type /Catalog /Pages 2 0 R >>"
+        del objs[8:]
     out = bytearray(b"%PDF-1.4\n")
     offs = []
     for i, o in enumerate(objs, 1):
@@ -184,6 +188,17 @@ def main():
         check(h.startswith("ERR " + kind), "%s refused: %s" % (" ".join(map(str, req)), h))
     h, _ = c.ask("text", 1)
     check(h.startswith("OK"), "it still answers after refusals")
+    # most PDFs have no bookmarks: the outline is empty, and the viewer's
+    # next request is still answered (poppler has no index for them; asking
+    # for one used to raise and take the whole bridge down -- blank pages)
+    plain = os.path.join(tmp, "no outline.pdf")
+    make_pdf(plain, outline=False)
+    h, _ = c.ask("open", plain)
+    check(h.startswith("OK"), "a PDF without an outline opens (%s)" % h)
+    h, data = c.ask("outline")
+    check(h.startswith("OK") and field(h, "n") == "0" and data == b"", "its outline is empty, not an error (%s)" % h)
+    h, data = c.ask("render", 0, 0.25, 0)
+    check(h.startswith("OK") and len(data) > 0, "and its first page still renders (%s)" % h)
     check(c.close() == 0, "quit ends it")
 
     # the bridge: a program with our pipes as its stdin/stdout

@@ -260,7 +260,14 @@ class Document:
                 if not it.next():
                     break
 
-        walk(Poppler.IndexIter.new(self.doc), 0)
+        # A document without bookmarks has no index: poppler's constructor
+        # returns NULL, which PyGObject raises as a TypeError.
+        try:
+            first = Poppler.IndexIter.new(self.doc)
+        except TypeError:
+            first = None
+        if first is not None:
+            walk(first, 0)
         data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
         return "OK n=%d bytes=%d" % (len(out), len(data)), data
 
@@ -295,6 +302,9 @@ def handle(doc, line):
         return "ERR %s %s" % (e.kind, e), b""
     except (GLib.Error if HAVE_POPPLER else OSError, MemoryError, cairo.Error if HAVE_POPPLER else OSError) as e:
         return "ERR failed " + one_line(str(e)), b""
+    except Exception as e:  # never let one request take the viewer's bridge down
+        print("sg-pdf: %s failed: %s: %s" % (cmd, type(e).__name__, e), file=sys.stderr)
+        return "ERR failed " + one_line("%s: %s" % (type(e).__name__, e)), b""
 
 
 def serve(fd_in, out, alive=None):

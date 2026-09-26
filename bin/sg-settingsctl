@@ -255,13 +255,27 @@ def sound(args):
 MAC = re.compile(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
 
 
+def bt_adapters():
+    """The kernel's Bluetooth adapters (hci0, ...)."""
+    d = os.environ.get("SG_SETTINGSCTL_BTSYS") or "/sys/class/bluetooth"
+    try:
+        return [n for n in os.listdir(d) if n.startswith("hci")]
+    except OSError:
+        return []
+
+
 def bluetooth(args):
     if not tool("bluetoothctl"):
         if not args:
             return ["BLUETOOTH no", "POWERED no"]
         raise Fail("unsupported", "Bluetooth is not installed")
     if not args:
-        show = run(["bluetoothctl", "show"], check=False)
+        # No adapter: say so at once. bluetoothctl would wait for a bluetoothd
+        # that never starts without one (its unit needs /sys/class/bluetooth)
+        # -- 15 s with Settings' Devices page frozen.
+        if not bt_adapters():
+            return ["BLUETOOTH no", "POWERED no"]
+        show = run(["bluetoothctl", "show"], timeout=6, check=False)
         if "Controller" not in show:
             return ["BLUETOOTH no", "POWERED no"]
         out = ["BLUETOOTH yes", "POWERED %s" % yn(re.search(r"Powered:\s*yes", show))]

@@ -28,6 +28,9 @@ tmp = tempfile.mkdtemp(prefix="sg-settingsctl-")
 tools = os.path.join(tmp, "tools")
 os.makedirs(tools)
 LOG = os.path.join(tmp, "calls.log")
+BTSYS = os.path.join(tmp, "sys-bluetooth")
+os.makedirs(os.path.join(BTSYS, "hci0"))
+os.environ["SG_SETTINGSCTL_BTSYS"] = BTSYS
 
 SINKS = [
     {"name": "alsa_output.pci-0000_00_1f.3.analog-stereo", "description": "Speakers (Built-in Audio)", "mute": False,
@@ -140,6 +143,16 @@ for bad in (["volume", "sink", "x", "151"], ["volume", "sink", "x", "-5"], ["vol
     check("sound refuses %s" % " ".join(bad), code == 2 and lines[-1].startswith("ERROR invalid") and not calls(), lines)
 
 # ---- bluetooth
+# a PC with no adapter: answered at once, bluetoothctl never asked (it would
+# wait 15 s for a bluetoothd that cannot start, freezing Settings)
+os.rmdir(os.path.join(BTSYS, "hci0"))
+calls()
+t0 = time.time()
+code, lines = ctl("bluetooth")
+check("bluetooth, no adapter: 'BLUETOOTH no' at once, bluetoothctl not run",
+      code == 0 and lines[:2] == ["BLUETOOTH no", "POWERED no"] and not [c for c in calls() if c.startswith("bluetoothctl")]
+      and time.time() - t0 < 3, (lines, time.time() - t0))
+os.makedirs(os.path.join(BTSYS, "hci0"))
 code, lines = ctl("bluetooth")
 check("bluetooth: present and powered", lines[:2] == ["BLUETOOTH yes", "POWERED yes"], lines)
 check("bluetooth: devices with state", "DEVICE AA:BB:CC:DD:EE:02\tyes\tyes\tHeadphones" in lines and

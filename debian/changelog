@@ -1,3 +1,18 @@
+sg-session (0.1.0-33) unstable; urgency=medium
+
+  * sg-pdf: a PDF without bookmarks (most of them) showed blank pages --
+    poppler has no index for it, PyGObject raised on the NULL iterator, and
+    the exception took the viewer's bridge down. The outline is now empty,
+    and any unexpected error answers the one request with ERR instead of
+    ending the bridge. test/pdf-test.py opens a PDF without an outline.
+  * sg-settingsctl bluetooth: a PC without a Bluetooth adapter is answered
+    at once (/sys/class/bluetooth has no hci*); bluetoothctl used to wait
+    15 s for a bluetoothd that cannot start, freezing Settings' Devices
+    page with a garbage-painted window. test/settingsctl-test.py covers it.
+  * Both found by the 2026-09-26 ISO QA pass.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 20:03:40 -0700
+
 sg-session (0.1.0-32) unstable; urgency=medium
 
   * Trademark hygiene: no user-visible "Windows" as our name -- the OOBE's
