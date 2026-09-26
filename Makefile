@@ -98,7 +98,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	fi
 	@# The per-user process agent (ADR 0014). sg-session-start launches it.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
-	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate build/sg-netmountd \
+	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate build/sg-elevated-run build/sg-netmountd \
 	    $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-procmem-probe.exe ]; then \
 	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -321,6 +321,7 @@ procagent:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-procagent procagent/sg-procagent.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-brokerd broker/sg-brokerd.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-elevate broker/sg-elevate.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-elevated-run broker/sg-elevated-run.c
 	$(CC) $(CFLAGS_BRIDGE) -Wno-format-truncation -o build/sg-netmountd domain/sg-netmountd.c -lresolv
 	@# The cross-process probe for sg-procagent-check (Windows PE, optional).
 	@if command -v $(MINGW64) >/dev/null 2>&1; then \

@@ -48,6 +48,11 @@ set_machine_settings() {
     else
         sg_log "WARNING: could not set HKLM\\Software\\Wine\\Drivers\\Graphics"
     fi
+    # Elevated programs run as this account on a display of their own, whose
+    # window manager is sg-compositor (ADR 0012, B56). It draws no title bars,
+    # so Wine draws its own -- the same Stained Glass caption as everywhere.
+    wine reg add 'HKCU\Software\Wine\X11 Driver' /v Decorated /t REG_SZ /d N /f >/dev/null 2>&1 \
+        || sg_log "WARNING: could not set the SYSTEM account's Decorated=N"
 }
 
 # Registry defaults other packages ship in $SG_DEFAULTS_DIR (App Paths, file

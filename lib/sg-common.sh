@@ -374,3 +374,19 @@ sg_wine_unattended() {
         "$@"
     fi
 }
+
+# sg_x_cookie FILE -- write an Xauthority file holding one random
+# MIT-MAGIC-COOKIE-1 for any display (FamilyWild), readable by this account
+# only. An X server started with "-auth FILE" then admits only clients that can
+# read FILE. Without -auth, Xwayland admits every local account -- any program
+# in any session could type into (XTEST) or read (XGetImage) a lock screen or a
+# consent prompt drawn on it. (Measured, ADR 0012 / B56.)
+sg_x_cookie() {
+    ( umask 077
+      _esc=''
+      for _b in $(od -An -to1 -N16 /dev/urandom); do _esc="$_esc\\$_b"; done
+      # family 0xffff, empty address and display, name, 16-byte data
+      # shellcheck disable=SC2059  # the format is built from octal escapes on purpose
+      printf "\\377\\377\\000\\000\\000\\000\\000\\022MIT-MAGIC-COOKIE-1\\000\\020$_esc" > "$1" )
+    [ "$(wc -c < "$1")" -eq 44 ]
+}

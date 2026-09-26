@@ -1,3 +1,21 @@
+sg-session (0.1.0-40) unstable; urgency=medium
+
+  * B56: an elevated program gets a display of its own. sg-brokerd execs
+    the new sg-elevated-run (as SYSTEM) after consent: an Xwayland run as
+    SYSTEM that admits only its cookie, handed to the requester's
+    compositor (sg-compositor ELEVATED) as the window manager of its
+    windows, and the program with DISPLAY/XAUTHORITY and a Wine desktop of
+    its own (SG_WINSTATION WinSta0\sg-elevated-<display>); the display lives
+    while the program and its children do. Never the session's display: the
+    broker no longer passes the requester's DISPLAY, WAYLAND_DISPLAY,
+    XAUTHORITY or runtime directory. SYSTEM's HKCU gets Decorated=N.
+  * The consent prompt's and the lock screen's X servers admit only their
+    own account (sg_x_cookie, -auth): without it any local account could
+    connect to them. make test-consent checks it across accounts.
+  * sg-lockctl: WINDOWS, and ACTIVATE <display> <window> for the taskbar.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 26 Sep 2026 00:50:00 -0700
+
 sg-session (0.1.0-39) unstable; urgency=medium
 
   * VPN connections (sg-netctl vpn): an administrator imports a vendor's

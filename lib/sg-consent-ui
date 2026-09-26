@@ -27,12 +27,22 @@ case "$mode" in admin|cred) ;; *) echo DENY; exit 2 ;; esac
 N="${SG_CONSENT_DISPLAY_NUM:-${SG_LOCK_DISPLAY_NUM:-99}}"
 while [ -e "/tmp/.X${N}-lock" ] || [ -e "/tmp/.X11-unix/X${N}" ]; do N=$((N + 1)); done
 
-WAYLAND_DISPLAY="${SG_LOCK_PRIV:?SG_LOCK_PRIV}" Xwayland ":$N" -noreset \
+# Only this account may connect to it: an Xwayland started without -auth
+# admits every local account, and any program in any session could then type
+# into this prompt (XTEST) or read it (XGetImage).
+XDIR=$(mktemp -d "${TMPDIR:-/tmp}/sg-consent-XXXXXX") || { echo DENY; exit 2; }
+sg_x_cookie "$XDIR/Xauthority" || { rm -rf "$XDIR"; echo DENY; exit 2; }
+WAYLAND_DISPLAY="${SG_LOCK_PRIV:?SG_LOCK_PRIV}" Xwayland ":$N" -noreset -auth "$XDIR/Xauthority" -nolisten tcp \
     </dev/null >/dev/null 2>&1 &
 _w=0
 while [ ! -e "/tmp/.X11-unix/X$N" ] && [ "$_w" -lt 100 ]; do sleep 0.1; _w=$((_w + 1)); done
 
 DISPLAY=":$N"
-export DISPLAY
-exec wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-consent64.exe" /consent "$mode" "$requester" "$program" \
+XAUTHORITY="$XDIR/Xauthority"
+export DISPLAY XAUTHORITY
+# Not exec: the cookie goes when the prompt does.
+wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-consent64.exe" /consent "$mode" "$requester" "$program" \
     2>>"${SG_LOG_DIR:-/tmp}/consent-ui.log"
+rc=$?
+rm -rf "$XDIR"
+exit $rc

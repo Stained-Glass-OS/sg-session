@@ -356,7 +356,7 @@ static int consent_read_line(int fd, char *buf, size_t max, time_t deadline)
 }
 
 static int obtain_consent(int requester_admin, const char *requester, uid_t uid, char **argv,
-                          char *who, size_t wholen)
+                          char *who, size_t wholen, struct surface *used)
 {
     const char *test = getenv("SG_BROKER_TEST");
     const char *env;
@@ -389,6 +389,7 @@ static int obtain_consent(int requester_admin, const char *requester, uid_t uid,
 
     if ((env = getenv("SG_CONSENT_TIMEOUT")) && atoi(env) > 0) timeout = atoi(env);
     if (!find_surface(uid, &sf)) { logmsg("consent: no secure surface for %s; refusing", requester); return 0; }
+    *used = sf;   /* the elevated program's display goes to the same compositor */
     if (surface_command(&sf, "SECURE\n", reply, sizeof(reply)) || strcmp(reply, "OK secure")) {
         logmsg("consent: the compositor refused SECURE (%s); refusing", reply);
         return 0;
@@ -452,8 +453,17 @@ out:
     return allowed;
 }
 
-/* ---- launching the elevated program as SYSTEM -------------------------- */
-static void launch(char **argv, char **envp, const char *cwd, const char *system_user)
+/* ---- launching the elevated program as SYSTEM --------------------------
+ * On a display of its own (ADR 0012, B56): sg-elevated-run starts an X server
+ * as this account, hands it to the requester's compositor -- the one the
+ * consent prompt was shown on -- and runs the program there. Never on the
+ * session's display: any program in the session could type into it or read
+ * it there. Without a compositor (the headless trust gate, SG_BROKER_TEST)
+ * the program runs with no display at all. */
+static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run";
+
+static void launch(char **argv, char **envp, const char *cwd, const char *system_user,
+                   const struct surface *sf, uid_t requester_uid)
 {
     struct passwd *pw = getpwnam(system_user);
     pid_t pid = fork();
@@ -475,14 +485,29 @@ static void launch(char **argv, char **envp, const char *cwd, const char *system
      * The requester is not trusted: a hostile client could otherwise send
      * LD_PRELOAD, PATH or WINEDLLOVERRIDES and run its own code as the SYSTEM
      * account. Everything else is dropped. */
+    /* Not the requester's DISPLAY, WAYLAND_DISPLAY, XAUTHORITY or runtime
+     * directory: those are the session's, which an elevated program must not
+     * use (and cannot: they are the requester's). */
     for (; *envp; envp++) {
-        static const char *ok[] = { "DISPLAY=", "WAYLAND_DISPLAY=", "XAUTHORITY=",
-                                    "WINEPREFIX=", "XDG_RUNTIME_DIR=", NULL };
+        static const char *ok[] = { "WINEPREFIX=", NULL };
         int i;
         for (i = 0; ok[i]; i++)
             if (!strncmp(*envp, ok[i], strlen(ok[i]))) { putenv(*envp); break; }
     }
     if (cwd && cwd[0] && chdir(cwd) != 0) { if (chdir("/") != 0) {} }
+    if (sf && sf->control[0]) {
+        char uidbuf[16], *xargv[260];
+        int i, n = 0;
+        snprintf(uidbuf, sizeof(uidbuf), "%u", (unsigned)requester_uid);
+        xargv[n++] = (char *)g_elevated_run;
+        xargv[n++] = "--control"; xargv[n++] = (char *)sf->control;
+        xargv[n++] = "--uid"; xargv[n++] = uidbuf;
+        xargv[n++] = "--";
+        for (i = 0; argv[i] && n < 259; i++) xargv[n++] = argv[i];
+        xargv[n] = NULL;
+        execv(g_elevated_run, xargv);
+        _exit(127);
+    }
     execvp(argv[0], argv);
     _exit(127);
 }
@@ -512,6 +537,7 @@ int main(void)
     if ((env = getenv("SG_SYSTEM_USER"))) g_system_user = env;
     if ((env = getenv("SG_SEAT_DIR"))) g_seat_dir = env;
     if ((env = getenv("SG_CONSENT_UI"))) g_consent_ui = env;
+    if ((env = getenv("SG_ELEVATED_RUN"))) g_elevated_run = env;
     /* PAM policy for elevation credential prompts */
     setenv("SG_REMOTE_PAM_SERVICE", "stained-glass-elevate", 0);
     g_log = logpath ? fopen(logpath, "a") : stderr;
@@ -566,7 +592,9 @@ int main(void)
         admin = is_admin_name(rpw->pw_name);
         logmsg("request from %s (%s): %s", rpw->pw_name, admin ? "administrator" : "standard user", argv[0]);
 
-        if (obtain_consent(admin, rpw->pw_name, cred.uid, argv, who, sizeof(who))) {
+        struct surface used;
+        memset(&used, 0, sizeof(used));
+        if (obtain_consent(admin, rpw->pw_name, cred.uid, argv, who, sizeof(who), &used)) {
             const char *by = who[0] ? who : rpw->pw_name;
             if (strcmp(by, rpw->pw_name)) {
                 /* 4648: a standard user's program ran on an administrator's credentials */
@@ -578,7 +606,7 @@ int main(void)
                 const char *st[4] = { by, computer_name(), ADMIN_PRIVILEGES, argv[0] };
                 audit(4672, 1, 12548, st, 4);
             }
-            launch(argv, envp, cwd, g_system_user);
+            launch(argv, envp, cwd, g_system_user, &used, cred.uid);
             status = 0;
             logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);
         } else {

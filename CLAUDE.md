@@ -462,6 +462,51 @@ Things that bit:
   (SIGPIPE on the reply). This is fixed in sg-compositor. The broker still
   sends `STATUS` on its probe connection rather than connecting bare.
 
+## Elevated programs' displays: sg-elevated-run (B56)
+
+After consent the broker does not run the program itself: it execs
+**`sg-elevated-run --control <the requester's control.sock> --uid <requester>
+-- PROGRAM...`** (as SYSTEM; `SG_ELEVATED_RUN` overrides the path). An
+elevated program on the session's X server could be typed into (XTEST,
+XSendEvent) or read (XGetImage) by any program in the session -- UIPI's
+hole -- and SYSTEM could not even connect to it ("Authorization required",
+so the launch hung). So it gets an X server of its own:
+
+- a random MIT-MAGIC-COOKIE-1 (FamilyWild) in a 0700 `/tmp/sg-elevated-*`
+  directory; `Xwayland -rootless -wm FD -displayfd FD -auth COOKIE -nolisten
+  tcp`, as SYSTEM, with `WAYLAND_SOCKET` one end of a socketpair;
+- `ELEVATED` + the other ends (Wayland, window manager, readiness pipe) to
+  the requester's compositor, which it checks is served by `--uid`
+  (SO_PEERCRED): sg-compositor becomes the X server's window manager and
+  composites its windows into the desktop (sg-compositor's CLAUDE.md);
+- the program with `DISPLAY`, `XAUTHORITY` and **`SG_WINSTATION=WinSta0\
+  sg-elevated-<display>`**: a Wine desktop of its own, so the desktop process
+  Wine starts for it (explorer, root mode -- SYSTEM's HKCU has no
+  `Explorer\Desktop`) lives on this display and ends with it; children
+  inherit the desktop. SYSTEM's HKCU gets `X11 Driver\Decorated=N`
+  (sg-prefix-init) so Wine draws its own title bars;
+- it is the **subreaper**: the display stays while the program or anything
+  it started (Wine double-forks) runs, then Xwayland is stopped and the
+  cookie removed. Exit status: the program's, 125 if the display could not
+  be made -- the program is then not run: **never falls back to the
+  session's display**.
+
+The broker passes the elevated program only `WINEPREFIX` from the requester
+(no DISPLAY, WAYLAND_DISPLAY, XAUTHORITY or runtime directory); in test mode
+(`SG_BROKER_TEST`, no compositor) it runs the program with no display.
+
+**The consent prompt's and lock screen's X servers need a cookie too**
+(`sg_x_cookie` in sg-common.sh, `-auth`). Measured: an Xwayland started
+without `-auth` admits *every* local account -- any program in any session
+could XTEST "Alt+Y" into a consent prompt, or poll a lock screen's key state
+(the session's own Xwayland, started by wlroots with `-listenfd`, does get
+`SI:localuser:<owner>`; a hand-started one does not). `make test-consent`
+checks another account cannot connect to the prompt's display.
+
+Gates: sg-compositor's `make test-elevated` (runs this helper as sgsystem
+against a headless compositor, with a session adversary); sg-image's
+`make elevated-test` (a real NSIS installer through consent in the VM).
+
 ## Installing: sg-install and Setup
 
 `bin/sg-install` installs the running **live** system. The live system is the

@@ -19,6 +19,8 @@
 #     user session
 # PAM runs for real under pam_wrapper/pam_matrix: no real account is used.
 set -u
+# Never the real desktop (the caller's DISPLAY is usually :0).
+unset DISPLAY XAUTHORITY
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 COMP="${SG_COMPOSITOR_BIN:-$HERE/../sg-compositor/build/sg-compositor}"
 PFX="${SG_PREFIX:-$HERE/test/tmp/state/prefix}"
@@ -73,6 +75,7 @@ start_broker() {   # $1 = administrators group
     SG_BROKER_SOCK="$T/broker.sock" SG_BROKER_PAMCHECK="$HERE/build/sg-rdp-pamcheck" \
     SG_BROKER_CONTROL="$T/ctl.sock" SG_BROKER_PRIV="$T/priv.sock" SG_ADMIN_GROUP="$1" \
     SG_CONSENT_UI="$HERE/lib/sg-consent-ui" SG_CONSENT_TIMEOUT=60 SG_SYSTEM_USER="$ME" \
+    SG_ELEVATED_RUN="$HERE/build/sg-elevated-run" \
     SG_LIB="$HERE/lib" SG_LIBEXEC="$HERE/build" SG_LOG_DIR="$T" SG_PREFIX="$PFX" \
     SG_BROKERD_LOG="$T/broker.log" \
         "$HERE/build/sg-brokerd" >/dev/null 2>&1 &
@@ -94,8 +97,14 @@ find_prompt() {   # sets PN to the display showing the prompt
     PN=""; _w=0
     while [ $_w -lt 60 ]; do
         for d in /tmp/.X11-unix/X*; do
-            n=":${d##*/X}"; [ "$n" = "$XD" ] && continue
-            DISPLAY="$n" xdotool search --name 'Permission required' >/dev/null 2>&1 && { PN="$n"; return 0; }
+            n=":${d##*/X}"; [ "$n" = "$XD" ] || [ "$n" = ":0" ] && continue
+            # The prompt's X server admits only holders of its cookie (this
+            # account runs it here, as the SYSTEM account does for real).
+            for a in "${TMPDIR:-/tmp}"/sg-consent-*/Xauthority; do
+                [ -r "$a" ] || continue
+                XAUTHORITY="$a" DISPLAY="$n" xdotool search --name 'Permission required' >/dev/null 2>&1 \
+                    && { PN="$n"; PA="$a"; return 0; }
+            done
         done
         sleep 1; _w=$((_w+1))
     done
@@ -103,7 +112,7 @@ find_prompt() {   # sets PN to the display showing the prompt
 }
 prompt_gone() {
     sleep 2
-    ! { [ -n "$PN" ] && DISPLAY="$PN" xdotool search --name 'Permission required' >/dev/null 2>&1; }
+    ! { [ -n "$PN" ] && XAUTHORITY="${PA:-/nonexistent}" DISPLAY="$PN" xdotool search --name 'Permission required' >/dev/null 2>&1; }
 }
 
 # Teeth.
@@ -122,6 +131,14 @@ start_broker "$(id -gn)"
 
 request a1
 find_prompt && pass "the consent prompt appears (on its own X server, $PN)" || fail "no consent prompt appeared"
+# Nobody else may even connect to that X server: without its cookie any
+# account could type into the prompt (XTEST) and answer it (B56 follow-up).
+if sudo -n -u nobody true 2>/dev/null; then
+    sudo -n -u nobody env DISPLAY="$PN" xdpyinfo >/dev/null 2>&1 \
+        && fail "another account can connect to the prompt's X server" \
+        || pass "another account cannot connect to the prompt's X server"
+    [ "$(stat -c %a "$PA")" = 600 ] && pass "its cookie is readable by its account only" || fail "cookie mode $(stat -c %a "$PA")"
+fi
 [ "$(ctl STATUS)" = "OK secure" ] && pass "the compositor is in SECURE mode while it asks" || fail "not in SECURE mode during the prompt"
 DISPLAY="$XD" xdotool search --name 'Permission required' >/dev/null 2>&1 \
     && fail "the prompt is on the requester's own display" || pass "the prompt is not on the requester's display"

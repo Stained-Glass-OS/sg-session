@@ -1,9 +1,9 @@
 /* sg-elevate -- ask the broker to run a program as the administrator (SYSTEM).
  *
  * Stained Glass OS, ADR 0012. Runs as the ordinary session user. It connects
- * to sg-brokerd, sends the program and arguments and a little of the session
- * environment (so an elevated GUI can find the display), and reports the
- * outcome. It has no privilege of its own -- every decision is the broker's,
+ * to sg-brokerd, sends the program and arguments and the Wine prefix, and
+ * reports the outcome. The elevated program is shown on a display of its own,
+ * which the broker sets up; nothing of the session's display is passed. It has no privilege of its own -- every decision is the broker's,
  * on the secure surface, and the program runs as SYSTEM only after consent.
  *
  * Usage:  sg-elevate [--] PROGRAM [ARG...]
@@ -57,8 +57,9 @@ int main(int argc, char **argv)
     /* payload: cwd, then a few env vars as KEY=VALUE, then a NUL, then argv */
     off = put(blob, off, sizeof(blob), cwd);
     {
-        static const char *pass[] = { "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY",
-                                      "WINEPREFIX", "XDG_RUNTIME_DIR", NULL };
+        /* Only the prefix: an elevated program gets a display of its own
+         * (sg-elevated-run), never the session's. */
+        static const char *pass[] = { "WINEPREFIX", NULL };
         for (i = 0; pass[i]; i++) {
             const char *v = getenv(pass[i]);
             if (v) { char kv[4200]; snprintf(kv, sizeof(kv), "%s=%s", pass[i], v); off = put(blob, off, sizeof(blob), kv); }
