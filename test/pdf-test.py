@@ -200,6 +200,19 @@ def main():
     r = subprocess.run([PDF, "--bridge", sys.executable, prog], timeout=30)
     out = open(os.path.join(tmp, "bridge.out")).read() if os.path.exists(os.path.join(tmp, "bridge.out")) else ""
     check(r.returncode == 0 and out.startswith("OK w=153 h=198"), "the bridge serves its program: %r" % out.strip())
+    # --thumbnail: File Explorer's PDF thumbnails (wine-sg 0244) wait for OUT or OUT.err
+    thumb = os.path.join(tmp, "thumb.png")
+    r = subprocess.run([PDF, "--thumbnail", doc, "128", thumb], timeout=30)
+    png = open(thumb, "rb").read() if os.path.exists(thumb) else b""
+    tw, th = struct.unpack(">II", png[16:24]) if png[:8] == b"\x89PNG\r\n\x1a\n" else (0, 0)
+    check(r.returncode == 0 and th == 128 and tw in (98, 99), "--thumbnail 128: a %dx%d PNG, the longer side 128" % (tw, th))
+    check(not os.path.exists(thumb + ".tmp") and not os.path.exists(thumb + ".err"), "--thumbnail leaves no .tmp or .err")
+    for src, size, what in ((bad, "128", "a damaged file"), (doc, "4096", "a size over 1024")):
+        out = os.path.join(tmp, "refused.png")
+        r = subprocess.run([PDF, "--thumbnail", src, size, out], timeout=30)
+        check(r.returncode != 0 and not os.path.exists(out) and os.path.exists(out + ".err"), "--thumbnail refuses %s in OUT.err" % what)
+        for f in (out, out + ".err"):
+            if os.path.exists(f): os.remove(f)
     print("pdf-test: %s" % ("all passed" if not FAILS else "%d FAILED" % FAILS))
     return 1 if FAILS else 0
 

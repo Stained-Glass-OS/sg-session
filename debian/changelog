@@ -1,3 +1,10 @@
+sg-session (0.1.0-30) unstable; urgency=medium
+
+  * sg-pdf --thumbnail FILE SIZE OUT: a PDF's first page as a PNG, for File
+    Explorer's PDF thumbnails (wine-sg 0244). test/pdf-test.py checks it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 17:35:41 -0700
+
 sg-session (0.1.0-29) unstable; urgency=medium
 
   * Every compositor renders with pixman unless a GPU with a 3D driver is

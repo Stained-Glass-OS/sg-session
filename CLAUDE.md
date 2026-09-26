@@ -1081,7 +1081,12 @@ here). Errors are one line, `ERR <kind> <message>`: `invalid`, `open`,
 `password` (the document needs one: the viewer asks and sends `open PATH
 PASSWORD`), `notopen`, `range`, `toolarge` (a bitmap over 60 Mpixel),
 `failed` (poppler is not installed says so here). `--serve` answers on its
-own stdin/stdout; `--info FILE` prints the open answer.
+own stdin/stdout; `--info FILE` prints the open answer. `--thumbnail FILE
+SIZE OUT` is File Explorer's PDF thumbnail (wine-sg 0244's shell32 runs it
+as `\\?\unix/usr/bin/sg-pdf`): page 1 with its longer side SIZE (16-1024)
+as a PNG written to OUT.tmp then renamed, or the reason in OUT.err --
+**shell32 polls for one of the two files** (a Windows program gets no pipe
+to a native one), so both must appear whole and exactly one of them.
 
 - **Gate: `test/pdf-test.py`** (in `make lint`; skips 77 without the GI
   bindings): a PDF written by hand (Helvetica text, a filled box, a link
@@ -1091,7 +1096,9 @@ own stdin/stdout; `--info FILE` prints the open answer.
   reading order and top-left coordinates, the link and the outline, eight
   refusals, and the bridge serving a stand-in program. Seen red against
   mutants that leave search hits bottom-left based and that ignore the
-  rotation. sg-shell's `test/pdf-check.sh` is the Windows side.
+  rotation; `--thumbnail`'s size, no leftovers, and its refusals in
+  OUT.err (a mutant ignoring SIZE fails). sg-shell's `test/pdf-check.sh` is
+  the Windows side; wine-sg's `test/explorer3-gate.sh` the thumbnail's.
 
 ## Voice typing: sg-dictate (Win+H)
 

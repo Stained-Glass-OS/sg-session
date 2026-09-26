@@ -11,6 +11,14 @@
 #                                   one), as sg-dictate and sg-netctl do
 #   sg-pdf --serve                  serve requests on our own stdin/stdout
 #   sg-pdf --info FILE              pages and page sizes (for scripts)
+#   sg-pdf --thumbnail FILE SIZE OUT
+#                                   the first page as a PNG whose longer side
+#                                   is SIZE pixels (16-1024), written to OUT
+#                                   whole (renamed into place); on failure
+#                                   OUT.err holds the reason. File Explorer's
+#                                   PDF thumbnails (wine-sg 0244): Wine gives
+#                                   shell32 no pipe to a native program, so
+#                                   the answer is a file it waits for
 #
 # Protocol: one request a line, fields separated by tabs:
 #
@@ -340,8 +348,49 @@ def bridge(program):
     return child.wait()
 
 
+def thumbnail(path, size, out):
+    """page 1 as a PNG no larger than size x size, written whole to out"""
+    def fail(why):
+        try:
+            with open(out + ".err.tmp", "w") as f:
+                f.write(why + "\n")
+            os.replace(out + ".err.tmp", out + ".err")
+        except OSError:
+            pass
+        return 1
+    try:
+        size = int(size)
+    except ValueError:
+        return fail("invalid size")
+    if not 16 <= size <= 1024:
+        return fail("invalid size")
+    doc = Document()
+    head, _ = doc.open(path)
+    if not head.startswith("OK") or not doc.pages:
+        return fail(head)
+    pw, ph = doc.pages[0].get_size()
+    if pw <= 0 or ph <= 0:
+        return fail("empty page")
+    scale = size / max(pw, ph)
+    try:
+        head, buf = doc.render(0, "%.6f" % scale, 0)
+    except Refusal as e:
+        return fail(str(e))
+    w = int(head.split("w=")[1].split()[0])
+    h = int(head.split("h=")[1].split()[0])
+    surf = cairo.ImageSurface.create_for_data(bytearray(buf), cairo.FORMAT_ARGB32, w, h, w * 4)
+    try:
+        surf.write_to_png(out + ".tmp")
+        os.replace(out + ".tmp", out)
+    except OSError as e:
+        return fail(str(e))
+    return 0
+
+
 def main():
     args = sys.argv[1:]
+    if args[:1] == ["--thumbnail"] and len(args) == 4:
+        return thumbnail(args[1], args[2], args[3])
     if args[:1] == ["--bridge"] and len(args) > 1:
         return bridge(args[1:])
     if args[:1] == ["--serve"]:
@@ -352,7 +401,7 @@ def main():
         print(head)
         sys.stdout.write(data.decode("utf-8"))
         return 0 if head.startswith("OK") else 1
-    print("usage: sg-pdf --bridge PROGRAM [ARGS] | --serve | --info FILE", file=sys.stderr)
+    print("usage: sg-pdf --bridge PROGRAM [ARGS] | --serve | --info FILE | --thumbnail FILE SIZE OUT", file=sys.stderr)
     return 2
 
 
