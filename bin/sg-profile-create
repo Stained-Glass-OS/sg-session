@@ -77,4 +77,22 @@ runuser -u "$user" -- sh -c 'umask 077; cd "$1" || exit 1
     done
     : > "$mark"' sg-profile-create "$profile" 2>/dev/null ||
     sg_log "WARNING: could not create the Send to items in $user's profile"
+
+# The SYSTEM account may read and write the profile, as on Windows (SYSTEM:
+# Full control). An elevated program runs as SYSTEM (ADR 0012): an installer
+# the user downloaded to Downloads could not even be read by it -- it died
+# without a word after the user said Yes. A POSIX ACL (and a default ACL, so
+# new files and folders inherit it), set *as the user* -- the profile is
+# theirs, and root walking it could be sent elsewhere by a symbolic link;
+# setfacl -P does not follow them. The recursive pass is once per profile (a
+# marker); the default ACLs carry it from then on.
+if command -v setfacl >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $1..$2 are the inner shell's, deliberately
+    runuser -u "$user" -- sh -c 'cd "$1" || exit 1
+        mark="AppData/Local/Stained Glass/system-access"
+        [ -e "$mark" ] && exit 0
+        setfacl -R -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null || exit 1
+        mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile" "$SG_SYSTEM_USER" 2>/dev/null ||
+        sg_log "WARNING: could not give the SYSTEM account access to $user's profile"
+fi
 exit 0

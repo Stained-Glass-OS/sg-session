@@ -1,7 +1,8 @@
 #!/bin/sh
 # sg-profile-create plants Windows' Send to items in a profile, once: a new
 # profile gets them, an existing one gets them at its next login, and an item
-# the user deleted is not put back.
+# the user deleted is not put back. And the SYSTEM account may read and write
+# the profile (an elevated installer in Downloads), no one else.
 #
 #   sudo sh test/profile-sendto-test.sh [USER]    (USER: an account to own the profile; default sgconf)
 set -u
@@ -39,6 +40,22 @@ run
 rm -rf "$D" "$T/prefix/drive_c/users/$user/AppData/Local/Stained Glass"
 run
 [ -f "$D/Desktop (create shortcut).DeskLink" ] && pass "an existing profile gets them at its next login" || fail "existing profile: $(ls "$D" 2>&1)"
+
+# the SYSTEM account (here: nobody) may read what the user downloads, as on
+# Windows -- an elevated installer runs as SYSTEM
+P="$T/prefix/drive_c/users/$user"
+if command -v setfacl >/dev/null 2>&1; then
+    runuser -u "$user" -- sh -c 'umask 077; printf x > "$1/Downloads/setup.exe"' sh "$P"
+    runuser -u nobody -- test -r "$P/Downloads/setup.exe" && pass "the SYSTEM account can read a file the user downloaded after" \
+        || fail "SYSTEM cannot read Downloads/setup.exe: $(getfacl -p "$P/Downloads" 2>&1 | tr '\n' ' ')"
+    runuser -u nobody -- sh -c 'printf y > "$1/Downloads/by-system.txt"' sh "$P" && pass "and write in the profile" \
+        || fail "SYSTEM cannot write in Downloads"
+    other=$(getent passwd | awk -F: -v u="$user" '$3 >= 1000 && $3 < 60000 && $1 != u {print $1; exit}')
+    if [ -n "$other" ]; then
+        runuser -u "$other" -- test -r "$P/Downloads/setup.exe" 2>/dev/null && fail "another user ($other) can read it" \
+            || pass "another user ($other) still cannot"
+    fi
+else echo "      (no setfacl: skipped)"; fi
 
 [ $RC = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit $RC

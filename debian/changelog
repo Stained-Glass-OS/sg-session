@@ -1,3 +1,14 @@
+sg-session (0.1.0-36) unstable; urgency=medium
+
+  * sg-profile-create: the SYSTEM account may read and write each user's
+    profile (a POSIX ACL and default ACL for sgsystem, set as the user, once
+    per profile), as on Windows. An elevated installer runs as SYSTEM and
+    could not even read the setup file the user had downloaded. No other
+    user gains anything. test/profile-sendto-test.sh checks it (the old
+    script fails it). Found by the 2026-09-26 ISO QA pass.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 22:37:38 -0700
+
 sg-session (0.1.0-35) unstable; urgency=medium
 
   * The first-run setup's browser (Firefox) never installed: sg-oobe-browser
