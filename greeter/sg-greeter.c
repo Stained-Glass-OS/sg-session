@@ -59,6 +59,8 @@ static const char *g_lock_user;
  * published file (owner, type, size); the login screen uses the system's
  * picture (SG_LOCK_DEFAULT_PICTURE, else the stained-glass wallpaper). */
 static BOOL g_curtain;
+/* keys held since before this screen appeared, and keys pressed while it is up */
+static BOOL g_held[256], g_pressed[256];
 static HBITMAP g_bmp_sharp, g_bmp_blur;   /* screen-sized, 32bpp */
 static HBRUSH g_pattern;                  /* g_bmp_blur as a brush, for the statics */
 static int g_sw, g_sh;
@@ -512,7 +514,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     WNDCLASSA wc = {0};
     HWND hwnd;
     MSG msg;
-    int sw, sh, cx, cy;
+    int sw, sh, cx, cy, i;
     const char *curtain = getenv( "SG_GREETER_CURTAIN" );
 
     (void)prev; (void)show;
@@ -599,8 +601,33 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     CloseHandle( CreateThread( NULL, 0, reader_thread, hwnd, 0, NULL ) );
     send_line( "HELLO" );
 
+    /* Keys already down when this screen appeared -- the L of Win+L, still
+     * held while the lock screen comes up -- are not typing: as on Windows,
+     * they are ignored until they are released, so their auto-repeat never
+     * fills the password box ("llllll..." and "The password is incorrect").
+     * A key is "held" if the system says it is down now, or if its first
+     * message here is already a repeat (lParam bit 30: it was down before). */
+    for (i = 1; i < 256; i++)
+        if (GetAsyncKeyState( i ) & 0x8000) g_held[i] = TRUE;
+
     while (GetMessageA( &msg, NULL, 0, 0 ))
     {
+        if (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
+        {
+            BYTE k = (BYTE)msg.wParam;
+            if (g_held[k] || ((msg.lParam & (1 << 30)) && !g_pressed[k]))
+            {
+                g_held[k] = TRUE;
+                continue;
+            }
+            g_pressed[k] = TRUE;
+        }
+        else if (msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP)
+        {
+            BYTE k = (BYTE)msg.wParam;
+            g_pressed[k] = FALSE;
+            if (g_held[k]) { g_held[k] = FALSE; continue; }
+        }
         /* A key lifts the curtain, and -- unlike Enter or Escape, which only
          * lift it -- goes on to the box that now has the focus, so a person
          * (or remote-support tool) who just starts typing loses nothing. */

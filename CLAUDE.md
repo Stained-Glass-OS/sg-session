@@ -342,6 +342,17 @@ the lock screen appears, a wrong password is refused, the right one unlocks and
 the UI goes away — and not one key typed at the lock screen reaches the user
 session. PAM is real, under `pam_wrapper`.
 
+**Keys held when the screen appears are not typing.** The L of Win+L is
+often still down when the lock screen comes up (later still with pixman
+rendering), and its auto-repeat filled the password box and lifted the
+curtain -- then "The password is incorrect". As on Windows, the greeter
+ignores a key that was down before it appeared (`GetAsyncKeyState` at
+start, or a first message that is already a repeat, lParam bit 30) until it
+is released. `make test-lock` locks with Win+L's L held 4 s across the lock
+(`sg-vkbd -D l ... -s 4 -U l`) and requires the first password to unlock,
+then re-locks for the refusal checks; the old greeter fails it (sg-lockd
+refuses the "lll..." password, and the curtain is gone).
+
 **The greeter reads its pipe on a thread.** It used to poll with
 `PeekNamedPipe`, which fails with `ERROR_NOT_SUPPORTED` on a Unix pipe
 inherited through Wine — so the real greeter never read a byte from the bridge,

@@ -2,7 +2,10 @@
  *
  *   sg-vkbd [ARG...]      ARG is TEXT, or -k KEYSYM (press and release),
  *                         or -M MOD / -m MOD (hold / release a modifier:
- *                         shift, ctrl, alt, logo)
+ *                         shift, ctrl, alt, logo), or -D KEYSYM / -U KEYSYM
+ *                         (hold / release any key), or -s SECONDS (wait,
+ *                         keys still held -- the compositor releases a
+ *                         virtual keyboard's keys when it goes)
  *
  * A test fixture, like wtype but with one difference that matters here: wtype
  * uploads a keymap made up for each invocation, assigning keycodes in the
@@ -147,6 +150,16 @@ int main(int argc, char **argv)
             xkb_keysym_t sym = xkb_keysym_from_name(argv[++i], XKB_KEYSYM_CASE_INSENSITIVE);
             if (sym == XKB_KEY_NoSymbol) { fprintf(stderr, "sg-vkbd: unknown key %s\n", argv[i]); return 2; }
             tap_sym(sym, argv[i]);
+        } else if ((!strcmp(argv[i], "-D") || !strcmp(argv[i], "-U")) && i + 1 < argc) {
+            int down = argv[i][1] == 'D', sh;
+            xkb_keycode_t kc;
+            xkb_keysym_t sym = xkb_keysym_from_name(argv[++i], XKB_KEYSYM_CASE_INSENSITIVE);
+            if (sym == XKB_KEY_NoSymbol || !lookup(sym, &kc, &sh)) { fprintf(stderr, "sg-vkbd: unknown key %s\n", argv[i]); return 2; }
+            key(kc, down);
+        } else if (!strcmp(argv[i], "-s") && i + 1 < argc) {
+            double t = atof(argv[++i]);
+            usleep((useconds_t)(t * 1000000));
+            wl_display_roundtrip(g_dpy);
         } else if (!strcmp(argv[i], "-M") && i + 1 < argc) {
             key(modifier_key(argv[++i]), 1);
         } else if (!strcmp(argv[i], "-m") && i + 1 < argc) {

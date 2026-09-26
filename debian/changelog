@@ -1,3 +1,11 @@
+sg-session (0.1.0-31) unstable; urgency=medium
+
+  * Lock screen: keys already held when it appears (the L of Win+L) are
+    ignored until released, so their auto-repeat no longer fills the
+    password box. test-lock holds L across the lock; sg-vkbd -D/-U/-s.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Fri, 25 Sep 2026 18:21:35 -0700
+
 sg-session (0.1.0-30) unstable; urgency=medium
 
   * sg-pdf --thumbnail FILE SIZE OUT: a PDF's first page as a PNG, for File

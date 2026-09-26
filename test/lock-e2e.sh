@@ -84,7 +84,11 @@ user_keys | grep -qx b && pass "unlocked: keys reach the user session (the gate 
     || { fail "unlocked: the user session never received a key -- result meaningless"; echo "RESULT: FAIL"; exit 1; }
 before=$(user_keys | wc -l)
 
-inj -M logo l -m logo
+# Win+L with the L held on for 4 s, across the lock screen's appearance (a
+# person holding it a moment too long): its auto-repeat must not type into
+# the new lock screen's password box -- the first password tried below must
+# work.
+inj -M logo -D l -m logo -s 4 -U l
 [ "$(ctl STATUS)" = "OK locked" ] && pass "Win+L locks" || fail "Win+L did not lock"
 # The baseline is taken once locked: Win+L's Super key is pressed while the
 # session is still unlocked, and legitimately reaches it.
@@ -112,6 +116,20 @@ if [ -s "$T/drop/$(id -un)" ]; then
 else echo "note: no picture published (python3-pil missing?); picture checks skipped"; fi
 
 inj x; inj -k BackSpace   # warm up the lock server's keymap, then clear
+# the box is empty: the L held across the lock typed nothing into it
+inj 'correct-horse' -k Return
+sleep 5
+if [ "$(ctl STATUS)" = "OK unlocked" ]; then
+    pass "a key held across the lock typed nothing: the first password unlocks"
+else
+    fail "the first password did not unlock -- the held key typed into the box"
+    grep -q 'unlock refused' "$T/lockd.log" && echo "      (sg-lockd refused it)"
+    inj -k Escape; inj -k BackSpace   # ... and carry on from where it is
+fi
+# lock again (a plain Win+L) for the refusal checks
+relock_from=$(user_keys | wc -l); relock_to=$relock_from
+[ "$(ctl STATUS)" = "OK unlocked" ] && { inj -M logo l -m logo; sleep 4; relock_to=$(user_keys | wc -l); }
+inj x; inj -k BackSpace
 inj 'wrongpass' -k Return
 sleep 5
 [ "$(ctl STATUS)" = "OK locked" ] && pass "a wrong password is refused; still locked" || fail "a wrong password unlocked"
@@ -129,9 +147,10 @@ if [ -s "$T/drop/$(id -un)" ]; then
         || pass "the staged picture is removed after unlocking"
 fi
 
+# (the re-lock's Win+L was typed while unlocked and legitimately reached it)
 after=$(user_keys | wc -l)
-leaked=$(user_keys | tail -n +$((before + 1)) | tr '\n' ' ')
-if [ "$after" -eq "$before" ]; then pass "not one key typed at the lock screen reached the user session"
+leaked=$(user_keys | awk -v b="$before" -v f="$relock_from" -v t="$relock_to" 'NR > b && (NR <= f || NR > t)' | tr '\n' ' ')
+if [ -z "$leaked" ]; then pass "not one key typed at the lock screen reached the user session"
 else fail "keys typed at the lock screen reached the user session: $leaked"; fi
 
 echo
