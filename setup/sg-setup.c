@@ -87,16 +87,33 @@ static const char *const page_names[] = { "welcome", "start", "license", "type",
 #define WM_BRIDGE_EOF  (WM_APP + 2)
 #define TIMER_RESTART  1
 
-static const COLORREF COL_WIN     = RGB(0xFF, 0xFF, 0xFF);
-static const COLORREF COL_TEXT    = RGB(0x1A, 0x1A, 0x1A);
-static const COLORREF COL_SUBTLE  = RGB(0x5C, 0x5C, 0x5C);
-static const COLORREF COL_LINK    = RGB(0x00, 0x5F, 0xB8);
-static const COLORREF COL_DIS     = RGB(0xA0, 0xA0, 0xA0);
-static const COLORREF COL_ERR     = RGB(0xC4, 0x2B, 0x1C);
-static const COLORREF COL_TRACK   = RGB(0xE3, 0xE3, 0xE8);
-static const COLORREF COL_BAR     = RGB(0x5B, 0x2A, 0xA8);
-static const COLORREF COL_CAPLINE = RGB(0xD8, 0xD8, 0xDE);
-static const COLORREF COL_OPTION  = RGB(0xF3, 0xF1, 0xF8);
+/* Setup follows the app mode (HKCU\...\Themes\Personalize AppsUseLightTheme)
+ * like everything else: the dark scheme (wine-sg 0160-0163) turns its
+ * controls dark, so the page it draws must be dark too, or controls sit black
+ * on a white page (QA B34). At the login screen the mode is the default,
+ * light; in a live session it is the user's. */
+static COLORREF COL_WIN, COL_TEXT, COL_SUBTLE, COL_LINK, COL_DIS, COL_ERR, COL_TRACK, COL_BAR, COL_CAPLINE,
+                COL_OPTION, COL_OPTION_DOWN;
+static BOOL g_dark;
+
+static void load_palette( void )
+{
+    DWORD light = 1, size = sizeof(light);
+    if (RegGetValueA( HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                      "AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &light, &size )) light = 1;
+    g_dark = !light;
+    COL_WIN     = g_dark ? RGB(0x20, 0x20, 0x20) : RGB(0xFF, 0xFF, 0xFF);
+    COL_TEXT    = g_dark ? RGB(0xFF, 0xFF, 0xFF) : RGB(0x1A, 0x1A, 0x1A);
+    COL_SUBTLE  = g_dark ? RGB(0xA8, 0xA8, 0xA8) : RGB(0x5C, 0x5C, 0x5C);
+    COL_LINK    = g_dark ? RGB(0x99, 0xC5, 0xF5) : RGB(0x00, 0x5F, 0xB8);
+    COL_DIS     = g_dark ? RGB(0x6E, 0x6E, 0x6E) : RGB(0xA0, 0xA0, 0xA0);
+    COL_ERR     = g_dark ? RGB(0xFF, 0x6B, 0x5B) : RGB(0xC4, 0x2B, 0x1C);
+    COL_TRACK   = g_dark ? RGB(0x3A, 0x3A, 0x3A) : RGB(0xE3, 0xE3, 0xE8);
+    COL_BAR     = g_dark ? RGB(0x9B, 0x5C, 0xE0) : RGB(0x5B, 0x2A, 0xA8);
+    COL_CAPLINE = g_dark ? RGB(0x3A, 0x3A, 0x3A) : RGB(0xD8, 0xD8, 0xDE);
+    COL_OPTION  = g_dark ? RGB(0x2D, 0x2B, 0x33) : RGB(0xF3, 0xF1, 0xF8);
+    COL_OPTION_DOWN = g_dark ? RGB(0x3B, 0x33, 0x4A) : RGB(0xE4, 0xDE, 0xF0);
+}
 
 static HANDLE g_in, g_out;
 static BOOL g_windowed;
@@ -1228,7 +1245,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
               "keeps itself up to date with its own updates."
             : "Choose where to install it: into unallocated space, beside Windows or another system, or onto "
               "a partition you format. You can create, delete and format partitions on the next page.";
-        HBRUSH br = CreateSolidBrush( down ? RGB(0xE4, 0xDE, 0xF0) : COL_OPTION );
+        HBRUSH br = CreateSolidBrush( down ? COL_OPTION_DOWN : COL_OPTION );
         FillRect( dc, &r, br ); DeleteObject( br );
         t.left += 20; t.top += 14; t.right -= 20;
         SelectObject( dc, g_font_big ); SetTextColor( dc, dis ? COL_DIS : COL_TEXT );
@@ -1301,6 +1318,16 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     {
     case WM_PAINT: paint( hwnd ); return 0;
     case WM_ERASEBKGND: return 1;
+    case WM_SETTINGCHANGE:
+        /* the app mode changed (a live session): the palette, then everything */
+        if (lp && !lstrcmpA( (const char *)lp, "ImmersiveColorSet" ))
+        {
+            load_palette();
+            DeleteObject( g_win_brush );
+            g_win_brush = CreateSolidBrush( COL_WIN );
+            RedrawWindow( hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN );
+        }
+        break;
     case WM_CTLCOLORSTATIC:
         SetBkColor( (HDC)wp, COL_WIN );
         SetTextColor( (HDC)wp, COL_TEXT );
@@ -1515,6 +1542,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     g_font_bold  = make_font( 17, FW_SEMIBOLD );
     g_font_big   = make_font( 20, FW_SEMIBOLD );
     g_font_logo  = make_font( 44, FW_LIGHT );
+    load_palette();
     g_win_brush  = CreateSolidBrush( COL_WIN );
 
     wc.lpfnWndProc   = wndproc;

@@ -203,12 +203,28 @@ k Tab; sleep 0.5; shot try
 k Return                         # Try Stained Glass OS without installing it
 w=0; while kill -0 $B 2>/dev/null && [ "$w" -lt 60 ]; do sleep 0.5; w=$((w + 1)); done
 kill -0 $B 2>/dev/null && { echo "the wizard did not close for Try"; kill $B; }
+# Dark app mode (a live session whose user chose it): the page is dark too,
+# not white under dark controls (QA B34).
+wine reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' /v AppsUseLightTheme /t REG_DWORD /d 0 /f >/dev/null 2>&1
+mv "$T/bridge.log" "$T/bridge-try.log"
+SG_SETUP_RESULT="$T/result2" SG_INSTALLD_SOCK="$SOCK" "$BRIDGE" "wine $EXE" 2>"$T/bridge.log" &
+B=$!
+page welcome; sleep 1; shot dark-welcome
+kill $B 2>/dev/null; wait $B 2>/dev/null
 EOS
 chmod +x "$T/drive.sh"
 export T SOCK BRIDGE="$BUILD/sg-setup-bridge" EXE="$BUILD/sg-setup64.exe"
 timeout 300 xvfb-run -a -s "-screen 0 1280x800x24" "$T/drive.sh"
 rm -rf "$BUILD/artifacts-setup"; mkdir -p "$BUILD/artifacts-setup"; cp "$T"/*.png "$BUILD/artifacts-setup/" 2>/dev/null
 
+# the page's background, a point left of the text, in both modes
+lum() { convert "$T/$1.png" -format "%[fx:int(255*(0.299*p{$2,$3}.r+0.587*p{$2,$3}.g+0.114*p{$2,$3}.b))]" info: 2>/dev/null; }
+PX=${SG_SETUP_PAGE_X:-400}; PY=${SG_SETUP_PAGE_Y:-600}
+if command -v convert >/dev/null && [ -f "$T/welcome.png" ] && [ -f "$T/dark-welcome.png" ]; then
+    lw=$(lum welcome "$PX" "$PY"); dw=$(lum dark-welcome "$PX" "$PY")
+    [ "${lw:-0}" -gt 200 ] && [ "${dw:-255}" -lt 60 ] && pass "dark app mode: the page is dark ($dw), as its controls are; light mode light ($lw)" \
+        || fail "the page in dark mode: $dw (light: $lw) at $PX,$PY"
+else fail "no screenshots for the dark-mode check"; fi
 if [ "$(cat "$T/type-before-accept" 2>/dev/null)" = 0 ]; then pass "the license terms must be accepted before Next"
 else fail "Next worked without accepting the license terms"; fi
 if [ "$(cat "$T/disk-after-mismatch" 2>/dev/null)" = 0 ]; then pass "a password typed twice differently is refused"

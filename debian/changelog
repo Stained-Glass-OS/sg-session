@@ -1,3 +1,10 @@
+sg-session (0.1.0-37) unstable; urgency=medium
+
+  * Setup follows the app mode: its page is dark when its controls are
+    (QA B34), light at the login screen as before. setup-e2e checks both.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Sat, 26 Sep 2026 00:03:14 -0700
+
 sg-session (0.1.0-36) unstable; urgency=medium
 
   * sg-profile-create: the SYSTEM account may read and write each user's
