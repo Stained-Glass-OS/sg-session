@@ -464,7 +464,7 @@ Things that bit:
 
 ## Elevated programs' displays: sg-elevated-run (B56)
 
-**Status (2026-09-26): on branches `b56-elevated-display` (sg-compositor, sg-session, wine-sg, sg-image, stained-glass), NOT pushed. Headless gates pass (sg-compositor `make test-elevated` + mutants, sg-session `make test`/`test-consent`); a local NSIS-installer smoke test on an elevated display passes; wine-sg 10.0-71 (0290/0291) builds. Next: run sg-image `make elevated-test` (image already built at /var/tmp/b56/sg-image/build with wine 10.0-69), then take the next free versions and push.**
+**Status (2026-09-26): shipped (0.1.0-40). sg-image `make elevated-test` passes 13/13 in a VM; `make test` and `make test-consent` pass.**
 
 After consent the broker does not run the program itself: it execs
 **`sg-elevated-run --control <the requester's control.sock> --uid <requester>
