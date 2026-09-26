@@ -2,7 +2,8 @@
 # The web browser chosen in the first-run setup, installed for everyone on the
 # machine: downloaded from its publisher (never shipped in the image) and run
 # silently as SYSTEM in the machine's Windows system. With winget installed
-# (the user's own), winget does it; otherwise the publisher's download link.
+# (the user's own), winget does it; otherwise the publisher's download link,
+# fetched by sg-fetch (HTTPS only; the image has no curl).
 # Run as root by sg-oobe-browser.service -- started by sg-oobed, and at each
 # boot while the request is still there (offline: it tries again).
 #
@@ -30,7 +31,7 @@ runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
     fi
     d=$(mktemp -d /var/tmp/sg-oobe-browser.XXXXXX) || exit 1
     trap "rm -rf \"$d\"" EXIT
-    curl -fsSL --proto =https --retry 3 --max-time 1200 -o "$d/setup.exe" "$URL" || exit 1
+    "$SG_LIB/sg-fetch" "$URL" "$d/setup.exe" || exit 1
     wine "$d/setup.exe" /S' 2>&1 | sed 's/^/oobe-browser: /' >&2
 if [ -f "$SG_PREFIX/drive_c/Program Files/$exe" ]; then
     sg_log "oobe-browser: $id is installed"

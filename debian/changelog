@@ -1,3 +1,17 @@
+sg-session (0.1.0-35) unstable; urgency=medium
+
+  * The first-run setup's browser (Firefox) never installed: sg-oobe-browser
+    downloaded with curl, which the image does not have ("curl: not
+    found", every boot). lib/sg-fetch downloads instead -- Python's urllib,
+    HTTPS only (redirects too), retries, the file renamed into place whole.
+    test/fetch-test.py (in make lint): a local HTTPS server with a CA made
+    for it; redirects to http and http:// URLs refused (mutants that follow
+    them fail it). Verified on the QA VM: Firefox installed in 40 s.
+    Found by the 2026-09-26 ISO QA pass.
+  * Depends: python3 (sg-settingsctl, sg-pdf and now sg-fetch are Python).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 21:06:42 -0700
+
 sg-session (0.1.0-34) unstable; urgency=medium
 
   * sg-settingsctl shutdown poweroff|reboot: what wine-sg 0241's

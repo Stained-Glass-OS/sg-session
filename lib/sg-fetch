@@ -1,0 +1,60 @@
+#!/usr/bin/python3
+# sg-fetch URL OUT -- download URL to OUT over HTTPS only (redirects too), with
+# retries; the file appears whole (renamed into place) or not at all. What
+# sg-oobe-browser downloads the first-run setup's browser with: the image has
+# no curl, and the machine's Windows side has no way to hand a native tool a
+# download. Exit 0, or 1 with the reason on stderr.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import os
+import shutil
+import sys
+import time
+import urllib.error
+import urllib.request
+
+TRIES = int(os.environ.get("SG_FETCH_TRIES", "3"))
+TIMEOUT = float(os.environ.get("SG_FETCH_TIMEOUT", "60"))
+
+
+class HttpsOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.lower().startswith("https://"):
+            raise urllib.error.URLError("refusing a redirect away from https: %s" % newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def main(argv):
+    if len(argv) != 3:
+        print("usage: sg-fetch URL OUT", file=sys.stderr)
+        return 2
+    url, out = argv[1], argv[2]
+    if not url.lower().startswith("https://"):
+        print("sg-fetch: only https:// is fetched: %s" % url, file=sys.stderr)
+        return 1
+    opener = urllib.request.build_opener(HttpsOnly)
+    opener.addheaders = [("User-Agent", "Stained Glass OS setup")]
+    tmp = out + ".part"
+    err = None
+    for attempt in range(TRIES):
+        try:
+            with opener.open(url, timeout=TIMEOUT) as r, open(tmp, "wb") as f:
+                shutil.copyfileobj(r, f, 1 << 20)
+            os.replace(tmp, out)
+            return 0
+        except (OSError, urllib.error.URLError, ValueError) as e:
+            err = e
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            if isinstance(e, urllib.error.URLError) and "refusing" in str(e.reason):
+                break
+            if attempt + 1 < TRIES:
+                time.sleep(min(30, 5 * (attempt + 1)))
+    print("sg-fetch: %s: %s" % (url, err), file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

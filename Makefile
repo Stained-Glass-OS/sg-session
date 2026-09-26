@@ -141,6 +141,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	install -m 0755 $(LIBS) $(LIBDIR)
+	install -m 0755 lib/sg-fetch $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
@@ -185,6 +186,8 @@ lint:
 	@python3 test/settingsctl-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
 	@python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-fetch
+	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
