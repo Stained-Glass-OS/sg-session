@@ -74,7 +74,7 @@ write_identity() {
         rm -f "$tmp"
         return 1
     fi
-    log "$user: Windows identity $usid ($uname)"
+    log "$user: domain identity $usid ($uname)"
 }
 write_identity || log "$user: no domain SID from winbind; the account keeps a SID of this machine's"
 
