@@ -222,8 +222,8 @@ lum() { convert "$T/$1.png" -format "%[fx:int(255*(0.299*p{$2,$3}.r+0.587*p{$2,$
 PX=${SG_SETUP_PAGE_X:-400}; PY=${SG_SETUP_PAGE_Y:-600}
 if command -v convert >/dev/null && [ -f "$T/welcome.png" ] && [ -f "$T/dark-welcome.png" ]; then
     lw=$(lum welcome "$PX" "$PY"); dw=$(lum dark-welcome "$PX" "$PY")
-    [ "${lw:-0}" -gt 200 ] && [ "${dw:-255}" -lt 60 ] && pass "dark app mode: the page is dark ($dw), as its controls are; light mode light ($lw)" \
-        || fail "the page in dark mode: $dw (light: $lw) at $PX,$PY"
+    if [ "${lw:-0}" -gt 200 ] && [ "${dw:-255}" -lt 60 ]; then pass "dark app mode: the page is dark ($dw), as its controls are; light mode light ($lw)"
+    else fail "the page in dark mode: $dw (light: $lw) at $PX,$PY"; fi
 else fail "no screenshots for the dark-mode check"; fi
 if [ "$(cat "$T/type-before-accept" 2>/dev/null)" = 0 ]; then pass "the license terms must be accepted before Next"
 else fail "Next worked without accepting the license terms"; fi
