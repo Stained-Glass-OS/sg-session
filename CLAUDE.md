@@ -1031,6 +1031,7 @@ sg-settingsctl nightlight [on|off] [--temp K] NIGHTLIGHT on|off\t<K>\t<available
 sg-settingsctl power [--screen MIN] [--sleep MIN]   POWER <screen>\t<sleep>\t<available>\t<running>
 sg-settingsctl sleep-caps                     CAN suspend|hibernate <logind: yes|no|challenge|na>
 sg-settingsctl sleep [suspend|hibernate]      lock, then systemctl suspend|hibernate (Start's Sleep)
+sg-settingsctl shutdown poweroff|reboot       when the session's programs have closed, systemctl poweroff|reboot (ExitWindowsEx)
 sg-settingsctl updates                        UPDATE <pkg>\t<installed>\t<new>, STAGED yes|no
 sg-settingsctl session-start                  night light and idle timers again (sg-run-explorer)
 ```
@@ -1068,6 +1069,20 @@ child, so Settings reads files, as it does sg-dictate's.
   and logind refuses an inactive or remote session. `sleep` locks first,
   then `systemctl suspend|hibernate`; polkit's refusal comes back as
   `ERROR failed`.
+- **Shut down and Restart** (Start's, and any program's `ExitWindowsEx`):
+  wine-sg 0241 starts `wineboot --end-session` and then `sg-settingsctl
+  shutdown poweroff|reboot`, which waits while this user's
+  `wineboot.exe --end-session` runs (the session's programs closing; at most
+  `SG_SHUTDOWN_WAIT`, 30 s -- argv[0]'s base name must be wineboot.exe, not
+  merely mentioned) and then asks logind. `config/polkit/50-stained-glass-
+  power.rules` lets a local active user power off and reboot even though the
+  login screen's session always exists (logind's `-multiple-sessions`
+  actions would otherwise want an administrator's password, with no agent to
+  ask). Before 0241 Shut down did nothing at all (2026-09-26 ISO QA, B44).
+- **No Bluetooth adapter** (no `hci*` in `/sys/class/bluetooth`;
+  `SG_SETTINGSCTL_BTSYS` for the gate) is answered at once: bluetoothctl
+  otherwise waits 15 s for a bluetoothd that cannot start, and Settings'
+  Devices page froze that long.
 - **Gate: `test/settingsctl-test.py`** (in `make lint`): stand-in tools record
   what they are asked -- the parsed answers Settings reads, the exact
   commands, and every refusal. Seen red: device names that start with `-`

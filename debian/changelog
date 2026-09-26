@@ -1,3 +1,18 @@
+sg-session (0.1.0-34) unstable; urgency=medium
+
+  * sg-settingsctl shutdown poweroff|reboot: what wine-sg 0241's
+    ExitWindowsEx starts for Start's Shut down and Restart -- waits while the
+    session's programs close (wineboot --end-session, at most 30 s), then
+    systemctl poweroff|reboot. Start's Shut down did nothing before.
+  * polkit: 50-stained-glass-power.rules lets a local, active user power off
+    and restart even while the login screen's session exists (logind's
+    -multiple-sessions actions), as Windows lets any user shut down a
+    workstation.
+  * test/settingsctl-test.py: the wait, both verbs, refusals, polkit's no.
+    Found by the 2026-09-26 ISO QA pass.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 25 Sep 2026 20:57:58 -0700
+
 sg-session (0.1.0-33) unstable; urgency=medium
 
   * sg-pdf: a PDF without bookmarks (most of them) showed blank pages --

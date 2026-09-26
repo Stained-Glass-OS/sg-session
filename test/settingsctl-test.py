@@ -260,6 +260,33 @@ calls()
 code, lines = ctl("sleep", "--now", env=LENV)
 check("sleep refuses anything but suspend|hibernate", code == 2 and "systemctl" not in " ".join(calls()), lines)
 
+# ---- Start's Shut down / Restart (ExitWindowsEx): after the session's programs close
+calls()
+# a stand-in for the session's closing programs: wineboot --end-session, 2 s
+closing = subprocess.Popen(["C:\\windows\\system32\\wineboot.exe", "-c", "import time; time.sleep(2)",
+                            "--end-session", "--shutdown"], executable=sys.executable)
+t0 = time.time()
+code, lines = ctl("shutdown", "poweroff")
+took = time.time() - t0
+closing.wait()
+c = calls()
+check("shutdown poweroff: waits for wineboot --end-session, then systemctl poweroff",
+      code == 0 and c == ["systemctl poweroff"] and took >= 1.8, (code, c, took, lines))
+t0 = time.time()
+code, lines = ctl("shutdown", "reboot")
+took = time.time() - t0
+c = calls()
+check("shutdown reboot: nothing closing, systemctl reboot at once",
+      code == 0 and c == ["systemctl reboot"] and took < 5, (code, lines, c, took))
+for bad in (["halt"], [], ["poweroff", "now"], ["--help"]):
+    code, lines = ctl("shutdown", *bad)
+    check("shutdown refuses %r" % bad, code == 2 and not calls(), (code, lines))
+open(os.path.join(tmp, "polkit-no"), "w").close()
+code, lines = ctl("shutdown", "poweroff")
+check("shutdown refused by polkit: an error, not silence", code != 0 and lines and lines[-1].startswith("ERROR"), (code, lines))
+os.unlink(os.path.join(tmp, "polkit-no"))
+calls()
+
 # ---- updates
 code, lines = ctl("updates")
 check("updates: apt's upgradable list", "UPDATE libfoo1\t1.2-3\t1.2-3+deb13u1" in lines and

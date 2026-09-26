@@ -1,0 +1,18 @@
+// Stained Glass OS -- who may shut down and restart (sg-session).
+//
+// As on a Windows workstation, anyone signed in at the PC may shut it down or
+// restart it (Start's power menu, ExitWindowsEx: sg-settingsctl shutdown).
+// logind asks for the "-multiple-sessions" actions whenever another session
+// exists, and the login screen's own session always does -- so without this a
+// standard user would be asked for an administrator's password, with no agent
+// to ask it. Remote and inactive sessions are left to logind's defaults, and
+// machine policy (NoClose) is enforced by the shell before it asks.
+polkit.addRule(function(action, subject) {
+    var ids = ["org.freedesktop.login1.power-off", "org.freedesktop.login1.power-off-multiple-sessions",
+               "org.freedesktop.login1.reboot", "org.freedesktop.login1.reboot-multiple-sessions"];
+    if (ids.indexOf(action.id) < 0)
+        return polkit.Result.NOT_HANDLED;
+    if (subject.local && subject.active)
+        return polkit.Result.YES;
+    return polkit.Result.NOT_HANDLED;
+});

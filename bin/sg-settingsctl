@@ -34,6 +34,8 @@
 #   sg-settingsctl sleep-caps
 #       CAN suspend|hibernate <logind: yes|no|challenge|na>
 #   sg-settingsctl sleep [suspend|hibernate]    lock, then systemctl suspend|hibernate
+#   sg-settingsctl shutdown poweroff|reboot   when the session's programs have closed
+#                                     (wineboot --end-session), systemctl poweroff|reboot
 #   sg-settingsctl updates
 #       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
 #   sg-settingsctl session-start      apply night light and the idle timers
@@ -603,6 +605,47 @@ def sleep_now(args):
     return []
 
 
+# ---- shut down and restart (ExitWindowsEx, wine-sg 0241) ------------------------------------
+
+def ending_sessions():
+    """This user's `wineboot --end-session` processes: the Windows side of a
+    shut down, closing the session's programs (they may ask to save)."""
+    me, found = os.getuid(), []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            if os.stat("/proc/" + pid).st_uid != me:
+                continue
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                argv = f.read().split(b"\0")
+        except OSError:
+            continue
+        # Wine shows the Windows path as argv[0]: ...\wineboot.exe
+        exe = argv[0].replace(b"\\", b"/").rsplit(b"/", 1)[-1].lower()
+        if exe == b"wineboot.exe" and b"--end-session" in argv[1:]:
+            found.append(int(pid))
+    return found
+
+
+def shutdown_now(args):
+    """Start's Shut down / Restart (any program's ExitWindowsEx): wait while the
+    session's programs close -- wineboot --end-session, at most SG_SHUTDOWN_WAIT
+    seconds -- then ask logind through systemctl. Polkit decides; sg-session's
+    rule lets a signed-in local user shut down, as Windows lets any user shut
+    down a workstation."""
+    import time
+    if len(args) != 1 or args[0] not in ("poweroff", "reboot"):
+        raise Fail("invalid", "usage: shutdown poweroff|reboot")
+    limit = float(os.environ.get("SG_SHUTDOWN_WAIT", "30"))
+    start = time.time()
+    time.sleep(0.5)                  # ExitWindowsEx starts wineboot first; let it show up
+    while ending_sessions() and time.time() - start < limit:
+        time.sleep(0.25)
+    run(["systemctl", args[0]], timeout=60)
+    return []
+
+
 # ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
 
 def updates(args):
@@ -631,7 +674,7 @@ def session_start(args):
 
 COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
-            "sleep-caps": sleep_caps, "sleep": sleep_now,
+            "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen}
 
 
