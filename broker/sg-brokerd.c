@@ -479,7 +479,9 @@ static void launch(char **argv, char **envp, const char *cwd, const char *system
         setenv("LOGNAME", pw->pw_name, 1);
         setenv("HOME", pw->pw_dir && pw->pw_dir[0] ? pw->pw_dir : "/var/lib/stained-glass", 1);
     }
-    setenv("PATH", "/usr/local/bin:/usr/bin:/bin", 1);
+    /* Fixed, never the requester's: root-owned directories only, Wine's included
+     * (an elevated Windows program is started as "wine ...": B56 VM gate, exit 127). */
+    setenv("PATH", "/opt/wine-sg/bin:/usr/local/bin:/usr/bin:/bin", 1);
     setenv("SG_IN_BROKER", "1", 1);   /* the elevated program must not re-broker */
     /* Only a fixed set of environment variables from the requester are honoured.
      * The requester is not trusted: a hostile client could otherwise send
