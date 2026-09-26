@@ -1627,3 +1627,19 @@ incorporated into Wine, which is LGPL-2.1+.** If you find yourself fixing
 something that really belongs in Wine, it does not belong in this repo — it
 belongs in `wine-sg` as an upstreamable patch. Writing it here quietly forecloses
 sending it upstream.
+
+## Open: domain identity branch (`domain-identity`, not merged)
+
+Branch `domain-identity` (fbe6146, changelog 0.1.0-32 -- renumber to the next
+free version when merging): sg-domain-logon writes
+`/run/stained-glass/domain-sids/<uid>` and ProfileList\<SID> (wine-sg 0205
+gives domain users their real SID), computer GPO startup scripts
+(sg-gpo-machine, sg-gpupdate, sg-gpupdate.service at boot). **Requires
+wine-sg 10.0-61 (0211, pushed)**: without it, after a domain user signs out
+the greeter spins in win32u's reg_empty_key (display keys owned by the
+domain's Domain Users) and no one can sign in -- the branch's
+`Breaks: wine-sg (<< 10.0-61)` says so. Status: sg-image `make domain-test`
+passed 37 checks on wine 10.0-56 but failed at dave's sign-in (that bug);
+the re-run with 10.0-61 was not done. Next: rebase the branch, build debs
+from worktrees, run the gate with sg-image's uncommitted-then-branched
+`test/domain-test.sh` (branch `domain-identity` in sg-image), merge on pass.
