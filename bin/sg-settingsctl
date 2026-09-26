@@ -39,11 +39,11 @@
 #   sg-settingsctl updates
 #       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
 #   sg-settingsctl session-start      apply night light and the idle timers
+#                                     (swayidle also locks before any sleep)
 #   sg-settingsctl lockscreen
 #       LOCKSCREEN <picture published yes|no>\t<shown on sign-in yes|no>
 #   sg-settingsctl lockscreen picture FILE | default
 #   sg-settingsctl lockscreen signin yes|no
-#                                     (swayidle also locks before any sleep)
 #
 # Settings are the user's: ~/.config/stained-glass/settings.json.
 #
@@ -573,36 +573,6 @@ def lockscreen(args):
     except OSError:
         pass
     return ["LOCKSCREEN %s\t%s" % (yn(os.path.isfile(os.path.join(d, user))), yn(signin))]
-
-
-# ---- sleep and hibernate (logind, which asks polkit) ------------------------------------
-
-def logind_can(what):
-    """logind's answer to Can<What>: yes, no, challenge (polkit would ask for a
-    password -- no agent runs in our session, so Start treats it as no) or na."""
-    text = run(["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
-                "org.freedesktop.login1.Manager", "Can" + what], timeout=10, check=False)
-    m = re.match(r's\s+"(\w+)"', text.strip())
-    return m.group(1) if m else "na"
-
-
-def sleep_caps(args):
-    if args:
-        raise Fail("invalid", "usage: sleep-caps")
-    return ["CAN suspend %s" % logind_can("Suspend"), "CAN hibernate %s" % logind_can("Hibernate")]
-
-
-def sleep_now(args):
-    """Start's Sleep/Hibernate: lock first, then ask logind (through systemctl;
-    polkit decides -- an inactive or remote session is refused)."""
-    if len(args) > 1 or (args and args[0] not in ("suspend", "hibernate")):
-        raise Fail("invalid", "usage: sleep [suspend|hibernate]")
-    verb = args[0] if args else "suspend"
-    lock = lock_command()
-    if lock:
-        run(lock.split(" "), timeout=10, check=False)
-    run(["systemctl", verb], timeout=30)
-    return []
 
 
 # ---- shut down and restart (ExitWindowsEx, wine-sg 0241) ------------------------------------
