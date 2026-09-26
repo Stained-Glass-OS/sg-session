@@ -14,10 +14,27 @@ HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
-command -v systemd-cat >/dev/null || { echo "SKIP: no systemd-cat"; exit 77; }
 T=$(mktemp -d "${TMPDIR:-/var/tmp}/sg-oobe-fallback.XXXXXX")
 trap 'rm -rf "$T"' EXIT INT TERM
-mkdir -p "$T/libexec" "$T/tmp"
+mkdir -p "$T/libexec" "$T/tmp" "$T/bin"
+# systemd-cat: what sg-login-ui runs everything through, standing in -- in a
+# container there is either none (a package build) or one with no journal to
+# connect to, which then runs nothing at all (CI's lint job: every case failed
+# with an empty log). What reaches the journal is not what this tests.
+cat > "$T/bin/systemd-cat" <<'EOS'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+    case "$1" in
+    -t|-p|--level-prefix) shift 2 ;;
+    --) shift; break ;;
+    -*) shift ;;
+    *) break ;;
+    esac
+done
+[ $# -eq 0 ] && exec cat >/dev/null
+exec "$@"
+EOS
+chmod +x "$T/bin/systemd-cat"
 # The compositor: runs its client (after --), and records that it ran.
 cat > "$T/compositor" <<'EOS'
 #!/bin/sh
@@ -44,7 +61,7 @@ chmod +x "$T/compositor" "$T/libexec/sg-setup-bridge" "$T/libexec/sg-greet-bridg
 : > "$T/pending"
 python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$T/oobed.sock"
 run() {
-    env T="$T" MODE="$1" TMPDIR="$T/tmp" SG_LIB="$HERE/lib" SG_LIBEXEC="$T/libexec" SG_COMPOSITOR="$T/compositor" \
+    env PATH="$T/bin:$PATH" T="$T" MODE="$1" TMPDIR="$T/tmp" SG_LIB="$HERE/lib" SG_LIBEXEC="$T/libexec" SG_COMPOSITOR="$T/compositor" \
         SG_OOBE_PENDING="$T/pending" SG_OOBED_SOCK="$T/oobed.sock" SG_OOBE_TIMEOUT=3 SG_WINE_DIR=/nonexistent \
         timeout 30 sh "$HERE/lib/sg-login-ui" >/dev/null 2>&1
 }
