@@ -11,7 +11,7 @@
 #   - US keyboard, a second layout (German) added
 #   - a Wi-Fi network joined with its key: the key on sg-netctl's stdin only
 #   - no account page; Location switched on; Firefox chosen
-#   - applied: the keyboard file (us,de, Windows logo key + Space), the
+#   - applied: the keyboard file (us,de, Start key + Space), the
 #     choices record, HKLM's ConsentStore and no diagnostic data, the browser
 #     service started, the pending marker gone, the window closed
 # Second run -- no administrator, offline, no networks:
@@ -229,7 +229,7 @@ if [ "$(get REGION_LOCALE) $(get REGION_GEO)" = "en-GB 242" ]; then pass "the re
 else fail "region: '$(get REGION_LOCALE) $(get REGION_GEO)'"; fi
 if grep -qx 'XKBLAYOUT="us,de"' "$T/etc/default/keyboard" && grep -qx 'XKBOPTIONS="grp:win_space_toggle"' "$T/etc/default/keyboard" \
         && [ -L "$T/etc/vconsole.conf" ]; then
-    pass "the keyboard: US and German, switched with Windows logo key + Space; Debian's vconsole.conf link kept"
+    pass "the keyboard: US and German, switched with Start key + Space; Debian's vconsole.conf link kept"
 else fail "keyboard: $(cat "$T/etc/default/keyboard" 2>/dev/null)"; fi
 if grep -q 'wifi connect --ssid-hex 486f6d654e6574 --security wpa-psk --password-stdin' "$T/netctl.log" \
         && [ "$(cat "$T/wifi-key" 2>/dev/null)" = wifikey4321 ]; then

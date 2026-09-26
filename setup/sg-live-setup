@@ -34,7 +34,7 @@ fi
 # The shortcuts, in the machine's Windows system as SYSTEM: the all-users
 # desktop and Start menu. The prefix is on a tmpfs on a live boot, like
 # everything else here.
-systemctl is-active --quiet sg-wineserver.service || { sg_log "no Windows system to add the shortcuts to"; exit 0; }
+systemctl is-active --quiet sg-wineserver.service || { sg_log "no system prefix to add the shortcuts to"; exit 0; }
 # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
 runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
     SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" sh -c '

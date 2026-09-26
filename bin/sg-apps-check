@@ -136,8 +136,8 @@ if [ -f "$SG_APPS_DIR/powershell/pwsh.exe" ]; then
     out=$(printf '%s\n' "$raw" | clean | sed '/^$/d' | tail -n 1)
     _lc=$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')
     case "$_lc" in
-        *\\"$_me") pass "the user's Windows identity is named: $out" ;;
-        *)          fail "the user's Windows identity: expected ...\\$_me, got '$out'" ;;
+        *\\"$_me") pass "the user's identity in the prefix is named: $out" ;;
+        *)          fail "the user's identity in the prefix: expected ...\\$_me, got '$out'" ;;
     esac
 
     check_shortcut "PowerShell 7" "C:\\Program Files\\PowerShell\\7\\pwsh.exe"

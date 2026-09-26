@@ -1173,7 +1173,7 @@ def journal_direct():
 
 GROUP_INFO = {
     ADMIN_GROUP: ("Administrators", "Administrators have complete and unrestricted access to the computer"),
-    USER_GROUP: ("Users", "Users with a Windows session on this computer"),
+    USER_GROUP: ("Users", "Users with a desktop session on this computer"),
     "sudo": ("", "Linux administrators (sudo)"),
     "users": ("", "Linux users"),
     "lpadmin": ("", "Printer administrators"),
@@ -1244,7 +1244,7 @@ def cmd_users(emit):
         emit("DISABLED %s" % dis)
         emit("SYSTEM-ACCOUNT %s" % ("yes" if sysacct else "no"))
         if sysacct:
-            emit("DESCRIPTION The Windows SYSTEM account (elevated programs and services run as it)")
+            emit("DESCRIPTION The SYSTEM account (elevated programs and services run as it)")
         emit("END")
 
 
@@ -1485,7 +1485,7 @@ def rotated(n):
 def system_categories():
     return [
         ("update-cache", "Downloaded update packages", "system", [os.path.join(VAR, "cache/apt/archives")],
-         "Packages Windows Update (apt) downloaded and already installed.", lambda n: n.endswith(".deb")),
+         "Packages Updates (apt) downloaded and already installed.", lambda n: n.endswith(".deb")),
         ("old-logs", "Old system logs", "system", [os.path.join(VAR, "log")],
          "Rotated and compressed log files.", rotated),
         ("archived-journal", "Archived system journal", "system", [os.path.join(VAR, "log/journal")],
@@ -1678,7 +1678,7 @@ def cmd_format(pos, opts, emit):
     dev, it, system, _ = find_part(pos[0])
     p = it["part"]
     if system:
-        raise Fail("denied", "Windows cannot format a volume on the disk the system is on")
+        raise Fail("denied", "Stained Glass cannot format a volume on the disk the system is on")
     if it["mounts"] or it["letters"]:
         raise Fail("denied", "%s is in use: remove its drive letter and unmount it first" % p["name"])
     if p.get("_whole"):
@@ -1816,7 +1816,7 @@ def check_changeable(dev, system):
     """A disk whose partitions may be created, deleted or resized."""
     path = dev.get("path") or "/dev/" + dev.get("name", "")
     if system:
-        raise Fail("denied", "Windows cannot change the partitions of the disk the system is on")
+        raise Fail("denied", "Stained Glass cannot change the partitions of the disk the system is on")
     if TEST_DISKS and path not in TEST_DISKS:
         raise Fail("denied", "%s is not one of the test disks (SG_SYSINFO_DISKS)" % clean(path))
     if re.match(r"/dev/(loop|ram|zram)", path) and path not in TEST_DISKS:

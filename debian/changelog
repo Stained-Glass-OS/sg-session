@@ -1,3 +1,12 @@
+sg-session (0.1.0-32) unstable; urgency=medium
+
+  * Trademark hygiene: no user-visible "Windows" as our name -- the OOBE's
+    key hints ("Start key"), Setup's licence text, sg-sysinfo's messages
+    and descriptions, the check and profile tools. tools/trademark-check.py
+    in make lint (CI); exceptions in tools/trademark-allow.txt with reasons.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Fri, 25 Sep 2026 19:47:16 -0700
+
 sg-session (0.1.0-31) unstable; urgency=medium
 
   * Lock screen: keys already held when it appears (the L of Win+L) are

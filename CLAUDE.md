@@ -6,6 +6,17 @@ per-user one.
 
 Project brief: [`stained-glass/docs/BRIEF.md`](https://github.com/Stained-Glass-OS/stained-glass/blob/main/docs/BRIEF.md).
 
+## Trademark: we never call ourselves Windows
+
+"Windows" is Microsoft's trademark; no user-visible text of ours uses it as
+our product's or a feature's name. `make lint` runs `tools/trademark-check.py`
+(the same checker as sg-shell's and wine-sg's) over the greeter, Setup, the
+OOBE and the tools: string literals in C, the Python and shell tools'
+messages (not comments, docstrings or test/). Paths, dotted identifiers and
+the `.reg` header pass; other exceptions are in `tools/trademark-allow.txt`,
+each with its reason (describing compatibility, or Setup naming Microsoft's
+operating system already on the disk).
+
 ## Build, test, gate
 
 ```sh

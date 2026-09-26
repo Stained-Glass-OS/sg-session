@@ -112,7 +112,7 @@ static const struct { const char *key, *title, *desc; } g_privacy_items[4] = {
     { "location", "Location",
       "Let programs use your location, and let Stained Glass OS find it from your network." },
     { "microphone", "Microphone",
-      "Let voice typing (Windows logo key + H) and other programs use the microphone. Speech is recognised on this PC." },
+      "Let voice typing (Start key + H) and other programs use the microphone. Speech is recognised on this PC." },
     { "tailored", "Tailored experiences",
       "Let Stained Glass OS use what it knows about how you use this PC for tips. Nothing leaves this PC." },
     { "advertising", "Advertising ID",
@@ -365,7 +365,7 @@ static void set_page( enum page p )
     case P_KBD2:
         strcpy( g_heading, "Want to add a second keyboard layout?" );
         snprintf( g_text, sizeof(g_text), "You're using the %s layout. To switch between two layouts, press "
-                  "Windows logo key + Space.", g_layouts[g_kbd].name );
+                  "Start key + Space.", g_layouts[g_kbd].name );
         SetWindowTextA( g_primary, "Add layout" );
         SetFocus( g_primary );
         break;

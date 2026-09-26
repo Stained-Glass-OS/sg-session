@@ -146,7 +146,7 @@ echo "$U1_OUT" | grep -q "SG_OK_$U1" && U1_CAN=yes
 echo "$U2_OUT" | grep -q "SG_OK_$U2" && U2_CAN=yes
 
 if [ "$U1_CAN" = yes ] && [ "$U2_CAN" = yes ]; then
-    pass "both users ran a Windows process against the system prefix"
+    pass "both users ran a program against the system prefix"
     BOTH_IN=yes
 else
     fail "not both users can use the system prefix ($U1=$U1_CAN, $U2=$U2_CAN)"

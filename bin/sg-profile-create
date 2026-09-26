@@ -38,11 +38,11 @@ profile="$users/$user"
 if [ ! -e "$profile" ]; then
     # 0700 from the start, so it is never open to anyone else
     mkdir -m 0700 "$profile" 2>/dev/null && chown "$user:" "$profile" &&
-        sg_log "created the Windows profile for $user"
+        sg_log "created the user profile for $user"
 elif [ -d "$profile" ] && [ "$(stat -c %U "$profile")" = "$SG_SYSTEM_USER" ]; then
     # -P: never follow a symbolic link inside it
     chown -R -P "$user:" "$profile" && chmod 0700 "$profile" &&
-        sg_log "handed the Windows profile of $user, made by $SG_SYSTEM_USER, to $user"
+        sg_log "handed the user profile of $user, made by $SG_SYSTEM_USER, to $user"
 fi
 [ -d "$profile" ] && [ "$(stat -c %U "$profile")" = "$user" ] || exit 0
 

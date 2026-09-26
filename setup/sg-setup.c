@@ -152,7 +152,7 @@ static const char g_license[] =
     "and to share it, with or without your changes.\r\n\r\n"
     "1. Stained Glass OS's own components (the session, the shell, the compositor, Setup) are "
     "licensed under the GNU Affero General Public License, version 3 or later.\r\n\r\n"
-    "2. Its Windows compatibility layer, wine-sg, is Wine with Stained Glass OS's changes, licensed "
+    "2. Its compatibility layer for Windows programs, wine-sg, is Wine with Stained Glass OS's changes, licensed "
     "under the GNU Lesser General Public License, version 2.1 or later.\r\n\r\n"
     "3. The rest of the system comes from Debian. Each package's terms are in "
     "/usr/share/doc/<package>/copyright on the installed system.\r\n\r\n"
