@@ -1,3 +1,11 @@
+sg-session (0.1.0-44) unstable; urgency=medium
+
+  * sg-prefix-init unpacks the prefix the image baked at build time
+    (/usr/lib/stained-glass/prefix-seed.tar.zst) into an empty prefix
+    instead of building one (QA B4). Depends on zstd and tar.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Sat, 26 Sep 2026 10:40:04 -0700
+
 sg-session (0.1.0-43) unstable; urgency=medium
 
   * sg-settingsctl: sleep-caps and sleep were defined twice (a merge left

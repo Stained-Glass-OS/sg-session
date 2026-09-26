@@ -43,7 +43,7 @@ separately.
 | File | Role |
 |---|---|
 | `bin/sg-session-start` | session entry point; greetd exec's this |
-| `bin/sg-prefix-init` | builds the system prefix; idempotent, stamp-guarded |
+| `bin/sg-prefix-init` | builds the system prefix, or unpacks the one the image baked (`/usr/lib/stained-glass/prefix-seed.tar.zst`); idempotent, stamp-guarded |
 | `bin/sg-session-check` | **the Phase 0 gate**: is a Windows shell really running? |
 | `bin/sg-multiuser-check` | **the S2 gate**: expected red until S2 lands |
 | `lib/sg-common.sh` | shared paths and the Wine environment, in one place |
@@ -141,6 +141,18 @@ rather than Wine behaviour: which branches a machine protects is the operating
 system's business, the same way Windows ships those ACLs in its image.
 
 Set `SG_SYSTEM_PREFIX=0` to build an ordinary single-user prefix instead.
+
+**The image bakes the prefix (QA B4).** sg-image's `mkosi.postinst.chroot`
+runs `sg-prefix-init` at build time (as root: the unprivileged build maps only
+uid 0), strips what is root's or machine-specific (`drive_c/users/root`,
+`user-0.reg`, root's ProfileList entry, `MachineGuid`, which advapi32 then
+creates per machine) and packs it into
+`/usr/lib/stained-glass/prefix-seed.tar.zst`. `sg-prefix-init` unpacks that
+into an *empty* prefix before its stamp check (as sgsystem, `--no-same-owner`),
+then does the every-boot work as for any initialised prefix. Building a prefix
+took 77 s of every live boot (the live prefix is a tmpfs) and of an installed
+machine's first; unpacking takes seconds. No seed (a distribution install, or
+`SG_PREFIX_SEED=/nonexistent`) means the old full build.
 
 ## Things that will bite you
 

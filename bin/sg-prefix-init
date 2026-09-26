@@ -95,6 +95,24 @@ import_defaults() {
     [ "$_any" = 0 ] || wineserver -w
 }
 
+# A prefix built when the image was (sg-image's mkosi.postinst.chroot runs this
+# script there, as the SYSTEM account, and packs the result): extracting it
+# takes seconds, where building one takes a minute or more -- on every boot of
+# a live system, whose prefix is in memory, and on an installed machine's
+# first. Only into an empty place; if Wine has since been upgraded, the prefix
+# update below happens to the unpacked prefix as it would to any other.
+SEED="${SG_PREFIX_SEED:-/usr/lib/stained-glass/prefix-seed.tar.zst}"
+if [ ! -e "$STAMP" ] && [ -f "$SEED" ] && [ -z "$(ls -A "$SG_PREFIX" 2>/dev/null)" ]; then
+    sg_log "unpacking the prefix built with the image ($SEED)"
+    mkdir -p "$SG_ROOT"
+    if zstd -dc "$SEED" | tar -x -C "$SG_ROOT" --no-same-owner --preserve-permissions; then
+        sg_log "prefix unpacked"
+    else
+        sg_log "WARNING: could not unpack $SEED; building the prefix instead"
+        rm -rf "${SG_PREFIX:?}" "$SG_STATE"
+    fi
+fi
+
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
