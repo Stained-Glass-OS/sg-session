@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # The lock screen's picture, end to end (Settings > Personalization > Lock
 # screen): sg-settingsctl publishes the user's choice, sg-lockd stages it with
 # its checks, and the real greeter shows it under Xvfb with the time and date

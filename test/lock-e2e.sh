@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # The lock screen, end to end: compositor + sg-lockd + the Wine greeter in lock
 # mode, with keys injected over the privileged virtual keyboard the way remote
 # access types them.

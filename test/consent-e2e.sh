@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # Elevation consent, end to end (ADR 0012): sg-compositor's SECURE mode +
 # sg-brokerd + the Wine consent prompt, with keys injected over the privileged
 # virtual keyboard the way remote support types them.

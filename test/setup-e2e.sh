@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # The setup wizard, end to end on this machine: the real wizard under Wine on
 # a private X server, the real bridge, the real sg-installd -- and a stand-in
 # for sg-install that records what it was asked to do, since erasing a disk is

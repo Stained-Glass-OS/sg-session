@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # sg-session's own gate.
 #
 # Stands up a complete session on this machine -- headless compositor, system

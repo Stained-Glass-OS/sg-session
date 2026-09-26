@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # The first-run setup (OOBE), end to end on this machine: the real wizard
 # under Wine on a private X server, the real bridge (--oobe), the real
 # sg-oobed -- with stand-ins for what would change this machine: sg-netctl,

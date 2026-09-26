@@ -170,7 +170,12 @@ install: d3d-probe greeter token-probe procagent rdp
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
+# Every test that runs Wine sources test/scratch-home.sh first (a HOME of its
+# own: a prefix links its Desktop, Documents... into HOME).
 lint:
+	@for f in $$(grep -l WINEPREFIX test/*.sh); do \
+	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
+	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
@@ -194,8 +199,8 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh \
-		    test/rdp-stream-e2e.sh || exit 1; \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh \
+		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
 		echo "shellcheck not installed; skipping (advisory)"; \

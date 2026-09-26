@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # The login screen end to end, with the real Wine greeter.
 #
 # sg-compositor hosts sg-greet-bridge, which runs the real sg-greeter.exe and

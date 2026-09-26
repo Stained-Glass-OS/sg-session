@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # Remote Desktop into a session, end to end (ADR 0010 pattern B, E1).
 #
 # sg-rdp-authd with PAM under pam_wrapper, a real FreeRDP client on a private

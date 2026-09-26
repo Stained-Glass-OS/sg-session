@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # Gate for the Security log's Linux side: sg-audit (pam_exec at session open
 # and close) and sg-brokerd (elevation) write audit events into the audit
 # spool, which wine-sg's Event Log service imports (0187); the event log files
