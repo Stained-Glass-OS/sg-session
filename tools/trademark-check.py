@@ -18,7 +18,8 @@
 #
 # matched against the file (relative to the repository) and the string.
 #
-#   tools/trademark-check.py [--allow FILE] [--patches DIR] PATH...
+#   tools/trademark-check.py [--allow FILE] [--patches DIR] [--root DIR] PATH...
+#   (--root: paths are named, and matched, relative to DIR -- a Wine tree)
 #   (directories are walked; test/ trees and generated build/ trees are skipped)
 #
 # Exit 0 clean, 1 with a line per finding: FILE:LINE: "string".
@@ -247,19 +248,21 @@ def allowed(allow, path, s, used):
 
 
 def main(argv):
-    allow_path, patches, paths = None, None, []
+    allow_path, patches, root, paths = None, None, None, []
     it = iter(argv)
     for a in it:
         if a == "--allow":
             allow_path = next(it)
         elif a == "--patches":
             patches = next(it)
+        elif a == "--root":
+            root = next(it)
         else:
             paths.append(a)
     allow, used, bad = load_allow(allow_path), set(), []
 
     for path in walk(paths):
-        rel = os.path.normpath(path)
+        rel = os.path.relpath(path, root) if root else os.path.normpath(path)
         fn = None
         for rx, f in EXTRACT:
             if rx.search(path):
