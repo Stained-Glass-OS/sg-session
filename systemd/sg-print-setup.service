@@ -1,0 +1,16 @@
+[Unit]
+Description=Stained Glass: the Print to PDF printer
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# Every Windows program lists CUPS's printers; this one saves a PDF in the
+# user's Documents. Idempotent: a queue an administrator removed comes back,
+# one they made the default stays the default.
+After=cups.service
+Wants=cups.service
+ConditionPathExists=/usr/lib/cups/backend/cups-pdf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/stained-glass/sg-print-setup
+
+[Install]
+WantedBy=multi-user.target

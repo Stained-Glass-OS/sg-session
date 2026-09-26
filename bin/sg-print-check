@@ -1,0 +1,62 @@
+#!/bin/sh
+# Printing, the way a person prints: a Windows program sends a document to
+# the "Print to PDF" printer and a PDF of it appears in their Documents.
+#
+# What this proves: CUPS is running with the Print-to-PDF queue (sg-print-
+# setup) as the default printer; Wine lists it as a Windows printer; Notepad
+# (`notepad /p`) prints through it; cups-pdf writes the PDF, as the user, to
+# C:\users\NAME\Documents; the PDF has the document's text in it.
+# Run as the session user (sg-image: SG_GUEST_CHECK=print).
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+clean() { tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b\][^\a]*\a//g'; }
+QUEUE="${SG_PDF_QUEUE:-Print-to-PDF}"
+
+if lpstat -p "$QUEUE" >/dev/null 2>&1; then pass "CUPS has the $QUEUE printer"; else fail "no $QUEUE printer in CUPS"; fi
+case "$(lpstat -d 2>/dev/null)" in *"$QUEUE"*) pass "it is the default printer" ;; *) fail "default printer: $(lpstat -d 2>&1)" ;; esac
+
+out=$(wine reg query 'HKCU\Software\Microsoft\Windows NT\CurrentVersion\Devices' 2>/dev/null | clean)
+case "$out" in *"$QUEUE"*) pass "Windows programs see it (the user's printers)" ;; *) fail "not among the printers programs see: $out" ;; esac
+
+me=$(id -un)
+docs="$SG_PREFIX/drive_c/users/$me/Documents"
+marker="SGPRINT$(date +%s)$$"
+name="sg-print-check-$$.txt"
+printf 'Stained Glass print check\r\n%s\r\n' "$marker" > "$docs/$name"
+start=$(date +%s)
+timeout 180 wine notepad /p "C:\\users\\$me\\Documents\\$name" >/dev/null 2>&1
+pdf=""
+i=0
+while [ $i -lt 90 ]; do
+    pdf=$(find "$docs" -maxdepth 1 -name '*.pdf' -newer "$docs/$name" 2>/dev/null | head -1)
+    [ -n "$pdf" ] && break
+    sleep 1; i=$((i + 1))
+done
+if [ -n "$pdf" ]; then
+    pass "Notepad printed a PDF into Documents: $(basename "$pdf") ($(($(date +%s) - start)) s)"
+    if [ "$(stat -c %U "$pdf")" = "$me" ]; then pass "owned by the user who printed"; else fail "PDF owner: $(stat -c %U "$pdf")"; fi
+    txt=$(python3 - "$pdf" <<'PY' 2>/dev/null
+import sys, gi
+gi.require_version('Poppler', '0.18')
+from gi.repository import Poppler, GLib
+doc = Poppler.Document.new_from_file(GLib.filename_to_uri(sys.argv[1], None), None)
+print(''.join(doc.get_page(i).get_text() for i in range(doc.get_n_pages())))
+PY
+)
+    case "$txt" in *"$marker"*) pass "and it has the document's text" ;; *) fail "the PDF's text: $(printf '%s' "$txt" | head -c 200)" ;; esac
+    rm -f "$pdf"
+else
+    fail "no PDF in $docs after printing (CUPS: $(lpstat -o 2>&1 | head -3))"
+fi
+rm -f "$docs/$name"
+echo
+if [ $RC = 0 ]; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; fi
+exit $RC

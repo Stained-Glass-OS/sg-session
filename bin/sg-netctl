@@ -37,6 +37,9 @@
 #   wifi forget (--ssid TEXT | --ssid-hex HEX)
 #   wifi saved
 #   wifi radio on|off|status
+#   vpn list
+#   vpn import --type openvpn|wireguard --name NAME (--file PATH | --config-stdin) [--username U]
+#   vpn connect NAME [--password-stdin] | vpn disconnect NAME | vpn remove NAME
 #
 # Output: lines, then a last line "OK" or "ERROR <kind> <message>", kind one
 # of denied, invalid, notfound, auth, unsupported, failed. Exit status 0 on
@@ -49,6 +52,7 @@ import json
 import os
 import pwd
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -70,7 +74,7 @@ MAX_REQUEST = 65536
 EXIT = {"denied": 3, "invalid": 2}
 
 ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release"}
-USER_COMMANDS = {"whoami", "adapters", "wifi"}
+USER_COMMANDS = {"whoami", "adapters", "wifi", "vpn"}
 
 
 class Fail(Exception):
@@ -678,6 +682,294 @@ def cmd_wifi(pos, opts, secret, emit):
         raise Fail("invalid", "unknown wifi command %s" % clean(sub))
 
 
+# --- VPN connections: OpenVPN and WireGuard, as NetworkManager's -----------------
+#
+# A Windows VPN client needs a kernel driver (OpenVPN's TAP/ovpn-dco, WireGuard's
+# wintun) that Wine cannot load. The tunnel is the Linux side's instead:
+# NetworkManager's WireGuard and OpenVPN (network-manager-openvpn) connections,
+# imported from the same .conf/.ovpn file the vendor client takes. As on
+# Windows, a VPN connection made for all users is added by an administrator and
+# dialled by anyone with a session (rasdial, Settings).
+#
+# The file is imported as root, so it is checked first: nothing in it may run a
+# program (WireGuard's PreUp/PostUp, OpenVPN's up/down/plugin/script-security...)
+# or name a file on this computer (OpenVPN's ca/cert/key must be inline blocks);
+# every OpenVPN directive must be one on the list below.
+
+VPN_TYPES = ("openvpn", "wireguard")
+VPN_MAX_CONFIG = 32768
+OPENVPN_SERVICE = "org.freedesktop.NetworkManager.openvpn"
+# Directives an OpenVPN client configuration may carry. Anything else --
+# notably up, down, route-up, ipchange, tls-verify, plugin, script-security,
+# management, config, cd, chroot, daemon, log, status, writepid, setenv(-safe),
+# auth-user-pass with a file -- is refused.
+OPENVPN_ALLOWED = {
+    "client", "tls-client", "pull", "dev", "dev-type", "proto", "remote", "remote-random", "port", "rport",
+    "lport", "nobind", "float", "resolv-retry", "persist-key", "persist-tun", "remote-cert-tls",
+    "remote-cert-eku", "remote-cert-ku", "ns-cert-type", "verify-x509-name", "cipher", "ciphers",
+    "data-ciphers", "data-ciphers-fallback", "ncp-ciphers", "auth", "comp-lzo", "compress",
+    "allow-compression", "verb", "mute", "mute-replay-warnings", "key-direction", "tls-version-min",
+    "tls-version-max", "tls-cipher", "tls-ciphersuites", "reneg-sec", "auth-nocache", "auth-user-pass",
+    "auth-retry", "mssfix", "tun-mtu", "link-mtu", "fragment", "keepalive", "ping", "ping-restart",
+    "explicit-exit-notify", "tun-ipv6", "topology", "route-nopull", "redirect-gateway", "route",
+    "route-ipv6", "route-metric", "route-delay", "sndbuf", "rcvbuf", "connect-retry", "connect-retry-max",
+    "connect-timeout", "server-poll-timeout", "hand-window", "tran-window", "block-outside-dns",
+    "ignore-unknown-option", "http-proxy-retry", "remote-cert-tls", "ca", "cert", "key", "tls-auth",
+    "tls-crypt", "tls-crypt-v2", "extra-certs", "secret", "pkcs12", "ifconfig", "mtu-disc",
+    "pull-filter", "push-peer-info", "tls-timeout", "replay-window", "opt-verify", "machine-readable-output",
+}
+OPENVPN_INLINE = {"ca", "cert", "key", "tls-auth", "tls-crypt", "tls-crypt-v2", "extra-certs", "secret", "pkcs12"}
+WG_INTERFACE = {"privatekey", "address", "dns", "listenport", "mtu"}
+WG_PEER = {"publickey", "presharedkey", "allowedips", "endpoint", "persistentkeepalive"}
+WG_SCRIPTS = {"preup", "postup", "predown", "postdown"}
+
+
+def vpn_name(name):
+    if not name or len(name) > 64 or name.startswith("-") or not all(c.isprintable() for c in name) \
+       or any(c in name for c in "/\\\"'`$"):
+        raise Fail("invalid", "a VPN connection's name is 1 to 64 printable characters, no quotes or slashes")
+    return name
+
+
+def wg_key(value, what):
+    import base64
+    try:
+        if len(value) == 44 and len(base64.b64decode(value, validate=True)) == 32:
+            return
+    except ValueError:
+        pass
+    raise Fail("invalid", "WireGuard: %s is not a key" % what)
+
+
+def check_wireguard(text):
+    """A wg-quick style configuration: [Interface] and [Peer] sections of known
+    keys, keys that are keys, addresses that are addresses; nothing that runs a
+    command."""
+    section, interfaces, peers = None, 0, 0
+    have = set()
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            section = line.lower()
+            if section == "[interface]":
+                interfaces += 1
+            elif section == "[peer]":
+                peers += 1
+                have.discard("publickey")
+            else:
+                raise Fail("invalid", "WireGuard: unknown section %s" % clean(line[:40]))
+            continue
+        if "=" not in line or section is None:
+            raise Fail("invalid", "WireGuard: line %d is not KEY = VALUE in a section" % n)
+        k, _, v = line.partition("=")
+        k, v = k.strip().lower(), v.strip()
+        if k in WG_SCRIPTS:
+            raise Fail("invalid", "WireGuard: %s runs a command; not allowed" % clean(k))
+        allowed = WG_INTERFACE if section == "[interface]" else WG_PEER
+        if k not in allowed:
+            raise Fail("invalid", "WireGuard: %s is not supported" % clean(k[:40]))
+        if k in ("privatekey", "publickey", "presharedkey"):
+            wg_key(v, k)
+        elif k in ("address", "allowedips"):
+            for a in v.split(","):
+                try:
+                    ipaddress.ip_interface(a.strip())
+                except ValueError:
+                    raise Fail("invalid", "WireGuard: %s is not an address" % clean(a.strip()[:60]))
+        elif k == "dns":
+            for a in v.split(","):
+                a = a.strip()
+                try:
+                    ipaddress.ip_address(a)
+                except ValueError:
+                    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,252})", a):
+                        raise Fail("invalid", "WireGuard: %s is not a DNS server or domain" % clean(a[:60]))
+        elif k in ("listenport", "persistentkeepalive", "mtu"):
+            lo, hi = {"listenport": (0, 65535), "persistentkeepalive": (0, 65535), "mtu": (576, 9200)}[k]
+            if not v.isdigit() or not lo <= int(v) <= hi:
+                raise Fail("invalid", "WireGuard: %s is not a number from %d to %d" % (k, lo, hi))
+        elif k == "endpoint":
+            if not re.fullmatch(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]{1,253}):[0-9]{1,5}", v):
+                raise Fail("invalid", "WireGuard: %s is not HOST:PORT" % clean(v[:60]))
+        have.add(k)
+    if interfaces != 1 or peers < 1:
+        raise Fail("invalid", "WireGuard: a configuration has one [Interface] and at least one [Peer]")
+
+
+def check_openvpn(text):
+    """An OpenVPN client configuration: only listed directives, certificates
+    and keys inline, no file names, nothing that runs a program."""
+    block = None
+    remotes = 0
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if block:
+            if line.lower() == "</%s>" % block:
+                block = None
+            continue
+        if not line or line[0] in "#;":
+            continue
+        m = re.fullmatch(r"<([a-z0-9-]+)>", line.lower())
+        if m:
+            if m.group(1) not in OPENVPN_INLINE:
+                raise Fail("invalid", "OpenVPN: inline <%s> is not allowed" % clean(m.group(1)))
+            block = m.group(1)
+            continue
+        words = line.split()
+        d = words[0].lower().lstrip("-")
+        args = words[1:]
+        if d not in OPENVPN_ALLOWED:
+            raise Fail("invalid", "OpenVPN: the %s directive is not allowed" % clean(d[:40]))
+        if d in OPENVPN_INLINE and args and args[0] != "[inline]" and not (d == "tls-auth" and args[0].isdigit()):
+            raise Fail("invalid", "OpenVPN: %s must be inline (<%s>...</%s>), not a file" % (d, d, d))
+        if d == "auth-user-pass" and args:
+            raise Fail("invalid", "OpenVPN: auth-user-pass may not name a file")
+        if d == "remote":
+            remotes += 1
+            if not args or not re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", args[0]):
+                raise Fail("invalid", "OpenVPN: line %d: not a server name" % n)
+        if any(c in line for c in "`$|&;<>") and d not in ("verify-x509-name", "pull-filter"):
+            raise Fail("invalid", "OpenVPN: line %d has shell characters" % n)
+    if block:
+        raise Fail("invalid", "OpenVPN: <%s> is not closed" % block)
+    if not remotes:
+        raise Fail("invalid", "OpenVPN: no remote server")
+
+
+def vpn_connections():
+    """[(uuid, type, name, state)] for NetworkManager's WireGuard and OpenVPN
+    connections; state connected|connecting|disconnected."""
+    r = nmcli("-f", "UUID,TYPE,NAME,STATE", "connection", "show")
+    out = []
+    for line in r.stdout.splitlines():
+        f = split_terse(line)
+        if len(f) < 3:
+            continue
+        kind = {"wireguard": "wireguard", "vpn": "vpn"}.get(f[1])
+        if not kind:
+            continue
+        if kind == "vpn":
+            svc = connection_fields(f[0], ["vpn.service-type"]).get("vpn.service-type", "")
+            if not svc.endswith(".openvpn"):
+                continue
+            kind = "openvpn"
+        st = f[3] if len(f) > 3 else ""
+        state = "connected" if st == "activated" else "connecting" if st.startswith("activat") else "disconnected"
+        out.append((f[0], kind, f[2], state))
+    return out
+
+
+def vpn_find(which):
+    for c in vpn_connections():
+        if which == c[0] or which == c[2]:
+            return c
+    raise Fail("notfound", "no VPN connection called %s" % clean(which[:64]))
+
+
+def vpn_import(opts, secret, emit):
+    kind = opts.get("type")
+    if kind not in VPN_TYPES:
+        raise Fail("invalid", "--type openvpn or --type wireguard")
+    name = vpn_name(opts.get("name") or "")
+    if not secret:
+        raise Fail("invalid", "no configuration (give --file or --config-stdin)")
+    if len(secret) > VPN_MAX_CONFIG or "\0" in secret:
+        raise Fail("invalid", "not a VPN configuration")
+    (check_wireguard if kind == "wireguard" else check_openvpn)(secret)
+    if any(c[2] == name for c in vpn_connections()):
+        raise Fail("invalid", "there is already a VPN connection called %s" % clean(name))
+    if kind == "openvpn" and not os.path.exists(os.environ.get(
+            "SG_NM_OPENVPN_PLUGIN", "/usr/lib/NetworkManager/VPN/nm-openvpn-service.name")):
+        raise Fail("unsupported", "OpenVPN connections need network-manager-openvpn")
+    tmp = tempfile.mkdtemp(prefix="sg-vpn-")
+    try:
+        os.chmod(tmp, 0o700)
+        if kind == "wireguard":
+            # the file's name is the tunnel's interface name
+            used = {d["device"] for d in devices()} | {c[2] for c in vpn_connections()}
+            ifname = next("sgwg%d" % i for i in range(100) if "sgwg%d" % i not in used)
+            path = os.path.join(tmp, ifname + ".conf")
+        else:
+            path = os.path.join(tmp, "vpn.ovpn")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secret)
+        r = nmcli("connection", "import", "type", kind, "file", path)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    m = re.search(r"\(([0-9a-fA-F-]{36})\)", r.stdout)
+    if not m:
+        raise Fail("failed", "NetworkManager did not say what it imported")
+    new = m.group(1)
+    settings = ["connection.id", name, "connection.autoconnect", "no", "connection.permissions", ""]
+    if opts.get("username") and kind == "openvpn":
+        if not re.fullmatch(r"[^\s\"'`$\\]{1,128}", opts["username"]):
+            nmcli("connection", "delete", "uuid", new, check=False)
+            raise Fail("invalid", "not a user name")
+        settings += ["+vpn.data", "username=" + opts["username"]]
+    try:
+        nmcli("connection", "modify", "uuid", new, *settings)
+    except Fail:
+        nmcli("connection", "delete", "uuid", new, check=False)
+        raise
+    log("imported %s VPN connection %s (%s)" % (kind, clean(name), new))
+    emit("IMPORTED %s\t%s\t%s" % (new, kind, clean(name)))
+
+
+def cmd_vpn(pos, opts, secret, uid, emit):
+    if not pos:
+        raise Fail("invalid", "usage: vpn list|import|connect|disconnect|remove")
+    sub = pos[0]
+    if sub in ("import", "remove") and not is_admin(uid):
+        raise Fail("denied", "adding or removing a VPN connection for all users needs an administrator")
+    if sub == "list":
+        for u, kind, name, state in vpn_connections():
+            emit("VPN %s\t%s\t%s\t%s" % (u, kind, state, clean(name)))
+    elif sub == "import":
+        vpn_import(opts, secret, emit)
+    elif sub in ("connect", "disconnect", "remove"):
+        if len(pos) != 2:
+            raise Fail("invalid", "usage: vpn %s NAME" % sub)
+        u, kind, name, state = vpn_find(pos[1])
+        if sub == "connect":
+            if state == "connected":
+                emit("CONNECTED %s" % clean(name))
+                return
+            args = ["--wait", "60", "connection", "up", "uuid", u]
+            tmp = None
+            if secret is not None:
+                if len(secret) > 256 or "\n" in secret:
+                    raise Fail("invalid", "not a password")
+                fd, tmp = tempfile.mkstemp(prefix="sg-vpn-")
+                with os.fdopen(fd, "w") as f:
+                    f.write("vpn.secrets.password:%s\n" % secret)
+                args += ["passwd-file", tmp]
+            try:
+                nmcli(*args, timeout=75)
+            except Fail as e:
+                m = e.detail.lower()
+                if "secrets" in m or "auth" in m or "password" in m:
+                    raise Fail("auth", "the VPN server did not accept the sign-in")
+                raise
+            finally:
+                if tmp:
+                    os.unlink(tmp)
+            log("uid %d connected VPN %s" % (uid, clean(name)))
+            emit("CONNECTED %s" % clean(name))
+        elif sub == "disconnect":
+            if state != "disconnected":
+                nmcli("connection", "down", "uuid", u)
+            emit("DISCONNECTED %s" % clean(name))
+        else:
+            nmcli("connection", "delete", "uuid", u)
+            log("removed VPN connection %s" % clean(name))
+            emit("REMOVED %s" % clean(name))
+    else:
+        raise Fail("invalid", "unknown vpn command %s" % clean(sub))
+
+
 # --- requests -------------------------------------------------------------------
 
 def log(msg):
@@ -714,6 +1006,8 @@ def may_use(uid):
 
 WIFI_FLAGS = {"hidden", "no-autoconnect", "password-stdin", "rescan"}
 WIFI_VALUED = {"ssid", "ssid-hex", "security", "device"}
+VPN_FLAGS = {"password-stdin", "config-stdin"}
+VPN_VALUED = {"type", "name", "username"}
 
 
 def run(argv, secret, uid, emit):
@@ -753,6 +1047,9 @@ def run(argv, secret, uid, emit):
     elif cmd == "wifi":
         pos, opts = parse_opts(argv[1:], WIFI_FLAGS, WIFI_VALUED)
         cmd_wifi(pos, opts, secret, emit)
+    elif cmd == "vpn":
+        pos, opts = parse_opts(argv[1:], VPN_FLAGS, VPN_VALUED)
+        cmd_vpn(pos, opts, secret, uid, emit)
 
 
 def answer(argv, secret, uid, emit):
@@ -795,12 +1092,14 @@ def serve():
         argv = req["argv"]
         secret = req.get("secret")
         if not isinstance(argv, list) or not all(isinstance(a, str) and len(a) <= 256 for a in argv) or \
-           len(argv) > 32 or (secret is not None and (not isinstance(secret, str) or len(secret) > 256)):
+           len(argv) > 32 or (secret is not None and (not isinstance(secret, str) or
+                              len(secret) > (VPN_MAX_CONFIG if argv[:2] == ["vpn", "import"] else 256))):
             raise ValueError
     except (ValueError, KeyError, TypeError):
         emit("ERROR invalid malformed request")
         return 2
-    if argv and argv[0] not in ("whoami", "adapters") and not (argv[:2] in (["wifi", "scan"], ["wifi", "saved"])):
+    if argv and argv[0] not in ("whoami", "adapters") and \
+       not (argv[:2] in (["wifi", "scan"], ["wifi", "saved"], ["vpn", "list"])):
         log("uid %d: %s" % (uid, " ".join(clean(a) for a in argv[:3])))
     return answer(argv, secret, uid, emit)
 
@@ -891,12 +1190,29 @@ def main():
         return bridge(args[1:])
     if not args or args[0] in ("-h", "--help"):
         print(__doc__ if __doc__ else "see sg-session CLAUDE.md", file=sys.stderr)
-        print("usage: sg-netctl whoami|adapters|ipv4|ipv6|dns|enable|disable|renew|release|wifi ...",
+        print("usage: sg-netctl whoami|adapters|ipv4|ipv6|dns|enable|disable|renew|release|wifi|vpn ...",
               file=sys.stderr)
         return 2
     secret = None
     if "--password-stdin" in args:
         secret = sys.stdin.readline().rstrip("\r\n")
+    if args[:2] == ["vpn", "import"]:
+        # the configuration travels as the request's secret: read here, as the
+        # caller -- sg-netd (root) never opens a path it is given
+        if "--config-stdin" in args:
+            secret = sys.stdin.read(VPN_MAX_CONFIG + 1)
+        elif "--file" in args:
+            i = args.index("--file")
+            if i + 1 >= len(args):
+                print("ERROR invalid --file needs a value", flush=True)
+                return 2
+            try:
+                with open(args[i + 1], encoding="utf-8-sig", errors="replace") as f:
+                    secret = f.read(VPN_MAX_CONFIG + 1)
+            except OSError as e:
+                print("ERROR notfound %s" % clean(e.strerror or "cannot read the file"), flush=True)
+                return 1
+            args = args[:i] + ["--config-stdin"] + args[i + 2:]
     return request(args, secret, lambda line: print(line, flush=True))
 
 

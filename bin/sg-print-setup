@@ -1,0 +1,48 @@
+#!/bin/sh
+# The printer every Windows program sees out of the box: "Print-to-PDF", a
+# CUPS queue on cups-pdf (printer-driver-cups-pdf). Wine lists CUPS's
+# printers as Windows printers (winspool, localspl), so Notepad, WordPad,
+# LibreOffice, a browser -- any program's Print dialog -- can print to it.
+# The PDF lands in the user's Documents (C:\users\NAME\Documents), named
+# after the document, as Windows' own PDF printer saves where it is told.
+#
+# Run as root at boot (sg-print-setup.service, after CUPS): creates the
+# queue if it is missing, makes it the default if there is none, and points
+# cups-pdf at the Windows profiles. Does nothing without cups-pdf.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -eu
+SG_PREFIX="${SG_PREFIX:-/var/lib/stained-glass/prefix}"
+
+QUEUE="${SG_PDF_QUEUE:-Print-to-PDF}"
+BACKEND="${SG_CUPS_PDF_BACKEND:-/usr/lib/cups/backend/cups-pdf}"
+PPD="${SG_CUPS_PDF_PPD:-/usr/share/ppd/cups-pdf/CUPS-PDF_opt.ppd}"
+CONF="${SG_CUPS_PDF_CONF:-/etc/cups/cups-pdf.conf}"
+LPADMIN="${SG_LPADMIN:-/usr/sbin/lpadmin}"
+LPSTAT="${SG_LPSTAT:-lpstat}"
+
+[ -x "$BACKEND" ] || { echo "sg-print-setup: no cups-pdf, nothing to do"; exit 0; }
+
+# cups-pdf.conf: Out is where the PDF goes (${USER} is the job's owner),
+# Label 1 keeps a second job of the same name from overwriting the first
+set_conf() {
+    key=$1; value=$2
+    if grep -q "^[#[:space:]]*${key}[[:space:]]" "$CONF" 2>/dev/null; then
+        sed -i "s|^[#[:space:]]*${key}[[:space:]].*|$key $value|" "$CONF"
+    else
+        printf '%s %s\n' "$key" "$value" >> "$CONF"
+    fi
+}
+if [ -f "$CONF" ]; then
+    set_conf Out "$SG_PREFIX/drive_c/users/\${USER}/Documents"
+    set_conf Label 1
+fi
+
+if ! "$LPSTAT" -p "$QUEUE" >/dev/null 2>&1; then
+    "$LPADMIN" -p "$QUEUE" -E -v cups-pdf:/ -P "$PPD" -D "Print to PDF" -L "Saved in Documents"
+    echo "sg-print-setup: added the $QUEUE printer"
+fi
+# the default printer, unless an administrator chose another
+if ! "$LPSTAT" -d 2>/dev/null | grep -q 'system default destination:'; then
+    "$LPADMIN" -d "$QUEUE"
+fi

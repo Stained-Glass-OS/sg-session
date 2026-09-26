@@ -32,7 +32,7 @@ with open(os.environ["FAKE_NM_LOG"], "a") as f:
     f.write(json.dumps(args) + "\n")
 state = json.load(open(os.environ["FAKE_NM_STATE"]))
 a = [x for x in args if x not in ("-t", "-e", "yes")]
-if a[:2] == ["--wait", "45"]:
+if a[:1] == ["--wait"]:
     a = a[2:]
 def out(s):
     sys.stdout.write(s)
@@ -48,9 +48,26 @@ elif a[:2] == ["device", "show"]:
         "IP4.GATEWAY:10.0.2.2\nIP4.DNS[1]:10.0.2.3\n"
         "DHCP4.OPTION[1]:dhcp_lease_time = 86400\nDHCP4.OPTION[2]:expiry = 1800000000\n"
         "DHCP4.OPTION[3]:dhcp_server_identifier = 10.0.2.2\n")
+elif a[:2] == ["connection", "show"] and len(a) == 2 and fields == "UUID,TYPE,NAME,STATE":
+    for v in state.get("vpns", []):
+        out("%s:%s:%s:%s\n" % (v["uuid"], "vpn" if v["type"] == "openvpn" else "wireguard", v["name"], v.get("state", "")))
+    for c in state.get("connections", []):
+        out("%s:802-11-wireless:%s:\n" % (c["uuid"], c["name"]))
 elif a[:2] == ["connection", "show"] and len(a) == 2:
     for c in state.get("connections", []):
         out("%s:802-11-wireless:%s:/org/freedesktop/NetworkManager/Settings/%s\n" % (c["uuid"], c["name"], c["n"]))
+elif a[:2] == ["connection", "show"] and fields == "vpn.service-type":
+    v = [v for v in state.get("vpns", []) if v["uuid"] == a[-1]]
+    out("vpn.service-type:%s\n" % ("org.freedesktop.NetworkManager.openvpn" if v and v[0]["type"] == "openvpn" else ""))
+elif a[:2] == ["connection", "import"]:
+    f = a[a.index("file") + 1]
+    st = os.stat(f)
+    with open(os.environ["FAKE_NM_LOG"], "a") as log:
+        log.write(json.dumps(["IMPORTED-FILE", os.path.basename(f), oct(st.st_mode & 0o777), open(f).read()]) + "\n")
+    out("Connection 'x' (11111111-2222-3333-4444-555555555555) successfully added.\n")
+elif a[:2] == ["connection", "up"] and "passwd-file" in a:
+    with open(os.environ["FAKE_NM_LOG"], "a") as log:
+        log.write(json.dumps(["PASSWD-FILE", open(a[a.index("passwd-file") + 1]).read()]) + "\n")
 elif a[:2] == ["connection", "show"]:
     out("connection.autoconnect:yes\nipv4.method:auto\nipv4.ignore-auto-dns:no\nipv6.method:auto\n")
 elif a[:3] == ["device", "wifi", "list"]:
@@ -61,7 +78,7 @@ elif a[:2] == ["connection", "up"]:
         sys.stderr.write("Error: Connection activation failed: Secrets were required, but not provided.\n"
                          "Hint: use 'journalctl -xe NM_CONNECTION=x + NM_DEVICE=wlan0' to get more details.\n")
         sys.exit(4)
-elif a[:2] == ["connection", "load"] or a[:2] == ["connection", "modify"] or a[:2] == ["connection", "delete"]:
+elif a[:2] in (["connection", "load"], ["connection", "modify"], ["connection", "delete"], ["connection", "down"]):
     pass
 elif a[:2] == ["radio", "wifi"]:
     out("enabled\n")
@@ -133,7 +150,7 @@ def run_tests(t):
                 c = json.loads(line)
                 if c[:3] == ["-t", "-e", "yes"]:
                     c = c[3:]
-                if c[:2] == ["--wait", "45"]:
+                if c[:1] == ["--wait"]:
                     c = c[2:]
                 out.append(c)
         return out
@@ -270,6 +287,118 @@ def run_tests(t):
     out = serve(["wifi", "forget", "--ssid", "Home"])
     check(out[-1] == "OK" and any(c[:4] == ["connection", "delete", "uuid", "u-saved"] for c in calls()),
           "forget deletes the saved network")
+
+    # --- VPN connections (OpenVPN, WireGuard) ------------------------------------------
+    wg = ("[Interface]\nPrivateKey = %s\nAddress = 10.66.0.2/32, fd00::2/128\nDNS = 10.66.0.1, corp.sgtest.lan\n\n"
+          "[Peer]\nPublicKey = %s\nAllowedIPs = 10.66.0.0/24\nEndpoint = vpn.sgtest.lan:51820\n"
+          "PersistentKeepalive = 25\n" % ("a" * 43 + "=", "b" * 43 + "="))
+    state()
+    out = serve(["vpn", "import", "--type", "wireguard", "--name", "Office", "--config-stdin"], secret=wg)
+    check(out[-1].startswith("ERROR denied") and not any(c[:2] == ["connection", "import"] for c in calls()),
+          "an ordinary user may not add a VPN connection for all users")
+    state()
+    out = serve(["vpn", "import", "--type", "wireguard", "--name", "Office", "--config-stdin"], secret=wg, admin=True)
+    imp = [c for c in calls() if c[:1] == ["IMPORTED-FILE"]]
+    mods = [c for c in calls() if c[:2] == ["connection", "modify"]]
+    check(out[-1] == "OK" and imp and imp[0][1] == "sgwg0.conf" and imp[0][2] == "0o600" and imp[0][3] == wg,
+          "an administrator imports a WireGuard configuration (0600, the tunnel's name as the file's): %s" % out[-1:])
+    check(mods and mods[0][4:] == ["connection.id", "Office", "connection.autoconnect", "no",
+                                   "connection.permissions", ""],
+          "named as given, for all users, not dialled at boot")
+    check(not any(wg.splitlines()[1].split(" = ")[1] in " ".join(c) for c in calls() if c[:1] != ["IMPORTED-FILE"]),
+          "the private key is on no command line")
+    for bad, why in ((wg + "PostUp = iptables -F\n", "a PostUp command"),
+                     (wg.replace("PrivateKey = ", "PrivateKey = x"), "a key that is not a key"),
+                     (wg.replace("10.66.0.2/32", "10.66.0.2/32; reboot"), "junk in an address"),
+                     (wg.replace("[Peer]", "[Pear]"), "an unknown section"),
+                     (wg.split("[Peer]")[0], "no peer"),
+                     (wg + "Table = off\n", "an unsupported key")):
+        state()
+        out = serve(["vpn", "import", "--type", "wireguard", "--name", "Bad", "--config-stdin"], secret=bad, admin=True)
+        check(out[-1].startswith("ERROR invalid") and not any(c[:1] == ["IMPORTED-FILE"] for c in calls()),
+              "a WireGuard file is refused before NetworkManager: " + why)
+    ovpn = ("client\ndev tun\nproto udp\nremote vpn.sgtest.lan 1194\nnobind\npersist-key\n"
+            "remote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n</ca>\n"
+            "auth-user-pass\n")
+    plugin = os.path.join(t, "nm-openvpn-service.name")
+    open(plugin, "w").close()
+    env["SG_NM_OPENVPN_PLUGIN"] = plugin
+    state()
+    out = serve(["vpn", "import", "--type", "openvpn", "--name", "Branch", "--username", "alice", "--config-stdin"],
+                secret=ovpn, admin=True)
+    imp = [c for c in calls() if c[:1] == ["IMPORTED-FILE"]]
+    mods = [c for c in calls() if c[:2] == ["connection", "modify"]]
+    check(out[-1] == "OK" and imp and imp[0][3] == ovpn and mods and mods[0][-2:] == ["+vpn.data", "username=alice"],
+          "an administrator imports an OpenVPN profile with inline certificates and a user name: %s" % out[-1:])
+    for bad, why in ((ovpn + "up /bin/sh\n", "an up script"),
+                     (ovpn + "script-security 2\n", "script-security"),
+                     (ovpn + "plugin /usr/lib/x.so\n", "a plugin"),
+                     (ovpn.replace("<ca>\n", "ca /etc/shadow\n<ca>\n"), "a certificate from a file on this computer"),
+                     (ovpn.replace("auth-user-pass", "auth-user-pass /root/creds"), "credentials from a file"),
+                     (ovpn.replace("</ca>\n", ""), "an unclosed block"),
+                     (ovpn.replace("remote vpn.sgtest.lan 1194\n", ""), "no server"),
+                     (ovpn + "<connection>\nremote x\n</connection>\n", "an unknown inline block")):
+        state()
+        out = serve(["vpn", "import", "--type", "openvpn", "--name", "Bad", "--config-stdin"], secret=bad, admin=True)
+        check(out[-1].startswith("ERROR invalid") and not any(c[:1] == ["IMPORTED-FILE"] for c in calls()),
+              "an OpenVPN profile is refused before NetworkManager: " + why)
+    os.unlink(plugin)
+    state()
+    out = serve(["vpn", "import", "--type", "openvpn", "--name", "Branch", "--config-stdin"], secret=ovpn, admin=True)
+    check(out[-1].startswith("ERROR unsupported"), "OpenVPN without NetworkManager's OpenVPN plugin is said plainly")
+    vpns = [{"uuid": "u-wg", "type": "wireguard", "name": "Office", "state": ""},
+            {"uuid": "u-ovpn", "type": "openvpn", "name": "Branch", "state": "activated"}]
+    state(vpns=vpns)
+    out = serve(["vpn", "list"])
+    check(out[-1] == "OK" and "VPN u-wg\twireguard\tdisconnected\tOffice" in out
+          and "VPN u-ovpn\topenvpn\tconnected\tBranch" in out, "an ordinary user lists the VPN connections: %s" % out)
+    state(vpns=vpns)
+    out = serve(["vpn", "connect", "Office"])
+    check(out[-1] == "OK" and "CONNECTED Office" in out and
+          any(c[:4] == ["connection", "up", "uuid", "u-wg"] for c in calls()), "an ordinary user dials a VPN connection")
+    state(vpns=vpns)
+    out = serve(["vpn", "connect", "u-wg", "--password-stdin"], secret="s3cret pass")
+    pw = [c for c in calls() if c[:1] == ["PASSWD-FILE"]]
+    check(out[-1] == "OK" and pw == [["PASSWD-FILE", "vpn.secrets.password:s3cret pass\n"]] and
+          not any("s3cret" in " ".join(c) for c in calls() if c[:1] != ["PASSWD-FILE"]),
+          "a VPN password goes to NetworkManager in a file, never a command line")
+    state(vpns=vpns)
+    out = serve(["vpn", "disconnect", "Branch"])
+    check(out[-1] == "OK" and any(c[:4] == ["connection", "down", "uuid", "u-ovpn"] for c in calls()),
+          "and hangs one up")
+    state(vpns=vpns)
+    out = serve(["vpn", "remove", "Office"])
+    check(out[-1].startswith("ERROR denied") and not any(c[:2] == ["connection", "delete"] for c in calls()),
+          "an ordinary user may not remove a VPN connection")
+    state(vpns=vpns)
+    out = serve(["vpn", "remove", "Office"], admin=True)
+    check(out[-1] == "OK" and any(c[:4] == ["connection", "delete", "uuid", "u-wg"] for c in calls()),
+          "an administrator removes one")
+    state(vpns=vpns)
+    out = serve(["vpn", "connect", "Nope"])
+    check(out[-1].startswith("ERROR notfound"), "a VPN connection that does not exist is not found")
+    state(connections=[{"uuid": "u-saved", "name": "Wi-Fi Home", "n": "7", "hex": b"Home".hex()}])
+    out = serve(["vpn", "connect", "Wi-Fi Home"])
+    check(out[-1].startswith("ERROR notfound") and not any(c[:2] == ["connection", "up"] for c in calls()),
+          "vpn connect reaches only VPN connections, not other profiles")
+    state()
+    cfg = os.path.join(t, "office.conf")
+    with open(cfg, "w") as f:
+        f.write(wg)
+    sock = os.path.join(t, "vpn.sock")
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sock)
+    srv.listen(1)
+    cp = subprocess.Popen([sys.executable, NETCTL, "vpn", "import", "--type", "wireguard", "--name", "Office",
+                           "--file", cfg], env=dict(env, SG_NETD_SOCKET=sock), stdout=subprocess.PIPE, text=True)
+    conn, _ = srv.accept()
+    req = json.loads(conn.makefile("rb").readline())
+    conn.sendall(b"OK\n")
+    conn.close()
+    srv.close()
+    cp.wait(timeout=30)
+    check(req["secret"] == wg and cfg not in req["argv"] and "--config-stdin" in req["argv"],
+          "the client reads --file itself and sends its content: sg-netd never opens a path it is given")
 
     # --- the request itself ----------------------------------------------------------
     a, b = socket.socketpair()

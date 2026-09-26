@@ -20,3 +20,5 @@ enable sg-oobe-browser.service
 # Device Manager's disabled devices stay disabled across reboots (runs only
 # when there are any: ConditionPathExists).
 enable sg-devices-apply.service
+# The Print to PDF printer (runs only with cups-pdf installed).
+enable sg-print-setup.service

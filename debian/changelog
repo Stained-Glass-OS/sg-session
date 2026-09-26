@@ -1,3 +1,21 @@
+sg-session (0.1.0-39) unstable; urgency=medium
+
+  * VPN connections (sg-netctl vpn): an administrator imports a vendor's
+    WireGuard .conf or OpenVPN .ovpn as a NetworkManager connection for all
+    users (checked first: nothing that runs a program, no file of this
+    computer named, only known OpenVPN directives); anyone with a session
+    lists, dials (a password on stdin, to NetworkManager in a file) and
+    hangs up. Windows programs reach it through RAS (wine-sg 0400: rasdial,
+    RasDial, RasEnumConnections). netctl-test covers who may do what and
+    every refusal.
+  * Print to PDF: sg-print-setup.service adds a CUPS queue on cups-pdf,
+    the default printer unless one is chosen, writing into the user's
+    Documents; every Windows program's Print dialog lists it. Unit test
+    test/print-setup-test.sh; sg-print-check prints from Notepad and reads
+    the PDF back (sg-image make print-test).
+
+ -- Stained Glass OS <dev@stained-glass.example>  Sat, 26 Sep 2026 03:12:09 -0700
+
 sg-session (0.1.0-38) unstable; urgency=medium
 
   * The consent prompt is "Stained Glass needs your permission" (window

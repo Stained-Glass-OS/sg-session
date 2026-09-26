@@ -14,7 +14,7 @@ UNITDIR      = $(DESTDIR)$(PREFIX)/lib/systemd/system
 TMPFILESDIR  = $(DESTDIR)$(PREFIX)/lib/tmpfiles.d
 UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
-BINS         = bin/sg-install bin/sg-drivers domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
+BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
@@ -132,6 +132,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# The Security log's sign-in/sign-out events (sg-audit, pam_exec at session open and close).
 	install -m 0755 bin/sg-audit $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# The Print to PDF printer (sg-print-setup.service).
+	install -m 0755 bin/sg-print-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-audit $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
@@ -156,7 +158,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service systemd/sg-devices-apply.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
-	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service $(UNITDIR)
+	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
+	    systemd/sg-print-setup.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf tmpfiles/sg-audit.conf $(TMPFILESDIR)
@@ -183,6 +186,7 @@ lint:
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@sh test/print-setup-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-audit
