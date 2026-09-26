@@ -1,3 +1,12 @@
+sg-session (0.1.0-41) unstable; urgency=medium
+
+  * Printing works: the machine's print spool (system32\spool\printers)
+    was SYSTEM's alone, so a user's print job was silently dropped. It is
+    writable by the Windows users' group, sticky (sg-prefix-init, every boot).
+  * sg-print-check prints from inside the signed-in session, as a person does.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 26 Sep 2026 05:19:34 -0700
+
 sg-session (0.1.0-40) unstable; urgency=medium
 
   * B56: an elevated program gets a display of its own. sg-brokerd execs

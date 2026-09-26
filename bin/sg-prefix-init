@@ -42,6 +42,17 @@ run_installers() {
 # graphics driver this machine's display path needs (multi-user debt D4). Every
 # boot, so a changed display path or an upgraded prefix picks it up.
 set_machine_settings() {
+    # The print spool: on Windows the spooler service writes a job's spool
+    # file; here the user's own process does, in the machine's
+    # system32\spool\printers -- which was SYSTEM's alone, so every print
+    # job was silently dropped. Writable by the Windows users' group, sticky
+    # so no one can touch another user's job. Every boot: existing prefixes too.
+    _spool="$SG_PREFIX/drive_c/windows/system32/spool/printers"
+    if [ -d "$_spool" ] && getent group "$SG_WINE_GROUP" >/dev/null 2>&1; then
+        if ! { chgrp "$SG_WINE_GROUP" "$_spool" && chmod 3770 "$_spool"; } 2>/dev/null; then
+            sg_log "WARNING: could not open the print spool to $SG_WINE_GROUP"
+        fi
+    fi
     if wine reg add 'HKLM\Software\Wine\Drivers' /v Graphics /t REG_SZ \
             /d "$(sg_graphics_driver)" /f >/dev/null 2>&1; then
         sg_log "machine graphics driver: $(sg_graphics_driver)"

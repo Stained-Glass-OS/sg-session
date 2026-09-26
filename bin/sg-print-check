@@ -12,6 +12,13 @@ set -u
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
 . "$SG_LIB/sg-common.sh"
+# As a person prints: from inside their signed-in session (Notepad needs its
+# display to render the page), not from a bare shell.
+if _env=$(sg_session_env 2>/dev/null) && [ -r "$_env" ]; then
+    # shellcheck disable=SC1090  # the session's own environment file
+    . "$_env"
+    export DISPLAY XDG_RUNTIME_DIR WAYLAND_DISPLAY WINEPREFIX
+fi
 sg_wine_env
 
 RC=0
