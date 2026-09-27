@@ -1,3 +1,16 @@
+sg-session (0.1.0-47) unstable; urgency=medium
+
+  * The lock screen accepts a blank password for an account that has none,
+    as Windows does at the console (remote sign-in still refuses it): the
+    live account has no password, and locking the live session -- Win+L,
+    Ctrl+Alt+Del -- locked people out of it. Its lock screen now says so.
+    Gate: make test-pamcheck (fails on 0.1.0-46).
+  * The login and lock screens have a power button (Shut down, Restart), as
+    on Windows; polkit lets their accounts (sggreet, sgsystem) power off and
+    restart. Verified in the live VM: shut down from the lock screen.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 10:39:34 -0700
+
 sg-session (0.1.0-46) unstable; urgency=medium
 
   * sg-wineserver.service stops the Windows system with wineserver -k (every

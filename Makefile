@@ -394,6 +394,11 @@ test-rdp-stream: rdp
 # The lock screen end to end: sg-compositor (beside this repo) + sg-lockd + the
 # Wine greeter in lock mode. Needs the session prefix from `make test`.
 .PHONY: test-lock
+# Blank passwords: refused remotely, allowed at the lock screen (the console).
+.PHONY: test-pamcheck
+test-pamcheck: rdp
+	@sh test/pamcheck-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
 test-lock: greeter rdp vkbd
 	@sh test/lock-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 

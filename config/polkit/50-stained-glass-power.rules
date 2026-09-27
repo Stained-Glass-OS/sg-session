@@ -14,5 +14,9 @@ polkit.addRule(function(action, subject) {
         return polkit.Result.NOT_HANDLED;
     if (subject.local && subject.active)
         return polkit.Result.YES;
+    // The login and lock screens' accounts: shutting down or restarting from
+    // them needs no sign-in, as on Windows (the power button does the same).
+    if (subject.user == "sggreet" || subject.user == "sgsystem")
+        return polkit.Result.YES;
     return polkit.Result.NOT_HANDLED;
 });

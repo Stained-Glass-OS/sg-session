@@ -433,6 +433,8 @@ int main( int argc, char **argv )
     /* Its own PAM service, so an administrator can give unlocking a different
      * policy from remote login. The helper reads this. */
     setenv( "SG_REMOTE_PAM_SERVICE", "stained-glass-lock", 0 );
+    /* The lock screen is at the console: a passwordless account may unlock. */
+    setenv( "SG_PAMCHECK_CONSOLE", "1", 1 );
     if (!account) account = "sgsystem";
     /* The gate's hook: stage USER's picture as the service would and say
      * what the lock UI would be given. */

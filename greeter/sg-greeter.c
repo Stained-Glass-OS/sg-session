@@ -36,9 +36,12 @@
 #define ID_SUBMIT 103
 #define ID_STATUS 104
 #define ID_PROMPT 105
+#define ID_POWER  106
+#define ID_SHUTDOWN 201
+#define ID_RESTART  202
 
 static HANDLE g_in, g_out;
-static HWND g_user, g_secret, g_submit, g_status, g_prompt;
+static HWND g_user, g_secret, g_submit, g_status, g_prompt, g_power;
 static HFONT g_font_big, g_font, g_font_small;
 static HBRUSH g_bg;
 static HWND g_title;
@@ -375,6 +378,10 @@ static void handle_bridge_line( HWND hwnd, char *line )
         const char *text = line + (line[7] == 'S' ? 14 : 15);
         g_awaiting_secret = TRUE;
         SetWindowTextA( g_prompt, text );
+        /* The live system's account has no password: say so, rather than
+         * leave someone who never set one locked out. */
+        if (g_lock_user && !strcmp( g_lock_user, "live" ))
+            set_status( "The live account has no password: select Sign in.", FALSE );
         if (!g_curtain) ShowWindow( g_secret, SW_SHOW );
         EnableWindow( g_submit, TRUE );
         want_focus( g_secret );
@@ -440,10 +447,62 @@ static DWORD WINAPI reader_thread( void *arg )
     return 0;
 }
 
+/* The power button: shutting down or restarting needs no sign-in, as on
+ * Windows. ExitWindowsEx hands it to logind (wine-sg 0241); polkit allows it
+ * for the login and lock screens' accounts. */
+static void power_menu( HWND hwnd )
+{
+    HMENU menu = CreatePopupMenu();
+    RECT r;
+    int cmd;
+
+    AppendMenuA( menu, MF_STRING, ID_SHUTDOWN, "Shut down" );
+    AppendMenuA( menu, MF_STRING, ID_RESTART, "Restart" );
+    GetWindowRect( g_power, &r );
+    cmd = TrackPopupMenu( menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_NONOTIFY,
+                          r.right, r.top - 4, 0, hwnd, NULL );
+    DestroyMenu( menu );
+    if (cmd == ID_SHUTDOWN || cmd == ID_RESTART)
+    {
+        set_status( cmd == ID_RESTART ? "Restarting..." : "Shutting down...", FALSE );
+        UpdateWindow( hwnd );
+        ExitWindowsEx( (cmd == ID_RESTART ? EWX_REBOOT : EWX_POWEROFF) | EWX_FORCEIFHUNG,
+                       SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_FLAG_PLANNED );
+    }
+}
+
+static void draw_power( const DRAWITEMSTRUCT *di )
+{
+    HDC dc = di->hDC;
+    RECT r = di->rcItem;
+    BOOL down = (di->itemState & ODS_SELECTED) != 0;
+    HPEN pen = CreatePen( PS_SOLID, 2, RGB(0xFF, 0xFF, 0xFF) ), oldp;
+    HBRUSH br = CreateSolidBrush( down ? RGB(0x40, 0x30, 0x70) : RGB(0x1A, 0x16, 0x40) );
+    int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+
+    FillRect( dc, &r, br );
+    DeleteObject( br );
+    oldp = SelectObject( dc, pen );
+    SelectObject( dc, GetStockObject( NULL_BRUSH ) );
+    Arc( dc, cx - 9, cy - 8, cx + 9, cy + 10, cx - 5, cy - 7, cx + 5, cy - 7 );
+    MoveToEx( dc, cx, cy - 11, NULL );
+    LineTo( dc, cx, cy + 1 );
+    SelectObject( dc, oldp );
+    DeleteObject( pen );
+    if (di->itemState & ODS_FOCUS)
+    {
+        InflateRect( &r, -3, -3 );
+        DrawFocusRect( dc, &r );
+    }
+}
+
 static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
 {
     switch (msg)
     {
+    case WM_DRAWITEM:
+        if (wp == ID_POWER) { draw_power( (const DRAWITEMSTRUCT *)lp ); return TRUE; }
+        break;
     case WM_CTLCOLORSTATIC:
     {
         HDC dc = (HDC)wp;
@@ -485,6 +544,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         return 0;
     case WM_COMMAND:
         if (LOWORD(wp) == ID_SUBMIT) submit();
+        else if (LOWORD(wp) == ID_POWER) power_menu( hwnd );
         return 0;
     case WM_BRIDGE_LINE:
     {
@@ -576,6 +636,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 
     g_status = CreateWindowExA( 0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_CENTER,
                      cx - 300, cy + 140, 600, 44, hwnd, (HMENU)ID_STATUS, inst, NULL );
+
+    g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                     sw - 72, sh - 72, 48, 48, hwnd, (HMENU)ID_POWER, inst, NULL );
 
     /* Set once, at creation. Sweeping every child afterwards is how the title
      * ended up with two fonts painted on top of each other. */

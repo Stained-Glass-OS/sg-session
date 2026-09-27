@@ -841,6 +841,9 @@ int main( int argc, char **argv )
     const char *key_path  = getenv( "SG_RDP_KEY" );
     if (!bind) bind = "0.0.0.0";
     if (!helper) helper = "/usr/libexec/stained-glass/sg-rdp-pamcheck";
+    /* Remote sign-in never accepts a blank password (the lock screen's
+     * console exception is not for the network). */
+    unsetenv( "SG_PAMCHECK_CONSOLE" );
     if (!account) account = "sgrdp";
     if (seat_root) g_seat_root = seat_root;
     if (!cert_path || !key_path) { fprintf( stderr, "SG_RDP_CERT and SG_RDP_KEY are required\n" ); return 2; }

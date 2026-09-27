@@ -77,7 +77,8 @@ int main( void )
     char user[MAXFIELD];
     struct pam_conv pc = { conv, NULL };
     pam_handle_t *ph = NULL;
-    int rc;
+    const char *s;
+    int rc, console, flags;
 
     if (!service) service = "stained-glass-remote";
 
@@ -90,11 +91,16 @@ int main( void )
     if (!user[0]) { puts( "FAIL empty user" ); return 1; }
 
     rc = pam_start( service, user, &pc, &ph );
-    if (rc == PAM_SUCCESS) rc = pam_set_item( ph, PAM_RHOST, "rdp" );
-    if (rc == PAM_SUCCESS) rc = pam_authenticate( ph, PAM_DISALLOW_NULL_AUTHTOK );
+    /* A blank password is refused -- unless the caller is the lock screen,
+     * at the console: as Windows' "limit local account use of blank
+     * passwords to console logon only". The live system's account has none. */
+    console = (s = getenv( "SG_PAMCHECK_CONSOLE" )) && !strcmp( s, "1" );
+    flags = console ? 0 : PAM_DISALLOW_NULL_AUTHTOK;
+    if (rc == PAM_SUCCESS && !console) rc = pam_set_item( ph, PAM_RHOST, "rdp" );
+    if (rc == PAM_SUCCESS) rc = pam_authenticate( ph, flags );
     /* Authentication is not authorisation: an expired or locked account has a
      * correct password and must still be refused. */
-    if (rc == PAM_SUCCESS) rc = pam_acct_mgmt( ph, PAM_DISALLOW_NULL_AUTHTOK );
+    if (rc == PAM_SUCCESS) rc = pam_acct_mgmt( ph, flags );
 
     explicit_bzero( g_password, sizeof(g_password) );
 
