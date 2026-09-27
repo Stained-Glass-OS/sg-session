@@ -74,6 +74,9 @@ elif a[:3] == ["device", "wifi", "list"]:
     for n in state.get("scan", []):
         out("%s:%s:%d:%s:wlan0\n" % (" " if not n.get("inuse") else "*", n["hex"], n["signal"], n["security"]))
 elif a[:2] == ["connection", "up"]:
+    if state.get("up_fails") == "timeout":
+        sys.stderr.write("Error: Timeout expired (45 seconds)\n")
+        sys.exit(3)
     if state.get("up_fails"):
         sys.stderr.write("Error: Connection activation failed: Secrets were required, but not provided.\n"
                          "Hint: use 'journalctl -xe NM_CONNECTION=x + NM_DEVICE=wlan0' to get more details.\n")
@@ -87,6 +90,15 @@ elif a[:1] == ["device"]:
 else:
     sys.stderr.write("fake nmcli: unhandled %r\n" % (a,))
     sys.exit(2)
+'''
+
+# NetworkManager's log: the reason it gave up on the device, when the state says
+FAKE_JOURNALCTL = r'''#!/usr/bin/python3
+import json, os
+state = json.load(open(os.environ["FAKE_NM_STATE"]))
+if state.get("fail_reason"):
+    print("<info>  [1.0] device (wlan0): state change: ip-config -> failed (reason '%s', managed-type: 'full')"
+          % state["fail_reason"])
 '''
 
 FAKE_BUSCTL = r'''#!/usr/bin/python3
@@ -123,7 +135,7 @@ def main():
 def run_tests(t):
     bindir = os.path.join(t, "bin")
     os.mkdir(bindir)
-    for name, body in (("nmcli", FAKE_NMCLI), ("busctl", FAKE_BUSCTL)):
+    for name, body in (("nmcli", FAKE_NMCLI), ("busctl", FAKE_BUSCTL), ("journalctl", FAKE_JOURNALCTL)):
         p = os.path.join(bindir, name)
         with open(p, "w") as f:
             f.write(body)
@@ -260,6 +272,16 @@ def run_tests(t):
     check(out[-1].startswith("ERROR auth"), "a wrong key is reported as such: %s" % out[-1:])
     check(os.listdir(nmdir) == [] and any(c[:2] == ["connection", "delete"] for c in calls()),
           "and the network is not remembered")
+    # Why it failed is NetworkManager's logged reason, not nmcli's wording:
+    # "timeout" is said for a wrong key and for a router that never answered.
+    for reason, up, want, what in (
+            ("ip-config-unavailable", "timeout", "ERROR failed", "no address from DHCP is not a wrong key"),
+            ("no-secrets", "timeout", "ERROR auth", "a key the network refused is, even when nmcli says timeout"),
+            ("802-1x-supplicant-timeout", True, "ERROR auth", "a supplicant timeout is a wrong key"),
+            ("", "timeout", "ERROR failed", "a bare timeout is not called a wrong key")):
+        state(scan=[{"hex": b"Cafe Net".hex(), "signal": 55, "security": "WPA2"}], up_fails=up, fail_reason=reason)
+        out = serve(["wifi", "connect", "--ssid", "Cafe Net", "--password-stdin"], secret="correct horse")
+        check(out[-1].startswith(want), "%s: %s" % (what, out[-1:]))
     state(scan=[{"hex": b"Cafe Net".hex(), "signal": 55, "security": "WPA2"}])
     out = serve(["wifi", "connect", "--ssid", "Cafe Net", "--password-stdin"], secret="short")
     check(out[-1].startswith("ERROR invalid"), "a WPA2 key under 8 characters is refused")

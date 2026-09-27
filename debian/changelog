@@ -1,3 +1,14 @@
+sg-session (0.1.0-49) unstable; urgency=medium
+
+  * sg-netctl wifi connect says why a network could not be joined from
+    NetworkManager's logged reason, not nmcli's wording: a router that never
+    answered DHCP was reported as "the network security key isn't correct"
+    (nmcli says "timeout" for both), telling people with the right password
+    that it was wrong. Found with a simulated Wi-Fi network (mac80211_hwsim +
+    hostapd) in the live VM. Gate: make test (netctl-test, fails on -48).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 11:47:44 -0700
+
 sg-session (0.1.0-48) unstable; urgency=medium
 
   * Ctrl+Alt+Del: the security screen (sg-compositor 0.2.0+sg8). sg-lockd

@@ -616,6 +616,7 @@ def wifi_connect(opts, secret, emit):
             old = f.read()
     write_profile(ssid, security, secret or "", hidden, not opts.get("no-autoconnect"), uuid_)
     nmcli("connection", "load", path)
+    started = time.time() - 1
     try:
         activate(uuid_, dev)
     except Fail as e:
@@ -630,12 +631,47 @@ def wifi_connect(opts, secret, emit):
             with open(path, "w") as f:
                 f.write(old)
             nmcli("connection", "load", path, check=False)
-        m = e.detail.lower()
-        if any(w in m for w in ("secrets", "supplicant", "802-1x", "802.1x", "no secrets", "timeout", "auth")):
+        name = clean(ssid.decode("utf-8", "replace"))
+        reason = failure_reason(dev, started)
+        if reason in AUTH_REASONS or reason.startswith("supplicant"):
             raise Fail("auth", "the network security key isn't correct")
+        if reason.startswith(("ip-config", "dhcp")):
+            raise Fail("failed", "%s did not give this PC an address (DHCP): the network or its router is not "
+                                 "answering" % name)
+        if reason == "ssid-not-found":
+            raise Fail("notfound", "the network %s is not in range" % name)
+        m = e.detail.lower()
+        if not reason and any(w in m for w in ("secrets", "supplicant", "802-1x", "802.1x", "no secrets", "auth")):
+            raise Fail("auth", "the network security key isn't correct")
+        if reason:
+            raise Fail("failed", "could not connect to %s (%s)" % (name, reason))
         raise
     log("joined a network on %s" % dev)
     emit("CONNECTED %s" % dev)
+
+
+# Why NetworkManager gave up on a device: its log's "-> failed (reason '...')"
+# since the attempt began. The device's StateReason is gone by the time
+# nmcli returns (it is disconnected again), and nmcli's own message says
+# "timeout" for a wrong key and for a router that never answered DHCP alike --
+# which told people with the right password that it was wrong.
+AUTH_REASONS = {"no-secrets", "802-1x-supplicant-disconnect", "802-1x-supplicant-config-failed",
+                "802-1x-supplicant-failed", "802-1x-supplicant-timeout"}
+
+
+def failure_reason(dev, since):
+    try:
+        r = subprocess.run(["journalctl", "-u", "NetworkManager", "--since", "@%d" % int(since), "-o", "cat",
+                            "--no-pager"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    found = ""
+    pat = re.compile(r"device \(%s\): state change: \S+ -> failed \(reason '([^']+)'" % re.escape(dev))
+    for line in r.stdout.splitlines():
+        m = pat.search(line)
+        if m:
+            found = m.group(1)
+    return found
 
 
 def cmd_wifi(pos, opts, secret, emit):
