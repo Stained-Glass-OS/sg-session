@@ -38,6 +38,12 @@ ExecStartPost=/usr/bin/sg-services-start
 # killed the whole server there -- and the lock screen with it. Its own waits
 # are bounded well inside this.
 TimeoutStartSec=5min
+# Stopping it is ending the Windows system: every Windows process ends and the
+# registry is written out, as wineserver -k does. Left to SIGTERM alone, the
+# USB driver host (winedevice with libusb) outlived the server and held
+# shutdown for the whole 90 s default before its SIGKILL.
+ExecStop=/bin/sh -c '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; timeout 20 wineserver -k'
+TimeoutStopSec=30s
 Restart=on-failure
 RestartSec=5s
 

@@ -1,3 +1,12 @@
+sg-session (0.1.0-46) unstable; urgency=medium
+
+  * sg-wineserver.service stops the Windows system with wineserver -k (every
+    Windows process ends, the registry is written) within 30 s. The USB
+    driver host outlived a SIGTERMed server and held every shutdown 90 s
+    ("A stop job is running for sg-wineserver.service").
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 10:01:10 -0700
+
 sg-session (0.1.0-45) unstable; urgency=medium
 
   * sg-services-start asks the service manager about a named service
