@@ -396,6 +396,11 @@ test-rdp-stream: rdp
 .PHONY: test-lock
 # Blank passwords: refused remotely, allowed at the lock screen (the console).
 # The Ctrl+Alt+Del screen's choices run in the session (sg-sas-action).
+# An elevated program looks like the user's others (sg-elevated-run).
+.PHONY: test-elevate-look
+test-elevate-look:
+	@sh test/elevate-look-test.sh
+
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh

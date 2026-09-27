@@ -19,6 +19,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 
 static int write_full(int fd, const void *buf, size_t len)
 {
@@ -34,6 +36,35 @@ static size_t put(char *buf, size_t off, size_t cap, const char *s)
     if (off + n > cap) return cap + 1;   /* overflow marker */
     memcpy(buf + off, s, n);
     return off + n;
+}
+
+/* A REG_DWORD of the user's, through Wine's reg (this runs in the user's
+ * session, with its prefix and server). */
+static int reg_dword(const char *key, const char *value, unsigned long *out)
+{
+    int p[2], found = 0;
+    pid_t pid;
+    FILE *f;
+    char line[512];
+
+    if (pipe(p) < 0) return 0;
+    if ((pid = fork()) == 0) {
+        int nul = open("/dev/null", O_RDWR);
+        dup2(p[1], 1);
+        if (nul >= 0) dup2(nul, 2);
+        close(p[0]); close(p[1]);
+        execlp("wine", "wine", "reg", "query", key, "/v", value, (char *)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    if (pid < 0 || !(f = fdopen(p[0], "r"))) { close(p[0]); return 0; }
+    while (fgets(line, sizeof(line), f)) {
+        char *t = strstr(line, "REG_DWORD");
+        if (t && strstr(line, value) && sscanf(t + 9, " %lx", out) == 1) found = 1;
+    }
+    fclose(f);
+    waitpid(pid, NULL, 0);
+    return found;
 }
 
 int main(int argc, char **argv)
@@ -63,6 +94,24 @@ int main(int argc, char **argv)
         for (i = 0; pass[i]; i++) {
             const char *v = getenv(pass[i]);
             if (v) { char kv[4200]; snprintf(kv, sizeof(kv), "%s=%s", pass[i], v); off = put(blob, off, sizeof(blob), kv); }
+        }
+    }
+    if (wine_mode) {
+        /* The user's light or dark modes and accent colour, for the elevated
+         * program to look like the user's others (sg-elevated-run). */
+        static const struct { const char *key, *value, *env; int hex; } look[] = {
+            { "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "AppsUseLightTheme", "SG_USER_APPS_LIGHT", 0 },
+            { "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", "SystemUsesLightTheme", "SG_USER_SYSTEM_LIGHT", 0 },
+            { "HKCU\\Software\\Microsoft\\Windows\\DWM", "AccentColor", "SG_USER_ACCENT", 1 },
+        };
+        for (i = 0; i < (int)(sizeof(look) / sizeof(look[0])); i++) {
+            unsigned long v;
+            if (reg_dword(look[i].key, look[i].value, &v)) {
+                char kv[64];
+                if (look[i].hex) snprintf(kv, sizeof(kv), "%s=%08lx", look[i].env, v & 0xffffffffUL);
+                else snprintf(kv, sizeof(kv), "%s=%d", look[i].env, v ? 1 : 0);
+                off = put(blob, off, sizeof(blob), kv);
+            }
         }
     }
     off = put(blob, off, sizeof(blob), "");   /* empty string separates env from argv */

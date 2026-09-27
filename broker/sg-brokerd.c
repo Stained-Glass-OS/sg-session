@@ -491,7 +491,9 @@ static void launch(char **argv, char **envp, const char *cwd, const char *system
      * directory: those are the session's, which an elevated program must not
      * use (and cannot: they are the requester's). */
     for (; *envp; envp++) {
-        static const char *ok[] = { "WINEPREFIX=", NULL };
+        /* and the requester's look (modes, accent), which sg-elevated-run
+         * checks value by value before using */
+        static const char *ok[] = { "WINEPREFIX=", "SG_USER_APPS_LIGHT=", "SG_USER_SYSTEM_LIGHT=", "SG_USER_ACCENT=", NULL };
         int i;
         for (i = 0; ok[i]; i++)
             if (!strncmp(*envp, ok[i], strlen(ok[i]))) { putenv(*envp); break; }

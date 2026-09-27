@@ -1,3 +1,15 @@
+sg-session (0.1.0-50) unstable; urgency=medium
+
+  * An elevated program looks like the user's others: sg-elevate passes the
+    user's app and system modes and accent colour (from their settings),
+    sg-brokerd lets exactly those through, and sg-elevated-run -- taking only
+    0, 1 or eight hex digits -- writes them into the SYSTEM account's
+    settings before the program starts. On Windows an elevated program runs
+    as the same user; here it runs as SYSTEM and was always light, with the
+    default accent. Gate: make test-elevate-look.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 12:40:41 -0700
+
 sg-session (0.1.0-49) unstable; urgency=medium
 
   * sg-netctl wifi connect says why a network could not be joined from

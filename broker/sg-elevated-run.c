@@ -153,6 +153,58 @@ static void rm_dir(const char *dir, const char *cookie)
     rmdir(dir);
 }
 
+/* The requester's light or dark modes and accent colour (sg-elevate reads them
+ * from the user's settings): on Windows an elevated program runs as the same
+ * user and looks like the user's other programs; here it runs as the SYSTEM
+ * account, so the choices are copied into that account's settings before it
+ * starts. Only exact values are taken -- 0 or 1, eight hex digits -- and they
+ * reach Wine through a file of this account's own, never a command line or a
+ * shell. */
+static int valid_bit(const char *v) { return v && (!strcmp(v, "0") || !strcmp(v, "1")); }
+static int valid_hex8(const char *v)
+{
+    int i;
+    if (!v || strlen(v) != 8) return 0;
+    for (i = 0; i < 8; i++) if (!strchr("0123456789abcdefABCDEF", v[i])) return 0;
+    return 1;
+}
+
+static void apply_user_look(void)
+{
+    const char *apps = getenv("SG_USER_APPS_LIGHT"), *sys = getenv("SG_USER_SYSTEM_LIGHT"), *accent = getenv("SG_USER_ACCENT");
+    char path[] = "/tmp/sg-elevated-look-XXXXXX";
+    FILE *f;
+    int fd, st;
+    pid_t pid;
+
+    if (!valid_bit(apps) && !valid_bit(sys) && !valid_hex8(accent)) goto done;
+    if ((fd = mkstemp(path)) < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) { close(fd); unlink(path); } goto done; }
+    fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n");
+    if (valid_bit(apps) || valid_bit(sys)) {
+        fprintf(f, "[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize]\r\n");
+        if (valid_bit(apps)) fprintf(f, "\"AppsUseLightTheme\"=dword:0000000%s\r\n", apps);
+        if (valid_bit(sys)) fprintf(f, "\"SystemUsesLightTheme\"=dword:0000000%s\r\n", sys);
+        fprintf(f, "\r\n");
+    }
+    if (valid_hex8(accent))
+        fprintf(f, "[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\DWM]\r\n\"AccentColor\"=dword:%s\r\n\r\n", accent);
+    fclose(f);
+    if ((pid = fork()) == 0) {
+        char unixpath[64];
+        int nul = open("/dev/null", O_RDWR);
+        if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        snprintf(unixpath, sizeof(unixpath), "Z:%s", path);
+        execlp("wine", "wine", "reg", "import", unixpath, (char *)NULL);
+        _exit(127);
+    }
+    if (pid > 0) waitpid(pid, &st, 0);
+    unlink(path);
+done:
+    unsetenv("SG_USER_APPS_LIGHT");
+    unsetenv("SG_USER_SYSTEM_LIGHT");
+    unsetenv("SG_USER_ACCENT");
+}
+
 int main(int argc, char **argv)
 {
     const char *control = getenv("SG_ELEVATED_CONTROL"), *xwayland = getenv("SG_XWAYLAND");
@@ -244,6 +296,8 @@ int main(int argc, char **argv)
     /* Wine: a desktop of this display's own, so the desktop process Wine
      * starts for it runs on this display and ends with it. */
     setenv("SG_WINSTATION", desk, 1);
+
+    apply_user_look();
 
     {
         pid_t pid = fork();
