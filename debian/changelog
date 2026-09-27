@@ -1,3 +1,12 @@
+sg-session (0.1.0-45) unstable; urgency=medium
+
+  * sg-services-start asks the service manager about a named service
+    (PlugPlay): Wine's "sc query" with no name prints its usage and exits
+    103, so the readiness check never passed and every boot waited its
+    whole 60-second timeout before the login screen could come up.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Sat, 26 Sep 2026 21:24:12 -0700
+
 sg-session (0.1.0-44) unstable; urgency=medium
 
   * sg-prefix-init unpacks the prefix the image baked at build time

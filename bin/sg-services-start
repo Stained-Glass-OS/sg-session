@@ -68,7 +68,10 @@ start=$(date +%s)
 while :; do
     waited=$(( $(date +%s) - start ))
     [ "$waited" -lt "${SG_SERVICES_TIMEOUT:-60}" ] || break
-    if timeout 30 wine sc query >/dev/null 2>&1; then
+    # a named service: Wine's "sc query" alone prints its usage and exits
+    # 103, so asking that waited out the whole timeout on every boot -- a
+    # minute before the login screen
+    if timeout 30 wine sc query PlugPlay >/dev/null 2>&1; then
         sg_log "SCM is answering after ${waited}s"
         exit 0
     fi
