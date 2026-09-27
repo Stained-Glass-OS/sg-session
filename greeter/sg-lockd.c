@@ -302,9 +302,9 @@ fail:
 
 /* ---- the lock UI ------------------------------------------------------- */
 
-struct ui { pid_t pid; int to, from; char *picture; };
+struct ui { pid_t pid; int to, from; char *picture; int sas; };
 
-static int ui_start( struct ui *ui, const char *user )
+static int ui_start( struct ui *ui, const char *user, int sas )
 {
     int up[2], down[2], signin;
     free( ui->picture );
@@ -316,6 +316,8 @@ static int ui_start( struct ui *ui, const char *user )
         if (ui->picture) setenv( "SG_LOCK_PICTURE", ui->picture, 1 );
         else unsetenv( "SG_LOCK_PICTURE" );
         setenv( "SG_LOCK_SIGNIN", signin ? "1" : "0", 1 );
+        if (sas) setenv( "SG_LOCK_MODE", "sas", 1 );
+        else unsetenv( "SG_LOCK_MODE" );
         dup2( down[0], 0 ); dup2( up[1], 1 );
         close( up[0] ); close( up[1] ); close( down[0] ); close( down[1] );
         setsid();   /* its own process group, so teardown takes Xwayland too */
@@ -330,6 +332,7 @@ static int ui_start( struct ui *ui, const char *user )
         _exit( 127 );
     }
     close( up[1] ); close( down[0] );
+    ui->sas = sas;
     ui->from = up[0];
     ui->to = down[1];
     return 0;
@@ -379,6 +382,21 @@ static int read_line( int fd, char *buf, size_t max )
 static int ui_line( struct ui *ui, const char *user, char *line )
 {
     char reply[64];
+
+    /* The security screen: its choices are the compositor's to carry out --
+     * Lock through LOCK, the rest through SAS (which ends the screen and runs
+     * Task Manager or sign-out in the session). */
+    if (ui->sas)
+    {
+        char cmd[32];
+        if (!strcmp( line, "SAS lock" )) snprintf( cmd, sizeof(cmd), "LOCK\n" );
+        else if (!strcmp( line, "SAS cancel" ) || !strcmp( line, "SAS taskmgr" ) || !strcmp( line, "SAS signout" ))
+            snprintf( cmd, sizeof(cmd), "%s\n", line );
+        else return 0;
+        if (control_command( cmd, reply, sizeof(reply) )) logmsg( "security screen: %s failed", line );
+        else logmsg( "security screen: %s (%s)", line + 4, reply );
+        return 0;   /* the compositor's event ends the screen */
+    }
 
     if (!strncmp( line, "HELLO", 5 ))
         ui_send( ui, "PROMPT_SECRET Password for %s:", user );
@@ -489,10 +507,16 @@ int main( int argc, char **argv )
             if (pf[0].revents)
             {
                 if (read_line( w, ev, sizeof(ev) ) < 0) break;   /* compositor gone */
-                if ((!strcmp( ev, "locked" ) || !strcmp( ev, "OK locked" )) && ui.pid <= 0)
+                if ((!strcmp( ev, "locked" ) || !strcmp( ev, "OK locked" )) && (ui.pid <= 0 || ui.sas))
                 {
+                    ui_stop( &ui );   /* the security screen, when Lock was chosen on it */
                     logmsg( "locked: starting the lock screen for %s", user );
-                    if (ui_start( &ui, user ) < 0) logmsg( "could not start the lock UI" );
+                    if (ui_start( &ui, user, 0 ) < 0) logmsg( "could not start the lock UI" );
+                }
+                else if (!strcmp( ev, "sas" ) && ui.pid <= 0)
+                {
+                    logmsg( "Ctrl+Alt+Del: starting the security screen for %s", user );
+                    if (ui_start( &ui, user, 1 ) < 0) logmsg( "could not start the security screen" );
                 }
                 else if (!strcmp( ev, "unlocked" ) || !strcmp( ev, "OK unlocked" ))
                     ui_stop( &ui );
@@ -506,9 +530,10 @@ int main( int argc, char **argv )
                      * compositor shows nothing but privileged clients -- so
                      * put it back. */
                     logmsg( "lock UI exited while locked; restarting it" );
+                    int sas = ui.sas;
                     ui_stop( &ui );
                     sleep( 1 );   /* never a tight loop if it dies on start */
-                    ui_start( &ui, user );
+                    ui_start( &ui, user, sas );
                     continue;
                 }
                 if (ui_line( &ui, user, line ) == 1) ui_stop( &ui );

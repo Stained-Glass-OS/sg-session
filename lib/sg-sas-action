@@ -1,0 +1,20 @@
+#!/bin/sh
+# A choice made on the security screen (Ctrl+Alt+Del), run in the session.
+#
+# sg-compositor starts this as the session's user, with the session's display
+# and environment, once the lock service has ended the security screen with
+# "SAS taskmgr" or "SAS signout" (Lock and Cancel need nothing run).
+#
+#   sg-sas-action taskmgr | signout
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_wine_env
+case "${1:-}" in
+    taskmgr) exec wine taskmgr.exe ;;
+    signout) exec wine shutdown.exe /l ;;
+    *) echo "usage: sg-sas-action taskmgr|signout" >&2; exit 2 ;;
+esac

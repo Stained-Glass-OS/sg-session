@@ -35,7 +35,10 @@ DISPLAY=":$N"
 XAUTHORITY="$XDIR/Xauthority"
 export DISPLAY XAUTHORITY
 # Not exec: the cookie goes when the lock screen does.
-wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-greeter64.exe" /lock "$user" 2>>"${SG_LOG_DIR:-/tmp}/lock-ui.log"
+# SG_LOCK_MODE=sas: the security screen (Ctrl+Alt+Del) instead of the lock.
+mode=/lock
+[ "${SG_LOCK_MODE:-}" = sas ] && mode=/sas
+wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-greeter64.exe" "$mode" "$user" 2>>"${SG_LOG_DIR:-/tmp}/lock-ui.log"
 rc=$?
 rm -rf "$XDIR"
 exit $rc

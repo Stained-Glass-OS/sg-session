@@ -1,3 +1,14 @@
+sg-session (0.1.0-48) unstable; urgency=medium
+
+  * Ctrl+Alt+Del: the security screen (sg-compositor 0.2.0+sg8). sg-lockd
+    starts the greeter in its new /sas mode -- Lock, Sign out, Task Manager,
+    Cancel (Esc), and the power button -- and hands the choice to the
+    compositor; sg-sas-action runs Task Manager or signs out in the session.
+    Gate: make test-sas-action; VM-checked end to end (Lock, Cancel, Task
+    Manager, Sign out with wine-sg 0439).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 11:05:48 -0700
+
 sg-session (0.1.0-47) unstable; urgency=medium
 
   * The lock screen accepts a blank password for an account that has none,

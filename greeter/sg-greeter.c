@@ -37,6 +37,10 @@
 #define ID_STATUS 104
 #define ID_PROMPT 105
 #define ID_POWER  106
+#define ID_SAS_LOCK    110
+#define ID_SAS_SIGNOUT 111
+#define ID_SAS_TASKMGR 112
+#define ID_SAS_CANCEL  113
 #define ID_SHUTDOWN 201
 #define ID_RESTART  202
 
@@ -50,6 +54,10 @@ static BOOL g_done = FALSE;
 /* Lock mode ("/lock <user>"): the session's user is fixed -- the lock service
  * got it from the kernel -- so the screen only asks for the password. */
 static const char *g_lock_user;
+/* Security-screen mode ("/sas <user>", Ctrl+Alt+Del): Lock, Sign out, Task
+ * Manager, Cancel -- sg-lockd hands each to the compositor. */
+static BOOL g_sas;
+static HFONT g_font_link;
 
 /* The lock-screen picture (Windows 10's "curtain"): the picture chosen in
  * Settings > Personalization > Lock screen, or the system's own, with the
@@ -248,7 +256,7 @@ static void paint( HWND hwnd )
         SelectObject( mem, g_font_date );
         shadow_text( mem, m + 4, g_sh - m - g_sh * 7 / 100, date );
     }
-    else if (g_lock_user)
+    else if (g_lock_user && !g_sas)
     {
         /* The account picture: a circle with the user's initial. */
         int r = g_sh / 13, cx = g_sw / 2, cy = g_sh / 2 - 60 - 130 - r - 16;
@@ -496,12 +504,50 @@ static void draw_power( const DRAWITEMSTRUCT *di )
     }
 }
 
+static void sas_choose( HWND hwnd, const char *choice )
+{
+    HWND c;
+    for (c = GetWindow( hwnd, GW_CHILD ); c; c = GetWindow( c, GW_HWNDNEXT )) EnableWindow( c, FALSE );
+    send_line( "SAS %s", choice );
+}
+
+/* A security-screen choice: white text on the picture, framed when focused. */
+static void draw_link( HWND hwnd, const DRAWITEMSTRUCT *di )
+{
+    char text[64];
+    RECT r = di->rcItem;
+    POINT o = { 0, 0 };
+
+    GetWindowTextA( di->hwndItem, text, sizeof(text) );
+    MapWindowPoints( di->hwndItem, hwnd, &o, 1 );
+    if (g_pattern)
+    {
+        SetBrushOrgEx( di->hDC, -o.x, -o.y, NULL );
+        FillRect( di->hDC, &r, g_pattern );
+    }
+    else FillRect( di->hDC, &r, g_bg );
+    SetBkMode( di->hDC, TRANSPARENT );
+    SetTextColor( di->hDC, (di->itemState & ODS_DISABLED) ? RGB(0xA0, 0xA0, 0xA0) : COL_TEXT );
+    SelectObject( di->hDC, g_font_link );
+    r.left += 12;
+    DrawTextA( di->hDC, text, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_LEFT );
+    if (di->itemState & (ODS_FOCUS | ODS_SELECTED))
+    {
+        HPEN pen = CreatePen( PS_SOLID, 2, COL_TEXT ), op = SelectObject( di->hDC, pen );
+        HGDIOBJ ob = SelectObject( di->hDC, GetStockObject( NULL_BRUSH ) );
+        Rectangle( di->hDC, di->rcItem.left + 1, di->rcItem.top + 1, di->rcItem.right - 1, di->rcItem.bottom - 1 );
+        SelectObject( di->hDC, op ); SelectObject( di->hDC, ob );
+        DeleteObject( pen );
+    }
+}
+
 static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
 {
     switch (msg)
     {
     case WM_DRAWITEM:
         if (wp == ID_POWER) { draw_power( (const DRAWITEMSTRUCT *)lp ); return TRUE; }
+        if (wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) { draw_link( hwnd, (const DRAWITEMSTRUCT *)lp ); return TRUE; }
         break;
     case WM_CTLCOLORSTATIC:
     {
@@ -545,6 +591,10 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_COMMAND:
         if (LOWORD(wp) == ID_SUBMIT) submit();
         else if (LOWORD(wp) == ID_POWER) power_menu( hwnd );
+        else if (LOWORD(wp) == ID_SAS_LOCK) sas_choose( hwnd, "lock" );
+        else if (LOWORD(wp) == ID_SAS_SIGNOUT) sas_choose( hwnd, "signout" );
+        else if (LOWORD(wp) == ID_SAS_TASKMGR) sas_choose( hwnd, "taskmgr" );
+        else if (LOWORD(wp) == ID_SAS_CANCEL) sas_choose( hwnd, "cancel" );
         return 0;
     case WM_BRIDGE_LINE:
     {
@@ -583,6 +633,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     (void)prev; (void)show;
     CoInitializeEx( NULL, COINIT_APARTMENTTHREADED );
     if (cmdline && !strncmp( cmdline, "/lock ", 6 ) && cmdline[6]) g_lock_user = cmdline + 6;
+    if (cmdline && !strncmp( cmdline, "/sas ", 5 ) && cmdline[5]) { g_lock_user = cmdline + 5; g_sas = TRUE; }
     g_in  = GetStdHandle( STD_INPUT_HANDLE );
     g_out = GetStdHandle( STD_OUTPUT_HANDLE );
 
@@ -604,7 +655,8 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     g_font_date   = make_font( sh * 6 / 100, FW_LIGHT );
     g_font_avatar = make_font( sh / 13, FW_LIGHT );
     prepare_picture();
-    g_curtain = !(curtain && !strcmp( curtain, "0" ));
+    g_curtain = !(curtain && !strcmp( curtain, "0" )) && !g_sas;
+    g_font_link = make_font( 26, FW_NORMAL );
 
     /* Fills the desktop: this is the login screen, not a dialog on top of
      * something. WS_POPUP so it carries no caption or border. */
@@ -613,6 +665,49 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 
     cx = sw / 2;
     cy = sh / 2 - 60;
+
+    if (g_sas)
+    {
+        static const struct { int id; const char *text; } links[] =
+            { { ID_SAS_LOCK, "Lock" }, { ID_SAS_SIGNOUT, "Sign out" }, { ID_SAS_TASKMGR, "Task Manager" } };
+        HWND c;
+        for (i = 0; i < 3; i++)
+            CreateWindowExA( 0, "BUTTON", links[i].text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                             cx - 160, cy - 90 + i * 56, 320, 46, hwnd, (HMENU)(INT_PTR)links[i].id, inst, NULL );
+        c = CreateWindowExA( 0, "BUTTON", "Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                             cx - 75, sh - 120, 150, 34, hwnd, (HMENU)ID_SAS_CANCEL, inst, NULL );
+        SendMessageA( c, WM_SETFONT, (WPARAM)g_font, TRUE );
+        g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                                   sw - 72, sh - 72, 48, 48, hwnd, (HMENU)ID_POWER, inst, NULL );
+        ShowWindow( hwnd, SW_SHOW );
+        UpdateWindow( hwnd );
+        SetFocus( GetDlgItem( hwnd, ID_SAS_LOCK ) );
+        CloseHandle( CreateThread( NULL, 0, reader_thread, hwnd, 0, NULL ) );
+        send_line( "HELLO" );
+        for (i = 1; i < 256; i++)
+            if (GetAsyncKeyState( i ) & 0x8000) g_held[i] = TRUE;   /* Ctrl, Alt, Del still down */
+        while (GetMessageA( &msg, NULL, 0, 0 ))
+        {
+            if (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN)
+            {
+                BYTE k = (BYTE)msg.wParam;
+                if (g_held[k]) continue;
+                if (k == VK_ESCAPE) { sas_choose( hwnd, "cancel" ); continue; }
+                if (k == VK_RETURN && GetFocus()) { SendMessageA( GetFocus(), BM_CLICK, 0, 0 ); continue; }
+                if (k == VK_DOWN || k == VK_UP) { SetFocus( GetNextDlgTabItem( hwnd, GetFocus(), k == VK_UP ) ); continue; }
+            }
+            else if (msg.message == WM_KEYUP || msg.message == WM_SYSKEYUP)
+            {
+                if (g_held[(BYTE)msg.wParam]) { g_held[(BYTE)msg.wParam] = FALSE; continue; }
+            }
+            if (!IsDialogMessageA( hwnd, &msg ))
+            {
+                TranslateMessage( &msg );
+                DispatchMessageA( &msg );
+            }
+        }
+        return 0;
+    }
 
     g_title = CreateWindowExA( 0, "STATIC", g_lock_user ? "Locked" : "Stained Glass OS",
                      WS_CHILD | WS_VISIBLE | SS_CENTER,

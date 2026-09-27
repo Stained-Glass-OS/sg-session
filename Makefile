@@ -20,7 +20,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser
 
 .PHONY: all install lint test test-session test-multiuser deb clean
@@ -395,6 +395,11 @@ test-rdp-stream: rdp
 # Wine greeter in lock mode. Needs the session prefix from `make test`.
 .PHONY: test-lock
 # Blank passwords: refused remotely, allowed at the lock screen (the console).
+# The Ctrl+Alt+Del screen's choices run in the session (sg-sas-action).
+.PHONY: test-sas-action
+test-sas-action:
+	@sh test/sas-action-test.sh
+
 .PHONY: test-pamcheck
 test-pamcheck: rdp
 	@sh test/pamcheck-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
