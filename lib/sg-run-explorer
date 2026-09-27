@@ -147,6 +147,7 @@ fi
 # stayed up, but with nothing watching it.
 #   - the network icon in the notification area (sg-netflyout), if sg-shell
 #     and sg-netctl are installed.
+#   - the battery icon (sg-battery), on a computer with a battery.
 #   - voice typing's hold-to-talk listener (sg-dictate /background), if
 #     sg-shell and sg-dictate are installed; it exits at once unless the user
 #     turned hold-to-talk on (Control Panel > Speech Recognition).
@@ -161,6 +162,7 @@ fi
 _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
 _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
+_sgbattery="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-battery64.exe"
 (
     _w=0
     while [ "$_w" -lt 120 ] && ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; do
@@ -175,6 +177,10 @@ _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
     if [ -f "$_sgnet" ] && command -v sg-netctl >/dev/null 2>&1; then
         sg_log "starting the network icon (sg-netflyout)"
         wine "$_sgnet" &
+    fi
+    if [ -f "$_sgbattery" ] && grep -qx Battery /sys/class/power_supply/*/type 2>/dev/null; then
+        sg_log "starting the battery icon (sg-battery)"
+        wine "$_sgbattery" &
     fi
     if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
         wine "$_sgdictate" /background &

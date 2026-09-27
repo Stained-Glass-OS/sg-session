@@ -1,3 +1,10 @@
+sg-session (0.1.0-51) unstable; urgency=medium
+
+  * The shell starts the taskbar's battery icon (sg-shell's sg-battery) on a
+    computer with a battery.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 12:54:01 -0700
+
 sg-session (0.1.0-50) unstable; urgency=medium
 
   * An elevated program looks like the user's others: sg-elevate passes the
