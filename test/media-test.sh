@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC2015  # pass/fail one-liners: both only print
 # Removable media for File Explorer: the udev rule (71-stained-glass-media)
 # mounts what arrives, shared, and not on every "change" -- unmounting is one,
 # and remounting undid File Explorer's Eject; the automount unit runs as the
