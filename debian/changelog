@@ -2,6 +2,11 @@ sg-session (0.1.0-52) unstable; urgency=medium
 
   * The session's working directory is the user's profile: cmd, PowerShell
     and the Run box start in C:\users\<name>, not Z:\home\<name>.
+  * Run as administrator on a console program (PowerShell, cmd) opens it in
+    a console window: started with no console it ran with nowhere to show,
+    read end-of-file and ended ("nothing appears after consent"). Elevated
+    programs start in C:\windows\system32, as on Windows, not Z:\.
+    Test: make test-elevate-console.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 17:40:00 -0700
 

@@ -43,6 +43,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <sys/prctl.h>
@@ -205,6 +206,69 @@ done:
     unsetenv("SG_USER_ACCENT");
 }
 
+/* The prefix the program runs in: the broker's environment (sg_wine_env). */
+static const char *prefix_dir(void)
+{
+    const char *p = getenv("WINEPREFIX");
+    return p && *p ? p : "/var/lib/stained-glass/prefix";
+}
+
+/* A Windows path (C:\Program Files\x.exe, or a bare name in system32) as
+ * the file in the prefix; Windows paths are case-insensitive, so each part is
+ * looked up that way. */
+static int unix_path(const char *win, char *out, size_t n)
+{
+    char rest[4096], *part, *save = NULL;
+    size_t len;
+
+    if (strlen(win) >= sizeof(rest)) return 0;
+    if (((win[0] | 0x20) >= 'a' && (win[0] | 0x20) <= 'z') && win[1] == ':') {
+        snprintf(out, n, "%s/dosdevices/%c:", prefix_dir(), win[0] | 0x20);
+        strcpy(rest, win + 2);
+    } else if (!strchr(win, '\\') && !strchr(win, '/')) {
+        snprintf(out, n, "%s/drive_c", prefix_dir());
+        snprintf(rest, sizeof(rest), "windows\\system32\\%s%s", win,
+                 strlen(win) > 4 && !strcasecmp(win + strlen(win) - 4, ".exe") ? "" : ".exe");
+    } else return 0;
+    for (part = strtok_r(rest, "\\/", &save); part; part = strtok_r(NULL, "\\/", &save)) {
+        DIR *d = opendir(out);
+        struct dirent *e;
+        const char *found = NULL;
+        if (!d) return 0;
+        while ((e = readdir(d))) if (!strcasecmp(e->d_name, part)) { found = e->d_name; break; }
+        len = strlen(out);
+        if (found) snprintf(out + len, n - len, "/%s", found);
+        closedir(d);
+        if (!found) return 0;
+    }
+    return 1;
+}
+
+/* Whether the program is a console one (PE subsystem IMAGE_SUBSYSTEM_WINDOWS_CUI).
+ * Started by `wine` with no console to inherit, it got none: an elevated
+ * PowerShell or cmd ran with nowhere to show and read end-of-file at once.
+ * wineconsole gives it a console window, as Windows gives a console program
+ * started from the shell. */
+static int is_console_program(const char *win)
+{
+    unsigned char hdr[0x40], pe[0x60];
+    char path[4096];
+    uint32_t off;
+    int fd, ok = 0;
+
+    if (!unix_path(win, path, sizeof(path))) return 0;
+    if ((fd = open(path, O_RDONLY | O_CLOEXEC)) < 0) return 0;
+    if (pread(fd, hdr, sizeof(hdr), 0) == sizeof(hdr) && hdr[0] == 'M' && hdr[1] == 'Z') {
+        off = hdr[0x3c] | hdr[0x3d] << 8 | hdr[0x3e] << 16 | (uint32_t)hdr[0x3f] << 24;
+        /* "PE\0\0", the file header (20 bytes), then the optional header,
+         * whose Subsystem is at 68 in both PE32 and PE32+ */
+        if (off < (1u << 20) && pread(fd, pe, sizeof(pe), off) == sizeof(pe) && !memcmp(pe, "PE\0\0", 4))
+            ok = (pe[24 + 68] | pe[24 + 69] << 8) == 3;
+    }
+    close(fd);
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
     const char *control = getenv("SG_ELEVATED_CONTROL"), *xwayland = getenv("SG_XWAYLAND");
@@ -300,11 +364,29 @@ int main(int argc, char **argv)
     apply_user_look();
 
     {
-        pid_t pid = fork();
+        char **args = argv + first, sys32[4096];
+        pid_t pid;
+
+        if (!strcmp(args[0], "wine") && args[1] && is_console_program(args[1])) {
+            char **c = calloc(argc - first + 2, sizeof(*c));
+            int i;
+            if (c) {
+                c[0] = args[0];
+                c[1] = "wineconsole";
+                for (i = 1; args[i]; i++) c[i + 1] = args[i];
+                logmsg("%s is a console program: in a console window", args[1]);
+                args = c;
+            }
+        }
+        /* An elevated program starts in the system directory, as on Windows
+         * (elevated cmd opens in C:\Windows\system32), not at Z:\. */
+        snprintf(sys32, sizeof(sys32), "%s/drive_c/windows/system32", prefix_dir());
+        pid = fork();
         if (pid < 0) { kill(xpid, SIGTERM); rm_dir(dir, cookie); return 125; }
         if (!pid) {
             signal(SIGPIPE, SIG_DFL);
-            execvp(argv[first], argv + first);
+            if (chdir(sys32) < 0) { /* stays where it is */ }
+            execvp(args[0], args);
             _exit(127);
         }
         /* Wait for the program, then for everything it left running. */

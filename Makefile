@@ -401,6 +401,11 @@ test-rdp-stream: rdp
 test-elevate-look:
 	@sh test/elevate-look-test.sh
 
+# Elevated console programs (PowerShell, cmd) get a console window.
+.PHONY: test-elevate-console
+test-elevate-console:
+	@sh test/elevate-console-test.sh
+
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh
