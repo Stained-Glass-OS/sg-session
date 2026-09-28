@@ -6,6 +6,10 @@ sg-session (0.1.0-58) unstable; urgency=medium
   * The sign-in screen labels the password box: PAM's prompt without its
     colon, like "User name", or "Password" when PAM gives no words (the
     box appeared with no label).
+  * sg-wineserver.service gives the system wineserver CAP_FOWNER, which
+    wine-sg 0466 keeps permitted only and raises for one fchmod: SYSTEM
+    resetting the permissions of a file another account owns (the .NET SDK
+    installer's Package Cache). sg-services-start does not inherit it.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
 

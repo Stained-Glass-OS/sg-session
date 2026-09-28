@@ -26,13 +26,20 @@ Environment=HOME=/var/lib/stained-glass
 Environment=XDG_RUNTIME_DIR=/run/stained-glass
 RuntimeDirectory=stained-glass
 ExecStart=/usr/bin/sg-wineserver
+# SYSTEM may change the permissions of a file another account owns, as on
+# Windows (an elevated installer moving a download from the user's Temp into
+# the machine's folders, then resetting its DACL). wine-sg 0466 keeps
+# CAP_FOWNER permitted only -- it clears the ambient and effective sets at
+# start -- and raises it for that one fchmod. Nothing else of root's.
+AmbientCapabilities=CAP_FOWNER
 # The prefix must be initialized before there is anything to serve, but a
 # oneshot that has not finished holds this unit off entirely -- and a machine
 # with no Windows system is worse than one that waits a little longer for it.
 
 # The SCM is started once the server is up, not by the server itself: services
 # belong to the Windows system, not to the process that happens to host it.
-ExecStartPost=/usr/bin/sg-services-start
+# ...and the Windows programs it starts do not inherit the capability.
+ExecStartPost=/usr/bin/setpriv --ambient-caps -fowner --inh-caps -fowner /usr/bin/sg-services-start
 # sg-services-start (registry protection, machine policy, the SCM) takes a
 # minute or two on a slow or emulated machine; the default 90 s start timeout
 # killed the whole server there -- and the lock screen with it. Its own waits
