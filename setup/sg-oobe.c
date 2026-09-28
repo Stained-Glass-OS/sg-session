@@ -974,6 +974,19 @@ static void paint( HWND hwnd )
     EndPaint( hwnd, &ps );
 }
 
+/* The keyboard focus: a solid light frame, only once the keyboard is in use
+ * (ODS_NOFOCUSRECT until then, as Windows' focus cues). DrawFocusRect's
+ * dotted XOR line came out green on the purple selection. */
+static void focus_frame( HDC dc, const RECT *r, UINT state )
+{
+    HBRUSH br;
+
+    if (state & ODS_NOFOCUSRECT) return;
+    br = CreateSolidBrush( COL_TEXT );
+    FrameRect( dc, r, br );
+    DeleteObject( br );
+}
+
 static void draw_list_item( const DRAWITEMSTRUCT *d )
 {
     HDC dc = d->hDC;
@@ -1020,7 +1033,7 @@ static void draw_list_item( const DRAWITEMSTRUCT *d )
         DrawTextA( dc, g_browsers[idx].note, -1, &t, DT_SINGLELINE | DT_TOP );
     }
     else DrawTextA( dc, text, -1, &r, DT_SINGLELINE | DT_VCENTER );
-    if ((d->itemState & ODS_FOCUS) && !dis) { RECT f = d->rcItem; InflateRect( &f, -2, -2 ); DrawFocusRect( dc, &f ); }
+    if ((d->itemState & ODS_FOCUS) && !dis) { RECT f = d->rcItem; InflateRect( &f, -2, -2 ); focus_frame( dc, &f, d->itemState ); }
 }
 
 static void draw_item( const DRAWITEMSTRUCT *d )
@@ -1052,7 +1065,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         SelectObject( dc, g_font_small );
         SetTextColor( dc, COL_SUBTLE );
         { RECT t = { x, y + h + 2, r.right, r.bottom }; DrawTextA( dc, on ? "On" : "Off", -1, &t, DT_SINGLELINE ); }
-        if (focus) { RECT f = { x - 3, y - 3, x + w + 3, y + h + 3 }; DrawFocusRect( dc, &f ); }
+        if (focus) { RECT f = { x - 3, y - 3, x + w + 3, y + h + 3 }; focus_frame( dc, &f, d->itemState ); }
         return;
     }
     switch (d->CtlID)
@@ -1063,7 +1076,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         FillRect( dc, &r, br ); DeleteObject( br );
         SelectObject( dc, g_font_bold ); SetTextColor( dc, dis ? COL_DIM : COL_TEXT );
         DrawTextA( dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE );
-        if (focus) { RECT f = r; InflateRect( &f, -3, -3 ); DrawFocusRect( dc, &f ); }
+        if (focus) { RECT f = r; InflateRect( &f, -3, -3 ); focus_frame( dc, &f, d->itemState ); }
         break;
     }
     case ID_SECONDARY:
@@ -1075,7 +1088,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         SelectObject( dc, oldp ); SelectObject( dc, oldb ); DeleteObject( pen ); DeleteObject( br );
         SelectObject( dc, g_font_bold ); SetTextColor( dc, COL_TEXT );
         DrawTextA( dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE );
-        if (focus) { RECT f = r; InflateRect( &f, -4, -4 ); DrawFocusRect( dc, &f ); }
+        if (focus) { RECT f = r; InflateRect( &f, -4, -4 ); focus_frame( dc, &f, d->itemState ); }
         break;
     }
     case ID_BACK:
@@ -1087,7 +1100,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         MoveToEx( dc, cx + 9, cy, NULL ); LineTo( dc, cx - 9, cy );
         MoveToEx( dc, cx - 2, cy - 7, NULL ); LineTo( dc, cx - 9, cy ); LineTo( dc, cx - 2, cy + 7 );
         SelectObject( dc, oldp ); DeleteObject( pen );
-        if (focus) { RECT f = r; InflateRect( &f, -2, -2 ); DrawFocusRect( dc, &f ); }
+        if (focus) { RECT f = r; InflateRect( &f, -2, -2 ); focus_frame( dc, &f, d->itemState ); }
         break;
     }
     }

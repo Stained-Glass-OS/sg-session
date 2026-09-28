@@ -1,3 +1,11 @@
+sg-session (0.1.0-58) unstable; urgency=medium
+
+  * First-run setup draws keyboard focus as a solid light frame, and only
+    once the keyboard is in use: DrawFocusRect's dotted line came out
+    green on the purple selection of every list. Test: make test-oobe.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
+
 sg-session (0.1.0-57) unstable; urgency=medium
 
   * Elevation checks a password in a moment, not 8 seconds: the PAM check
