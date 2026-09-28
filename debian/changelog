@@ -1,3 +1,11 @@
+sg-session (0.1.0-55) unstable; urgency=medium
+
+  * An elevated program started in a folder stays there; only one started
+    with no folder (the root) starts in C:\windows\system32. Firefox's
+    installer runs its setup where it unpacked it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 22:40:00 -0700
+
 sg-session (0.1.0-54) unstable; urgency=medium
 
   * The first-run setup no longer offers Brave (its installer depends on an

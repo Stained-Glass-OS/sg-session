@@ -378,14 +378,20 @@ int main(int argc, char **argv)
                 args = c;
             }
         }
-        /* An elevated program starts in the system directory, as on Windows
-         * (elevated cmd opens in C:\Windows\system32), not at Z:\. */
+        /* An elevated program started with no directory of its own starts in
+         * the system directory, as on Windows (elevated cmd opens in
+         * C:\Windows\system32), not at Z:\. One started in a folder stays
+         * there: Firefox's installer runs setup.exe where it unpacked it, and
+         * moved to system32 it installed nothing. */
         snprintf(sys32, sizeof(sys32), "%s/drive_c/windows/system32", prefix_dir());
         pid = fork();
         if (pid < 0) { kill(xpid, SIGTERM); rm_dir(dir, cookie); return 125; }
         if (!pid) {
             signal(SIGPIPE, SIG_DFL);
-            if (chdir(sys32) < 0) { /* stays where it is */ }
+            {
+                char here[16];
+                if (getcwd(here, sizeof(here)) && !strcmp(here, "/") && chdir(sys32) < 0) { /* stays */ }
+            }
             execvp(args[0], args);
             _exit(127);
         }
