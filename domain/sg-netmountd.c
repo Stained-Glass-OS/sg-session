@@ -25,6 +25,20 @@
  *     MOUNT <server> <share>                   -> OK <path> | ERR <errno> <why>
  *     MAP <letter> <server> <share> [<dir>...] -> OK <path> | ERR ...
  *     UNMAP <letter>                           -> OK | ERR ...
+ *     LOGON <server> <share> <user> <password> -> OK <path> | ERR ...
+ *     LOGOFF <server> <share>                  -> OK | ERR ...
+ *
+ * LOGON is Windows' "Enter network credentials" (net use /user:, a share
+ * that refuses a guest): the share is mounted with that name and password
+ * for the requester alone, under
+ *
+ *     /run/stained-glass-net/users/<uid>/unc/<server>/<share>
+ *
+ * in a directory only they can enter, the files theirs (uid=, 0600/0700).
+ * ntdll looks there first, and MOUNT and MAP use it when it is there. The
+ * password reaches mount.cifs in a credentials file readable by root alone,
+ * removed at once -- never on a command line. The password is the rest of
+ * the line after the fourth tab.
  *
  * Root may also run it directly for a user (the PAM session helper does):
  *     sg-netmountd --uid UID MAP H dc1 home alice
@@ -39,12 +53,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <resolv.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -53,6 +69,7 @@
 #define NET_ROOT   "/run/stained-glass-net"
 #define UNC_ROOT   NET_ROOT "/unc"
 #define DRIVE_ROOT NET_ROOT "/drives"
+#define USER_ROOT  NET_ROOT "/users"
 #define ROLE_FILE  "/etc/stained-glass/role"
 
 static FILE *out;
@@ -210,13 +227,22 @@ static int run_mount(const char *unc, const char *path, const char *opts)
     return WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -1;
 }
 
-/* Mount //server/share for uid (its ticket, or as a guest), unless it is mounted already. */
+/* where uid's own connection to a share (LOGON) is mounted */
+static void user_path(uid_t uid, const char *server, const char *share, char *path, size_t plen)
+{
+    snprintf(path, plen, "%s/%u/unc/%s/%s", USER_ROOT, (unsigned)uid, server, share);
+}
+
+/* Mount //server/share for uid (its ticket, or as a guest), unless it is
+ * mounted already -- or uid has a connection of its own to it (LOGON). */
 static int do_mount(uid_t uid, char *server, char *share, char *path, size_t plen)
 {
     char host[256], ip[64], unc[600], opts[512];
 
     lower(server);
     lower(share);
+    user_path(uid, server, share, path, plen);
+    if (is_mounted(path)) return 0;
     snprintf(path, plen, "%s/%s/%s", UNC_ROOT, server, share);
     if (is_mounted(path)) return 0;
     if (!resolve(server, host, sizeof(host), ip, sizeof(ip))) { errno = EHOSTUNREACH; return -1; }
@@ -249,6 +275,58 @@ static int do_mount(uid_t uid, char *server, char *share, char *path, size_t ple
     return 0;
 }
 
+/* LOGON: mount //server/share for uid alone, with a name and password.
+ * "DOMAIN\\user" names the account's domain (or the server's own name for a
+ * local account on it). A connection uid already has is replaced. */
+static int do_logon(uid_t uid, char *server, char *share, const char *user, const char *password,
+                    char *path, size_t plen)
+{
+    char host[256], ip[64], unc[600], opts[768], dir[128], name[256], domain[256] = "", cred[] = NET_ROOT "/cred.XXXXXX";
+    const char *sep;
+    struct passwd *pw = getpwuid(uid);
+    FILE *f;
+    int fd, ok;
+
+    if (!pw) { errno = ESRCH; return -1; }
+    lower(server);
+    lower(share);
+    user_path(uid, server, share, path, plen);
+    if (is_mounted(path)) umount2(path, MNT_DETACH);
+    if (!resolve(server, host, sizeof(host), ip, sizeof(ip))) { errno = EHOSTUNREACH; return -1; }
+
+    /* users/ anyone may pass; users/<uid> is theirs alone */
+    snprintf(dir, sizeof(dir), "%s/%u", USER_ROOT, (unsigned)uid);
+    if (mkdirs(USER_ROOT "/", 0755) || (mkdir(dir, 0700) && errno != EEXIST)) return -1;
+    if (chown(dir, uid, pw->pw_gid) || chmod(dir, 0700)) return -1;
+    if (mkdirs(path, 0755)) return -1;
+
+    if ((sep = strchr(user, '\\'))) {
+        snprintf(domain, sizeof(domain), "%.*s", (int)(sep - user), user);
+        snprintf(name, sizeof(name), "%s", sep + 1);
+    } else snprintf(name, sizeof(name), "%s", user);
+    {
+        mode_t old = umask(077);
+        fd = mkstemp(cred);
+        umask(old);
+    }
+    if (fd < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) close(fd); return -1; }
+    fprintf(f, "username=%s\npassword=%s\n", name, password);
+    if (domain[0]) fprintf(f, "domain=%s\n", domain);
+    fclose(f);
+
+    snprintf(unc, sizeof(unc), "//%s/%s", host, share);
+    snprintf(opts, sizeof(opts), "credentials=%s,uid=%u,gid=%u,forceuid,forcegid,file_mode=0600,dir_mode=0700,ip=%s,nosuid,nodev",
+             cred, (unsigned)uid, (unsigned)pw->pw_gid, ip);
+    ok = !run_mount(unc, path, opts);
+    unlink(cred);
+    if (!ok) {
+        rmdir(path);
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+
 static int valid_letter(const char *s, char *letter)
 {
     if (strlen(s) != 1 || !isalpha((unsigned char)s[0])) return 0;
@@ -262,6 +340,26 @@ static int handle(uid_t uid, char *line)
     int argc = 0, i;
 
     line[strcspn(line, "\r\n")] = 0;
+    if (!strncmp(line, "LOGON\t", 6)) {
+        /* the password is the rest of the line: it may hold anything but a newline */
+        char *f[4], *p = line + 6;
+        for (i = 0; i < 3; i++) {
+            f[i] = p;
+            if (!(p = strchr(p, '\t'))) { reply("ERR %d bad request", EINVAL); return 0; }
+            *p++ = 0;
+        }
+        f[3] = p;
+        if (!valid_server(f[0]) || !valid_component(f[1]) || !f[2][0] || strlen(f[2]) > 200 ||
+            strpbrk(f[2], ",=")) { reply("ERR %d bad name", EINVAL); return 0; }
+        if (do_logon(uid, f[0], f[1], f[2], f[3], path, sizeof(path))) {
+            memset(line, 0, strlen(line) + 1);
+            reply("ERR %d cannot mount", errno);
+            return 0;
+        }
+        memset(line, 0, strlen(line) + 1);
+        reply("OK %s", path);
+        return 0;
+    }
     for (tok = strtok_r(line, "\t", &save); tok && argc < 16; tok = strtok_r(NULL, "\t", &save))
         argv[argc++] = tok;
     if (!argc) return 0;
@@ -295,6 +393,16 @@ static int handle(uid_t uid, char *line)
         if (!valid_letter(argv[1], &letter)) { reply("ERR %d bad name", EINVAL); return 0; }
         snprintf(link, sizeof(link), "%s/%u/%c:", DRIVE_ROOT, (unsigned)uid, letter);
         if (unlink(link) && errno != ENOENT) { reply("ERR %d cannot unmap", errno); return 0; }
+        reply("OK");
+        return 0;
+    }
+    if (!strcmp(argv[0], "LOGOFF") && argc == 3) {
+        if (!valid_server(argv[1]) || !valid_component(argv[2])) { reply("ERR %d bad name", EINVAL); return 0; }
+        lower(argv[1]);
+        lower(argv[2]);
+        user_path(uid, argv[1], argv[2], path, sizeof(path));
+        if (is_mounted(path) && umount2(path, MNT_DETACH)) { reply("ERR %d cannot disconnect", errno); return 0; }
+        rmdir(path);
         reply("OK");
         return 0;
     }

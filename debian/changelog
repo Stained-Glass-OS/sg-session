@@ -4,6 +4,14 @@ sg-session (0.1.0-59) unstable; urgency=medium
     small untitled window at the top left, appeared once the program added
     a notification icon (Microsoft 365 setup). sg-elevated-run sets
     ShowSystray=0 for it.
+  * sg-netmountd LOGON / LOGOFF: a share that refuses a guest -- a Windows
+    PC's shares -- opens with a name and password (File Explorer's "Enter
+    network credentials", net use /user:). Shares of such a PC were listed
+    with no files in them. The connection is the requester's alone, under
+    /run/stained-glass-net/users/<uid> (files theirs, 0600/0700); the
+    password reaches mount.cifs in a root-only credentials file removed at
+    once. MOUNT and MAP use it when it is there. Test:
+    test/netmount-logon-test.sh (root, smbd).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 20:00:00 -0700
 
