@@ -52,7 +52,7 @@ log() { printf 'sg-oobed: %s\n' "$*" >&2; }
 LAYOUTS="us:00000409 gb:00000809 de:00000407 fr:0000040c es:0000040a it:00000410 pt:00000816
 br:00000416 nl:00000413 be:0000080c ch:00000807 se:0000041d no:00000414 dk:00000406 fi:0000040b
 pl:00000415 cz:00000405 hu:0000040e jp:00000411 ca:00001009 latam:0000080a ie:00001809"
-BROWSERS="none Mozilla.Firefox Mozilla.Firefox.ESR"
+BROWSERS="none Mozilla.Firefox Google.Chrome Brave.Brave Microsoft.Edge Mozilla.Firefox.ESR"
 
 klid_of() {
     for _l in $LAYOUTS; do [ "${_l%%:*}" = "$1" ] && { echo "${_l#*:}"; return 0; }; done

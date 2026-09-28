@@ -18,9 +18,43 @@ id=$(head -1 "$REQ")
 case "$id" in
     Mozilla.Firefox)     url='https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
     Mozilla.Firefox.ESR) url='https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
+    Google.Chrome|Brave.Brave|Microsoft.Edge) url=''; exe='' ;;
     *) sg_log "oobe-browser: '$id' is not offered; nothing to do"; rm -f "$REQ"; exit 0 ;;
 esac
 sg_log "oobe-browser: installing $id"
+# SYSTEM's temporary folder: installers unpack there first (Firefox's did,
+# and failed without it). sg-services-start makes it too; this may run first.
+runuser -u "$SG_SYSTEM_USER" -- mkdir -p "$SG_PREFIX/drive_c/users/$SG_SYSTEM_USER/AppData/Local/Temp" 2>/dev/null
+# Get a web browser (sg-shell) installs what it offers -- from the
+# publisher's download in winget's manifests, checked against its SHA-256 --
+# with no window: /install ID. As SYSTEM, which needs no elevation
+# (SG_IN_BROKER: never the consent prompt).
+browser="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-browser64.exe"
+if [ -f "$browser" ] && [ "$id" != Mozilla.Firefox.ESR ]; then
+    # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
+    runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY SG_IN_BROKER=1 \
+        SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" ID="$id" BROWSER="$browser" sh -c '
+        . "$SG_LIB/sg-common.sh"; sg_wine_env
+        exec wine "$BROWSER" /install "$ID"' 2>&1 | sed 's/^/oobe-browser: /' >&2
+fi
+if [ -z "$exe" ]; then
+    # sg-browser's install shows in Program Files
+    for p in "Google/Chrome/Application/chrome.exe" "BraveSoftware/Brave-Browser/Application/brave.exe" \
+             "Microsoft/Edge/Application/msedge.exe"; do
+        for pf in "Program Files" "Program Files (x86)"; do
+            if [ -f "$SG_PREFIX/drive_c/$pf/$p" ]; then
+                sg_log "oobe-browser: $id is installed"; rm -f "$REQ"; exit 0
+            fi
+        done
+    done
+    sg_log "oobe-browser: $id was not installed; trying again at the next boot"
+    exit 1
+fi
+if [ -f "$SG_PREFIX/drive_c/Program Files/$exe" ]; then
+    sg_log "oobe-browser: $id is installed"
+    rm -f "$REQ"
+    exit 0
+fi
 # shellcheck disable=SC2016  # expanded by the inner shell, as SYSTEM
 runuser -u "$SG_SYSTEM_USER" -- env -u DISPLAY -u WAYLAND_DISPLAY \
     SG_WINSTATION='__wineservice_winstation\Default' SG_LIB="$SG_LIB" ID="$id" URL="$url" sh -c '

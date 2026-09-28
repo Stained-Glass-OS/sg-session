@@ -7,6 +7,13 @@ sg-session (0.1.0-53) unstable; urgency=medium
     sg-settingsctl updates check starts sg-update-prepare.service, which
     config/polkit/50-stained-glass-updates.rules allows for a local, active
     session (only that unit, only start). It asked for an administrator.
+  * The first-run setup offers every browser Get a web browser does --
+    Firefox, Chrome, Brave, Edge -- and Firefox ESR; the chosen one is
+    installed by sg-shell's sg-browser (/install ID: the publisher's
+    download, checked against its SHA-256) as SYSTEM, whose temporary folder
+    is made first. The chosen Firefox had not been installed: its installer
+    unpacks into TEMP, which SYSTEM did not have. Tests: make test-oobe,
+    oobe-e2e.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 20:40:00 -0700
 
