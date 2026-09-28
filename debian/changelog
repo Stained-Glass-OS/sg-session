@@ -7,6 +7,7 @@ sg-session (0.1.0-52) unstable; urgency=medium
     read end-of-file and ended ("nothing appears after consent"). Elevated
     programs start in C:\windows\system32, as on Windows, not Z:\.
     Test: make test-elevate-console.
+  * The shell starts the taskbar's volume icon (sg-shell's sg-volume).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 17:40:00 -0700
 
