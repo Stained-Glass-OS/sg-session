@@ -29,6 +29,12 @@ sg-session (0.1.0-58) unstable; urgency=medium
     share -- a NAS, a PC's Public share. Every UNC path failed with
     "Required key not available". Test: test/netmount-guest-test.sh (root,
     smbd, cifs-utils).
+  * sg-netbrowse: what File Explorer's Network folder shows (wine-sg 0469)
+    -- the computers on the network (mDNS via avahi, NetBIOS via
+    nmblookup) and a computer's shares (smbclient; Kerberos on a domain,
+    else as a guest; hidden $ shares left out). Depends on cifs-utils
+    (sg-netmountd's mount.cifs, which was only there by chance), smbclient
+    and samba-common-bin; recommends avahi-utils.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
 
