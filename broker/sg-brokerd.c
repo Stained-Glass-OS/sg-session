@@ -552,6 +552,9 @@ int main(void)
 
     if (!sockpath) sockpath = "/run/stained-glass-broker/broker.sock";
     if (!helper) helper = "/usr/libexec/stained-glass/sg-rdp-pamcheck";
+    /* Elevation is asked for at this machine: no remote host for PAM (a name
+     * there was looked up in DNS, 8 s per password check) */
+    setenv("SG_PAMCHECK_RHOST", "", 1);
 
     /* Daemonise unless asked to stay in the foreground (systemd Type=simple,
      * and the gate, set SG_BROKER_FOREGROUND). Like wineserver, the parent

@@ -77,7 +77,7 @@ int main( void )
     char user[MAXFIELD];
     struct pam_conv pc = { conv, NULL };
     pam_handle_t *ph = NULL;
-    const char *s;
+    const char *s, *rhost;
     int rc, console, flags;
 
     if (!service) service = "stained-glass-remote";
@@ -96,7 +96,13 @@ int main( void )
      * passwords to console logon only". The live system's account has none. */
     console = (s = getenv( "SG_PAMCHECK_CONSOLE" )) && !strcmp( s, "1" );
     flags = console ? 0 : PAM_DISALLOW_NULL_AUTHTOK;
-    if (rc == PAM_SUCCESS && !console) rc = pam_set_item( ph, PAM_RHOST, "rdp" );
+    /* The remote host: SG_PAMCHECK_RHOST when the caller gives one (empty:
+     * none, as for elevation at this machine), else "rdp" off the console.
+     * libpam's audit record looks a host name up in DNS -- "rdp" cost two
+     * 4 s timeouts, and elevation took 8 s to check a password (field
+     * report 2) */
+    if (!(rhost = getenv( "SG_PAMCHECK_RHOST" ))) rhost = console ? "" : "rdp";
+    if (rc == PAM_SUCCESS && *rhost) rc = pam_set_item( ph, PAM_RHOST, rhost );
     if (rc == PAM_SUCCESS) rc = pam_authenticate( ph, flags );
     /* Authentication is not authorisation: an expired or locked account has a
      * correct password and must still be refused. */

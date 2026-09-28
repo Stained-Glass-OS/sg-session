@@ -21,6 +21,9 @@ case "$r" in *"auth_null=refused"*"rhost=rdp"*|*"rhost=rdp"*"auth_null=refused"*
 r=$(check env SG_PAMCHECK_CONSOLE=1 SG_REMOTE_PAM_SERVICE=stained-glass-lock)
 case "$r" in *"auth_null=allowed"*) pass "the lock screen, at the console, allows one ($r)";; *) fail "console: $r";; esac
 case "$r" in *rhost=*) fail "the console check claims to be remote";; *) pass "and does not claim to be remote";; esac
+r=$(check env -u SG_PAMCHECK_CONSOLE SG_PAMCHECK_RHOST=)
+case "$r" in *rhost=*) fail "elevation names a remote host (libpam looks it up in DNS: 8 s): $r";; *"auth_null=refused"*) pass "elevation names no remote host and still refuses a blank password ($r)";; *) fail "elevation: $r";; esac
+grep -q 'setenv("SG_PAMCHECK_RHOST", "", 1)' "$HERE/broker/sg-brokerd.c" && pass "sg-brokerd asks for no remote host" || fail "sg-brokerd leaves the remote host to the default"
 r=$(check env SG_PAMCHECK_CONSOLE=yes)
 case "$r" in *"auth_null=refused"*) pass "only exactly SG_PAMCHECK_CONSOLE=1 counts";; *) fail "loose console flag: $r";; esac
 grep -q 'setenv( "SG_PAMCHECK_CONSOLE", "1", 1 )' "$HERE/greeter/sg-lockd.c" && pass "sg-lockd asks for the console rule" || fail "sg-lockd does not set the console rule"
