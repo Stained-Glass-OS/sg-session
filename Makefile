@@ -179,6 +179,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 config/polkit/50-stained-glass-power.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-updates.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-media.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
+	install -D -m 0644 config/sysctl/60-stained-glass-ping.conf $(DESTDIR)$(PREFIX)/lib/sysctl.d/60-stained-glass-ping.conf
 	install -d $(DESTDIR)/etc/udisks2
 	install -m 0644 config/udisks2/mount_options.conf $(DESTDIR)/etc/udisks2/mount_options.conf
 

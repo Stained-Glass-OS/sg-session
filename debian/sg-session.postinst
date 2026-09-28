@@ -9,6 +9,9 @@ SG_ADMIN_GROUP=sg-admins
 
 case "$1" in
     configure)
+        # every account may ping (60-stained-glass-ping.conf) -- now, not
+        # only from the next boot
+        sysctl -q -p /usr/lib/sysctl.d/60-stained-glass-ping.conf >/dev/null 2>&1 || true
         # The session user owns the system prefix. Phase 0 has exactly one.
         # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
         #
