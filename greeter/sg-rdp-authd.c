@@ -53,6 +53,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -149,7 +150,7 @@ static int write_full( int fd, const void *buf, size_t len )
 
 /* Run the PAM helper for one credential. The request arrives as two
  * length-prefixed fields; the helper gets them NUL-separated on stdin. */
-static int monitor_check( const char *helper, const char *user, const char *pass )
+static int monitor_check( const char *helper, const char *user, const char *pass, const char *rhost )
 {
     int in[2], out[2], status = 0;
     char reply[256] = "";
@@ -163,6 +164,9 @@ static int monitor_check( const char *helper, const char *user, const char *pass
         dup2( in[0], STDIN_FILENO );
         dup2( out[1], STDOUT_FILENO );
         close( in[0] ); close( in[1] ); close( out[0] ); close( out[1] );
+        /* the client's address as PAM's remote host: a number, which libpam's
+         * audit record does not look up in DNS (the default "rdp" cost 8 s) */
+        setenv( "SG_PAMCHECK_RHOST", rhost, 1 );
         execl( helper, helper, (char *)NULL );
         _exit( 127 );
     }
@@ -446,8 +450,9 @@ static void monitor_loop( int fd, const char *helper )
 {
     for (;;)
     {
-        unsigned ulen, plen, size[2];
-        char user[MAXFIELD], pass[MAXFIELD];
+        unsigned ulen, plen, hlen, size[2];
+        char user[MAXFIELD], pass[MAXFIELD], rhost[INET6_ADDRSTRLEN] = "";
+        unsigned char addr[sizeof(struct in6_addr)];
         unsigned char ok;
         int status = SESSION_FAILED, session = -1;
 
@@ -458,9 +463,14 @@ static void monitor_loop( int fd, const char *helper )
         if (ulen >= MAXFIELD || plen >= MAXFIELD) _exit( 1 );
         if (read_full( fd, user, ulen ) < 0 || read_full( fd, pass, plen ) < 0) _exit( 0 );
         if (read_full( fd, size, sizeof(size) ) < 0) _exit( 0 );
-        user[ulen] = 0; pass[plen] = 0;
+        if (read_full( fd, &hlen, sizeof(hlen) ) < 0) _exit( 0 );
+        if (hlen >= sizeof(rhost)) _exit( 1 );
+        if (read_full( fd, rhost, hlen ) < 0) _exit( 0 );
+        user[ulen] = 0; pass[plen] = 0; rhost[hlen] = 0;
+        /* only an address, never a name to look up */
+        if (inet_pton( AF_INET, rhost, addr ) != 1 && inet_pton( AF_INET6, rhost, addr ) != 1) rhost[0] = 0;
 
-        ok = (unsigned char)monitor_check( helper, user, pass );
+        ok = (unsigned char)monitor_check( helper, user, pass, rhost );
         explicit_bzero( pass, sizeof(pass) );
         /* A failed guess costs the guesser time here, in the one process the
          * network cannot reach, so it cannot be skipped by reconnecting. */
@@ -496,22 +506,26 @@ static int recv_verdict( int sock, unsigned char msg[2], int *fd )
 
 /* Returns 1 if the password is right; then *session is a connection to the
  * user's session, or -1 with *status saying why there is none. */
-static int ask_monitor( const char *user, const char *pass, unsigned width, unsigned height,
+static int ask_monitor( const char *user, const char *pass, const char *rhost, unsigned width, unsigned height,
                         int *session, int *status )
 {
     unsigned ulen = (unsigned)strlen( user ), plen = (unsigned)strlen( pass ), size[2] = { width, height };
+    unsigned hlen = rhost ? (unsigned)strlen( rhost ) : 0;
     unsigned char msg[2] = { 0, SESSION_FAILED };
     int res = -1;
 
     *session = -1;
     *status = SESSION_FAILED;
     if (ulen >= MAXFIELD || plen >= MAXFIELD) return 0;
+    if (hlen >= INET6_ADDRSTRLEN) hlen = 0;
     EnterCriticalSection( &g_monitor_lock );
     if (!write_full( g_monitor_fd, &ulen, sizeof(ulen) ) &&
         !write_full( g_monitor_fd, &plen, sizeof(plen) ) &&
         !write_full( g_monitor_fd, user, ulen ) &&
         !write_full( g_monitor_fd, pass, plen ) &&
         !write_full( g_monitor_fd, size, sizeof(size) ) &&
+        !write_full( g_monitor_fd, &hlen, sizeof(hlen) ) &&
+        !write_full( g_monitor_fd, hlen ? rhost : "", hlen ) &&
         !recv_verdict( g_monitor_fd, msg, session ))
         res = msg[0];
     LeaveCriticalSection( &g_monitor_lock );
@@ -566,7 +580,7 @@ static BOOL authenticate( freerdp_peer *peer )
         int session = -1, status = SESSION_FAILED;
         char err[256];
 
-        ok = ask_monitor( user, pass, freerdp_settings_get_uint32( settings, FreeRDP_DesktopWidth ),
+        ok = ask_monitor( user, pass, peer->hostname, freerdp_settings_get_uint32( settings, FreeRDP_DesktopWidth ),
                           freerdp_settings_get_uint32( settings, FreeRDP_DesktopHeight ), &session, &status );
         logmsg( "LOGON %s user=%s from=%s", ok ? "OK" : "FAIL", user, peer->hostname );
         if (ok)

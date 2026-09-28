@@ -7,6 +7,9 @@ sg-session (0.1.0-57) unstable; urgency=medium
   * The permission prompt names the program (its file name, in bold) and
     shows its whole command as "Program location", on up to three lines: a
     long one ("msiexec.exe /i ...msi") was cut to its first words.
+  * Remote Desktop sign-in names the client's address, not "rdp", as PAM's
+    remote host: no DNS lookup (8 s per sign-in), and the Security log
+    shows where a sign-in came from. Test: make test-rdp.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 16:30:00 -0700
 
