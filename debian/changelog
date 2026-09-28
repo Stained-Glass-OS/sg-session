@@ -8,6 +8,17 @@ sg-session (0.1.0-52) unstable; urgency=medium
     programs start in C:\windows\system32, as on Windows, not Z:\.
     Test: make test-elevate-console.
   * The shell starts the taskbar's volume icon (sg-shell's sg-volume).
+  * Run as administrator waits: sg-elevate ends when the elevated program
+    does, with its exit code (the broker's launching child reports it), as a
+    process started elevated does on Windows. A caller waiting on an
+    elevated installer -- Get a web browser running Edge's MSI -- went on at
+    once, deleted the package, and msiexec found no file. Codes above 255
+    (Unix exit statuses have eight bits): 3010 and 1641 are success, the
+    rest 255. Test: make test-audit.
+  * The SYSTEM account has a temporary folder: sg-services-start makes
+    C:\users\sgsystem\AppData\Local\Temp. The profile is made afresh on a
+    new machine without it, and msiexec run as an administrator could not
+    open its copy of a package (exit 91; 2 for Edge).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 17:40:00 -0700
 

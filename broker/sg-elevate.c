@@ -131,6 +131,24 @@ int main(int argc, char **argv)
     if (write_full(fd, &len, sizeof(len)) || write_full(fd, blob, off)) { close(fd); return 2; }
 
     if (read(fd, &status, 1) != 1) { fprintf(stderr, "sg-elevate: broker closed the connection\n"); close(fd); return 2; }
+    if (status == 0) {
+        /* launched: wait for it to end, and end with its code, so the
+         * caller's handle to this process behaves as one to the elevated
+         * program would (an installer's caller waits for the install). A
+         * Unix exit status has eight bits: a Windows code above 255 keeps
+         * its meaning as well as it can -- the success-with-restart codes
+         * (3010, 1641) are success, the rest failure. A broker that sends no
+         * code (an older one) leaves the old answer, 0. */
+        uint32_t code = 0;
+        size_t got = 0;
+        ssize_t r;
+        while (got < sizeof(code) && ((r = read(fd, (char *)&code + got, sizeof(code) - got)) > 0 || (r < 0 && errno == EINTR)))
+            if (r > 0) got += (size_t)r;
+        close(fd);
+        if (got != sizeof(code)) return 0;
+        if (code == 3010 || code == 1641) return 0;
+        return code > 255 ? 255 : (int)code;
+    }
     close(fd);
 
     switch (status) {

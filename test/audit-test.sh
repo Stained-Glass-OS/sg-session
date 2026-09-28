@@ -96,6 +96,15 @@ SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/true >/dev/null 2>&1; sleep 1
 events | tr '\n' '|' | grep -q "ID 4672|TYPE success|CATEGORY 12548|.*STRING $ME|.*SeDebugPrivilege.*|STRING /bin/true|" \
     && pass "an administrator's elevation (consent): 4672 for $ME, the program named" || fail "admin elevation: $(events)"
 drain
+# the requester's sg-elevate ends when the elevated program does, with its code
+# (an installer's caller waits for the install: Edge's package was deleted
+# under a still-starting msiexec)
+t0=$(date +%s)
+SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/sh -c 'sleep 2; exit 7' >/dev/null 2>&1; rc=$?
+t1=$(date +%s)
+{ [ "$rc" = 7 ] && [ $((t1 - t0)) -ge 2 ]; } && pass "sg-elevate waits for the elevated program and ends with its code (7)" \
+    || fail "sg-elevate: exit $rc after $((t1 - t0)) s"
+drain
 broker no "$T/pam-yes"
 sudo -n -u "$SG_OTHER" env SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/true >/dev/null 2>&1; sleep 1
 e=$(events | tr '\n' '|')

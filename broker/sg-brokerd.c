@@ -462,15 +462,40 @@ out:
  * the program runs with no display at all. */
 static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run";
 
-static void launch(char **argv, char **envp, const char *cwd, const char *system_user,
-                   const struct surface *sf, uid_t requester_uid)
+/* Starts the elevated program. The child this forks answers the requester
+ * itself, on CONN: "launched" (0), then -- when the program has ended -- its
+ * exit status as four bytes, so the requester's process ends when the
+ * elevated one does and with its code, as a process started elevated does on
+ * Windows. An installer run as an administrator (msiexec for Edge) was
+ * otherwise "done" at once: its caller went on, deleted the package, and the
+ * installer found no file. The program itself does not get CONN. Returns FALSE
+ * if nothing could be started (the caller answers then). */
+static int launch(char **argv, char **envp, const char *cwd, const char *system_user,
+                  const struct surface *sf, uid_t requester_uid, int conn)
 {
     struct passwd *pw = getpwnam(system_user);
-    pid_t pid = fork();
-    if (pid < 0) return;
-    if (pid) return;               /* parent: fire and forget (the broker keeps serving) */
+    pid_t pid = fork(), prog;
+    if (pid < 0) return 0;
+    if (pid) return 1;             /* parent: the broker keeps serving */
 
     setsid();
+    signal(SIGCHLD, SIG_DFL);      /* the broker ignores it; this child waits */
+    signal(SIGPIPE, SIG_IGN);
+    {
+        unsigned char launched = 0;
+        write_full(conn, &launched, 1);
+    }
+    if ((prog = fork()) < 0) _exit(1);
+    if (prog) {
+        int st = 0;
+        uint32_t code;
+        while (waitpid(prog, &st, 0) < 0 && errno == EINTR) ;
+        code = WIFEXITED(st) ? (uint32_t)WEXITSTATUS(st) : 128u + (uint32_t)WTERMSIG(st);
+        write_full(conn, &code, sizeof(code));
+        close(conn);
+        _exit(0);
+    }
+    close(conn);
     /* a clean environment: only what the client passed, plus the SYSTEM
      * account's own identity */
     clearenv();
@@ -610,9 +635,13 @@ int main(void)
                 const char *st[4] = { by, computer_name(), ADMIN_PRIVILEGES, argv[0] };
                 audit(4672, 1, 12548, st, 4);
             }
-            launch(argv, envp, cwd, g_system_user, &used, cred.uid);
-            status = 0;
-            logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);
+            if (launch(argv, envp, cwd, g_system_user, &used, cred.uid, conn)) {
+                logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);
+                close(conn);   /* the launching child answers */
+                if (getenv("SG_BROKER_ONCE")) break;
+                continue;
+            }
+            status = 2;
         } else {
             status = 1;
             logmsg("denied for %s: %s", rpw->pw_name, argv[0]);
