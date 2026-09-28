@@ -10,6 +10,15 @@ sg-session (0.1.0-58) unstable; urgency=medium
     wine-sg 0466 keeps permitted only and raises for one fchmod: SYSTEM
     resetting the permissions of a file another account owns (the .NET SDK
     installer's Package Cache). sg-services-start does not inherit it.
+  * Removable media show in File Explorer, for every user, as on Windows: a
+    CD, DVD or ISO in a drive (a virtual machine's too) or a USB stick is
+    mounted as it arrives (udev 71-stained-glass-media.rules,
+    sg-automount@.service, as the Windows system, under /media/<label>)
+    and wine-sg's mountmgr gives it a drive letter; sg-eject unmounts and
+    ejects it for File Explorer's Eject (wine-sg 0468). polkit: sgsystem
+    mounts, the active user ejects -- removable drives only. FAT/exFAT
+    sticks are writable by every user. Depends on udisks2.
+    Test: test/media-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
 

@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount removable media %I for File Explorer
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# Started by udev (71-stained-glass-media.rules) when a disc, stick or
+# removable disk arrives. The Windows system's mountmgr gives it a drive letter.
+After=udisks2.service
+Wants=udisks2.service
+
+[Service]
+Type=oneshot
+User=sgsystem
+# Already mounted (the live system's own medium, a second event for the same
+# disc) is not a failure.
+ExecStart=-/usr/bin/udisksctl mount --no-user-interaction -b /dev/%I

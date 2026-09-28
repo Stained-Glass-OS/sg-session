@@ -1,0 +1,37 @@
+#!/bin/sh
+# sg-eject DEVICE|MOUNTPOINT: unmount a removable medium and eject it, through UDisks2 --
+# File Explorer's Eject (wine-sg: IOCTL_STORAGE_EJECT_MEDIA when the drive is
+# busy). A mounted disc keeps the drive's tray locked, so the drive's own
+# button does nothing until this has run. polkit
+# (50-stained-glass-media.rules) lets the active local user do it for
+# removable media, as Windows lets any user eject.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+dev=${1:?usage: sg-eject DEVICE|MOUNTPOINT}
+# File Explorer names the drive by where it is mounted
+if [ -d "$dev" ]; then
+    dev=$(findmnt -n -o SOURCE --target "$dev") || { echo "sg-eject: nothing is mounted at $1" >&2; exit 1; }
+fi
+case "$dev" in /dev/*) ;; *) dev=/dev/$dev ;; esac
+name=$(basename "$(readlink -f "$dev")")
+block=/org/freedesktop/UDisks2/block_devices/$(printf '%s' "$name" | sed 's/[^A-Za-z0-9]/_/g')
+call() { busctl --system call org.freedesktop.UDisks2 "$@" 'a{sv}' 0 >/dev/null 2>&1; }
+
+# the drive this block device (or its partition) belongs to
+drive=$(busctl --system get-property org.freedesktop.UDisks2 "$block" org.freedesktop.UDisks2.Block Drive 2>/dev/null |
+        sed -n 's/^o "\(.*\)"$/\1/p')
+if [ -z "$drive" ] || [ "$drive" = "/" ]; then echo "sg-eject: $dev is not a drive UDisks2 knows" >&2; exit 1; fi
+
+# unmount every mounted filesystem on that drive (a stick may have several)
+for obj in $(busctl --system tree --list org.freedesktop.UDisks2 2>/dev/null | grep '/block_devices/'); do
+    d=$(busctl --system get-property org.freedesktop.UDisks2 "$obj" org.freedesktop.UDisks2.Block Drive 2>/dev/null |
+        sed -n 's/^o "\(.*\)"$/\1/p')
+    [ "$d" = "$drive" ] || continue
+    busctl --system get-property org.freedesktop.UDisks2 "$obj" org.freedesktop.UDisks2.Filesystem MountPoints \
+        2>/dev/null | grep -q '^aay [1-9]' || continue
+    call "$obj" org.freedesktop.UDisks2.Filesystem Unmount || { echo "sg-eject: $obj is in use" >&2; exit 1; }
+done
+# a disc ejects; a stick has nothing to eject, and is safe to remove now
+call "$drive" org.freedesktop.UDisks2.Drive Eject || true
+exit 0

@@ -92,6 +92,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0755 setup/sg-oobed $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
 	install -m 0755 setup/sg-installd setup/sg-live-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 bin/sg-eject $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-polimport ]; then \
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-polimport $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
@@ -163,6 +164,7 @@ install: d3d-probe greeter token-probe procagent rdp
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
+	    systemd/sg-automount@.service \
 	    systemd/sg-print-setup.service $(UNITDIR)
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
@@ -171,10 +173,14 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 systemd/user-runtime-dir@.service.d/50-stained-glass-drives.conf \
 	    $(UNITDIR)/user-runtime-dir@.service.d/
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
+	install -m 0644 udev/71-stained-glass-media.rules $(UDEVDIR)
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
 	install -m 0644 config/polkit/50-stained-glass-network.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-power.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-updates.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
+	install -m 0644 config/polkit/50-stained-glass-media.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
+	install -d $(DESTDIR)/etc/udisks2
+	install -m 0644 config/udisks2/mount_options.conf $(DESTDIR)/etc/udisks2/mount_options.conf
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
@@ -205,10 +211,11 @@ lint:
 	@sh test/drivers-test.sh
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/oobe-user-test.sh
+	@sh test/media-test.sh
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-eject bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh \
 		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

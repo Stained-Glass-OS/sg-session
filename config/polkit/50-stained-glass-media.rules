@@ -1,0 +1,23 @@
+// Stained Glass OS: removable media, as on Windows -- the Windows system
+// (sgsystem) mounts them for everyone (sg-automount@.service; wine-sg's
+// mountmgr gives them a drive letter), and the person at the machine ejects
+// them from File Explorer (sg-eject), whoever's mount it was. Only removable
+// drives: udisks names the drive in every request, and a fixed disk still
+// asks for an administrator.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.udisks2.") != 0 || action.lookup("drive.removable") != "true")
+        return polkit.Result.NOT_HANDLED;
+    if (subject.local && subject.active &&
+        (action.id == "org.freedesktop.udisks2.filesystem-unmount-others" ||
+         action.id == "org.freedesktop.udisks2.eject-media" ||
+         action.id == "org.freedesktop.udisks2.eject-media-other-seat"))
+        return polkit.Result.YES;
+    if (subject.user == "sgsystem" &&
+        (action.id == "org.freedesktop.udisks2.filesystem-mount" ||
+         action.id == "org.freedesktop.udisks2.filesystem-mount-other-seat" ||
+         action.id == "org.freedesktop.udisks2.filesystem-unmount-others" ||
+         action.id == "org.freedesktop.udisks2.eject-media" ||
+         action.id == "org.freedesktop.udisks2.eject-media-other-seat"))
+        return polkit.Result.YES;
+    return polkit.Result.NOT_HANDLED;
+});

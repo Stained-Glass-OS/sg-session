@@ -1,0 +1,27 @@
+# Stained Glass OS: removable media -- a CD, DVD or ISO in a drive (a virtual
+# machine's too), a USB stick or disk -- are mounted as they arrive and show in
+# File Explorer with a drive letter, for every user, as on Windows.
+#
+# udisks mounts them for sgsystem (sg-automount@.service, polkit rule
+# 50-stained-glass-media.rules); UDISKS_FILESYSTEM_SHARED puts the mount under
+# /media/<label>, which every account can reach, instead of a directory only
+# the mounting account may open. wine-sg's mountmgr sees the mount through
+# UDisks2 and gives it a letter in the machine's prefix.
+ACTION=="remove", GOTO="sg_media_end"
+SUBSYSTEM!="block", GOTO="sg_media_end"
+ENV{ID_FS_USAGE}!="filesystem", GOTO="sg_media_end"
+KERNEL=="sr[0-9]*", GOTO="sg_media"
+ENV{ID_BUS}=="usb", GOTO="sg_media"
+ATTRS{removable}=="1", GOTO="sg_media"
+GOTO="sg_media_end"
+
+LABEL="sg_media"
+ENV{UDISKS_FILESYSTEM_SHARED}="1"
+ENV{UDISKS_AUTO}="1"
+# Mount what arrives: a new device, or a disc put into a drive (the kernel
+# marks that change DISK_MEDIA_CHANGE). Not every "change": unmounting is one,
+# and remounting then undid File Explorer's Eject.
+ACTION=="add", RUN+="/usr/bin/systemctl --no-block start sg-automount@%k.service"
+ACTION=="change", ENV{DISK_MEDIA_CHANGE}=="1", RUN+="/usr/bin/systemctl --no-block start sg-automount@%k.service"
+
+LABEL="sg_media_end"
