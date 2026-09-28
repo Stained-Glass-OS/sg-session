@@ -619,8 +619,12 @@ def shutdown_now(args):
 # ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
 
 def updates(args):
+    if args == ["check"]:
+        # anyone at the PC may check (config/polkit/50-stained-glass-updates.rules)
+        run(["systemctl", "start", "--no-block", "sg-update-prepare.service"], timeout=30)
+        return []
     if args:
-        raise Fail("invalid", "usage: updates")
+        raise Fail("invalid", "usage: updates [check]")
     out = []
     text = run(["apt", "list", "--upgradable"], timeout=60, check=False)
     for line in text.splitlines():

@@ -3,6 +3,10 @@ sg-session (0.1.0-53) unstable; urgency=medium
   * The administrator's credentials prompt keeps the user name and password
     as they were while it checks them: both could still be typed into
     during "Checking...". They open again if the check fails.
+  * Anyone signed in at the PC may check for updates, as on Windows:
+    sg-settingsctl updates check starts sg-update-prepare.service, which
+    config/polkit/50-stained-glass-updates.rules allows for a local, active
+    session (only that unit, only start). It asked for an administrator.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 20:40:00 -0700
 

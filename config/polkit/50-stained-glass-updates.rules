@@ -1,0 +1,17 @@
+// Stained Glass OS -- who may check for updates (sg-session).
+//
+// As on Windows, anyone signed in at the PC may check for updates: Settings'
+// "Check for updates" starts sg-update-prepare.service (it refreshes the
+// package lists and downloads what is new; installing waits for a restart,
+// which is still an administrator's or the timer's). Only that unit, only
+// "start", only a local, active session. Changing where updates come from
+// stays an administrator's act (sg-admind).
+polkit.addRule(function(action, subject) {
+    if (action.id != "org.freedesktop.systemd1.manage-units")
+        return polkit.Result.NOT_HANDLED;
+    if (action.lookup("unit") != "sg-update-prepare.service" || action.lookup("verb") != "start")
+        return polkit.Result.NOT_HANDLED;
+    if (subject.local && subject.active)
+        return polkit.Result.YES;
+    return polkit.Result.NOT_HANDLED;
+});

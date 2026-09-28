@@ -292,6 +292,17 @@ code, lines = ctl("updates")
 check("updates: apt's upgradable list", "UPDATE libfoo1\t1.2-3\t1.2-3+deb13u1" in lines and
       "UPDATE wine-sg\t10.0-37\t10.0-38" in lines, lines)
 check("updates: nothing staged", "STAGED no" in lines, lines)
+calls()
+code, lines = ctl("updates", "check")
+check("updates check: starts sg-update-prepare as the user (polkit allows it)",
+      code == 0 and "systemctl start --no-block sg-update-prepare.service" in calls(), (code, lines))
+open(os.path.join(tmp, "polkit-no"), "w").close()
+code, lines = ctl("updates", "check")
+check("updates check refused: an error, not silence", code != 0 and lines and lines[-1].startswith("ERROR"), (code, lines))
+os.unlink(os.path.join(tmp, "polkit-no"))
+calls()
+code, lines = ctl("updates", "install")
+check("updates refuses other words", code == 2, (code, lines))
 
 # ---- the lock screen's picture (published into a 1733 drop for sg-lockd)
 import pwd

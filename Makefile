@@ -174,6 +174,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
 	install -m 0644 config/polkit/50-stained-glass-network.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-power.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
+	install -m 0644 config/polkit/50-stained-glass-updates.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
