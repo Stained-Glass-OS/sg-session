@@ -1,3 +1,11 @@
+sg-session (0.1.0-53) unstable; urgency=medium
+
+  * The administrator's credentials prompt keeps the user name and password
+    as they were while it checks them: both could still be typed into
+    during "Checking...". They open again if the check fails.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 20:40:00 -0700
+
 sg-session (0.1.0-52) unstable; urgency=medium
 
   * The session's working directory is the user's profile: cmd, PowerShell

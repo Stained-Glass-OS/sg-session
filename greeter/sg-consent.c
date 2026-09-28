@@ -126,6 +126,9 @@ static void submit_yes( void )
     }
     g_waiting = TRUE;
     EnableWindow( g_yes, FALSE );
+    /* what is being checked stays as it was while it is checked */
+    SendMessageA( g_user, EM_SETREADONLY, TRUE, 0 );
+    SendMessageA( g_pass, EM_SETREADONLY, TRUE, 0 );
     set_status( "Checking...", FALSE );
     send_line( "CRED %s\t%s", user, pass );
     SetWindowTextA( g_pass, "" );
@@ -155,6 +158,8 @@ static void handle_broker_line( char *line )
     {
         g_waiting = FALSE;
         EnableWindow( g_yes, TRUE );
+        SendMessageA( g_user, EM_SETREADONLY, FALSE, 0 );
+        SendMessageA( g_pass, EM_SETREADONLY, FALSE, 0 );
         set_status( line + 8, TRUE );
         SetFocus( g_pass );
     }
