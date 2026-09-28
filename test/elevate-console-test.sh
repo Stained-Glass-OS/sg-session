@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # An elevated console program (PowerShell, cmd) gets a console window: it is
 # started through wineconsole, a GUI program as it is. Started by `wine` with
 # no console to inherit, pwsh ran with nowhere to show, read end-of-file and
