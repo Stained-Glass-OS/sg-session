@@ -216,7 +216,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-eject bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-eject bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh \
 		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

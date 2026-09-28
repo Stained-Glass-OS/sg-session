@@ -24,6 +24,11 @@ sg-session (0.1.0-58) unstable; urgency=medium
     Debian leaves unprivileged ICMP sockets off, and Wine's IcmpSendEcho
     uses them. sysctl.d/60-stained-glass-ping.conf (systemd's default),
     applied on install.
+  * \\server\share off a domain: with no Kerberos ticket (or not joined),
+    sg-netmountd opens a share as a guest, as Windows does for an open
+    share -- a NAS, a PC's Public share. Every UNC path failed with
+    "Required key not available". Test: test/netmount-guest-test.sh (root,
+    smbd, cifs-utils).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
 

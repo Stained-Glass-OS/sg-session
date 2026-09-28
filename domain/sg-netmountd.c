@@ -191,12 +191,29 @@ static int mkdirs(const char *path, mode_t mode)
     return (mkdir(buf, mode) && errno != EEXIST) ? -1 : 0;
 }
 
-/* Mount //server/share for uid (its ticket), unless it is mounted already. */
+static int run_mount(const char *unc, const char *path, const char *opts)
+{
+    pid_t pid;
+    int status;
+
+    if ((pid = fork()) < 0) return -1;
+    if (!pid) {
+        char *argv[] = { "mount", "-t", "cifs", (char *)unc, (char *)path, "-o", (char *)opts, NULL };
+        char *envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); }
+        execve("/usr/bin/mount", argv, envp);
+        execve("/bin/mount", argv, envp);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR);
+    return WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -1;
+}
+
+/* Mount //server/share for uid (its ticket, or as a guest), unless it is mounted already. */
 static int do_mount(uid_t uid, char *server, char *share, char *path, size_t plen)
 {
     char host[256], ip[64], unc[600], opts[512];
-    pid_t pid;
-    int status;
 
     lower(server);
     lower(share);
@@ -206,24 +223,28 @@ static int do_mount(uid_t uid, char *server, char *share, char *path, size_t ple
     if (mkdirs(path, 0755)) return -1;
 
     snprintf(unc, sizeof(unc), "//%s/%s", host, share);
-    /* The server checks each user; locally everyone may try. */
-    snprintf(opts, sizeof(opts), "multiuser,sec=krb5,cruid=%u,ip=%s,noperm,file_mode=0777,dir_mode=0777,nosuid,nodev",
-             (unsigned)uid, ip);
-    if ((pid = fork()) < 0) return -1;
-    if (!pid) {
-        char *argv[] = { "mount", "-t", "cifs", unc, path, "-o", opts, NULL };
-        char *envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
-        int null = open("/dev/null", O_RDWR);
-        if (null >= 0) { dup2(null, 0); dup2(null, 1); }
-        execve("/usr/bin/mount", argv, envp);
-        execve("/bin/mount", argv, envp);
-        _exit(127);
-    }
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR);
-    if (!WIFEXITED(status) || WEXITSTATUS(status)) {
-        rmdir(path);
-        errno = EACCES;
-        return -1;
+    /* On a domain the server checks each user, on their own ticket; locally
+     * everyone may try. Off a domain -- or with no ticket -- a share is
+     * opened as a guest, as Windows does for an open share (a NAS, a
+     * Windows PC's Public share); everyone gets the same guest access. */
+    {
+        char realm[256], domain[256];
+        int ok = 0;
+        read_role(realm, sizeof(realm), domain, sizeof(domain));
+        if (realm[0]) {
+            snprintf(opts, sizeof(opts), "multiuser,sec=krb5,cruid=%u,ip=%s,noperm,file_mode=0777,dir_mode=0777,nosuid,nodev",
+                     (unsigned)uid, ip);
+            ok = !run_mount(unc, path, opts);
+        }
+        if (!ok) {
+            snprintf(opts, sizeof(opts), "guest,ip=%s,noperm,file_mode=0777,dir_mode=0777,nosuid,nodev", ip);
+            ok = !run_mount(unc, path, opts);
+        }
+        if (!ok) {
+            rmdir(path);
+            errno = EACCES;
+            return -1;
+        }
     }
     return 0;
 }
