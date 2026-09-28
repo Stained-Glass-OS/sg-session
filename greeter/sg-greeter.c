@@ -383,7 +383,13 @@ static void handle_bridge_line( HWND hwnd, char *line )
 {
     if (!strncmp( line, "PROMPT_SECRET ", 14 ) || !strncmp( line, "PROMPT_VISIBLE ", 15 ))
     {
-        const char *text = line + (line[7] == 'S' ? 14 : 15);
+        char text[128];
+        size_t n;
+        /* PAM's prompt, labelled like "User name": no trailing colon, and
+         * "Password" when PAM gives no words (the box had no label) */
+        lstrcpynA( text, line + (line[7] == 'S' ? 14 : 15), sizeof(text) );
+        for (n = strlen( text ); n && (text[n - 1] == ' ' || text[n - 1] == ':'); n--) text[n - 1] = 0;
+        if (!text[0]) lstrcpynA( text, line[7] == 'S' ? "Password" : "Answer", sizeof(text) );
         g_awaiting_secret = TRUE;
         SetWindowTextA( g_prompt, text );
         /* The live system's account has no password: say so, rather than

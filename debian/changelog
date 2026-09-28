@@ -3,6 +3,9 @@ sg-session (0.1.0-58) unstable; urgency=medium
   * First-run setup draws keyboard focus as a solid light frame, and only
     once the keyboard is in use: DrawFocusRect's dotted line came out
     green on the purple selection of every list. Test: make test-oobe.
+  * The sign-in screen labels the password box: PAM's prompt without its
+    colon, like "User name", or "Password" when PAM gives no words (the
+    box appeared with no label).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 17:20:00 -0700
 
