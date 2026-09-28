@@ -4,6 +4,9 @@ sg-session (0.1.0-57) unstable; urgency=medium
     named the remote host "rdp", which libpam's audit record looked up in
     DNS (two 4 s timeouts). The broker names no remote host; blank passwords
     stay refused. Test: test/pamcheck-test.sh.
+  * The permission prompt names the program (its file name, in bold) and
+    shows its whole command as "Program location", on up to three lines: a
+    long one ("msiexec.exe /i ...msi") was cut to its first words.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 16:30:00 -0700
 

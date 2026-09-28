@@ -39,8 +39,8 @@
 #define ID_STATUS 205
 
 #define PANEL_W 560
-#define PANEL_H_ADMIN 250
-#define PANEL_H_CRED  360
+#define PANEL_H_ADMIN 310
+#define PANEL_H_CRED  420
 
 static HANDLE g_in, g_out;
 static HWND g_main, g_user, g_pass, g_status, g_yes, g_no;
@@ -226,6 +226,24 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     return DefWindowProcA( hwnd, msg, wp, lp );
 }
 
+/* The program's file name: the first word of the command (quoted or not),
+ * without its folder */
+static void program_name( char *out, size_t size )
+{
+    const char *p = g_program, *end, *base;
+    size_t n;
+
+    if (*p == '"') { p++; end = strchr( p, '"' ); }
+    else end = strchr( p, ' ' );
+    if (!end) end = p + strlen( p );
+    for (base = p; p < end; p++) if (*p == '\\' || *p == '/') base = p + 1;
+    n = (size_t)(end - base);
+    if (!n) { snprintf( out, size, "%s", g_program ); return; }
+    if (n >= size) n = size - 1;
+    memcpy( out, base, n );
+    out[n] = 0;
+}
+
 /* Parse "/consent admin|cred <requester> <program...>". */
 static BOOL parse_cmdline( const char *cmd )
 {
@@ -260,8 +278,8 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     MSG msg;
     int sw, sh;
     int ph, px, py, y;
-    char line[1200];
-    HWND first;
+    char line[1200], name[260];
+    HWND first, wnd;
     HDESK desk;
 
     (void)prev; (void)show;
@@ -310,8 +328,16 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     make_label( g_main, "Do you want to allow this app to make changes to your device?",
                 px + 24, y, PANEL_W - 48, 56, g_font_big, 0 );
     y += 62;
-    make_label( g_main, g_program, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
+    /* the program's name in bold, and the whole command below it, as
+     * Windows' "Program location": a long one ("msiexec.exe /i C:\...\x.msi")
+     * was cut to its first words */
+    program_name( name, sizeof(name) );
+    make_label( g_main, name, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
     y += 26;
+    snprintf( line, sizeof(line), "Program location: %s", g_program );
+    wnd = make_label( g_main, line, px + 24, y, PANEL_W - 48, 56, g_font, 0x7ff );
+    SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL );
+    y += 60;
     snprintf( line, sizeof(line), "Requested by %s. It will run as an administrator.", g_requester );
     make_label( g_main, line, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
     y += 30;
