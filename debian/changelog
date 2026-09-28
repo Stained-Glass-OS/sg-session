@@ -1,3 +1,10 @@
+sg-session (0.1.0-52) unstable; urgency=medium
+
+  * The session's working directory is the user's profile: cmd, PowerShell
+    and the Run box start in C:\users\<name>, not Z:\home\<name>.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 27 Sep 2026 17:40:00 -0700
+
 sg-session (0.1.0-51) unstable; urgency=medium
 
   * The shell starts the taskbar's battery icon (sg-shell's sg-battery) on a

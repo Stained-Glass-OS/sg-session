@@ -140,6 +140,13 @@ if [ -r "${SG_OOBE_CONF:-/etc/stained-glass/oobe.conf}" ] && [ -x "$SG_LIB/sg-oo
     "$SG_LIB/sg-oobe-user" || sg_log "the first-run setup's choices were not applied"
 fi
 
+# The session's working directory is the user's profile, C:\users\<name>:
+# what the shell and Start run without a directory of their own (cmd,
+# PowerShell, the Run box) starts there, as on Windows. Left at the Unix home
+# it showed as Z:\home\<name>.
+_profile="$WINEPREFIX/drive_c/users/$(id -un)"
+if [ -d "$_profile" ]; then cd "$_profile"; else sg_log "no profile directory at $_profile"; fi
+
 # What starts alongside the shell waits until the shell owns the desktop.
 # A GUI program started first makes Wine create the desktop itself (a bare
 # `explorer /desktop`); the shell's own explorer then found it taken, exited
