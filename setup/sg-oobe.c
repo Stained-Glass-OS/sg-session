@@ -104,7 +104,6 @@ static const struct { const char *code, *name; } g_layouts[] = {
 static const struct { const char *id, *name, *note; } g_browsers[] = {
     { "Mozilla.Firefox", "Mozilla Firefox", "Free and open source, from Mozilla" },
     { "Google.Chrome", "Google Chrome", "The most used browser, from Google" },
-    { "Brave.Brave", "Brave", "Blocks ads and trackers by default" },
     { "Microsoft.Edge", "Microsoft Edge", "Microsoft's browser, downloaded from Microsoft" },
     { "Mozilla.Firefox.ESR", "Mozilla Firefox ESR", "Firefox's extended support release: fewer changes" },
     { "none", "Don't install a browser now", "You can install one later with winget or from its website" },

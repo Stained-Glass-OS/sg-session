@@ -18,7 +18,7 @@ id=$(head -1 "$REQ")
 case "$id" in
     Mozilla.Firefox)     url='https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
     Mozilla.Firefox.ESR) url='https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
-    Google.Chrome|Brave.Brave|Microsoft.Edge) url=''; exe='' ;;
+    Google.Chrome|Microsoft.Edge) url=''; exe='' ;;
     *) sg_log "oobe-browser: '$id' is not offered; nothing to do"; rm -f "$REQ"; exit 0 ;;
 esac
 sg_log "oobe-browser: installing $id"
@@ -39,8 +39,7 @@ if [ -f "$browser" ] && [ "$id" != Mozilla.Firefox.ESR ]; then
 fi
 if [ -z "$exe" ]; then
     # sg-browser's install shows in Program Files
-    for p in "Google/Chrome/Application/chrome.exe" "BraveSoftware/Brave-Browser/Application/brave.exe" \
-             "Microsoft/Edge/Application/msedge.exe"; do
+    for p in "Google/Chrome/Application/chrome.exe" "Microsoft/Edge/Application/msedge.exe"; do
         for pf in "Program Files" "Program Files (x86)"; do
             if [ -f "$SG_PREFIX/drive_c/$pf/$p" ]; then
                 sg_log "oobe-browser: $id is installed"; rm -f "$REQ"; exit 0
