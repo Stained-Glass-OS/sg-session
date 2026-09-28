@@ -1,3 +1,12 @@
+sg-session (0.1.0-56) unstable; urgency=medium
+
+  * The SYSTEM account's profile has all of the standard folders
+    (AppData\LocalLow, Documents, ...), not only Temp: Steam started by its
+    installer as an administrator crashed on its first download without
+    LocalLow.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 15:10:00 -0700
+
 sg-session (0.1.0-55) unstable; urgency=medium
 
   * An elevated program started in a folder stays there; only one started

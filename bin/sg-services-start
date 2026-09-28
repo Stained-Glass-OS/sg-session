@@ -58,10 +58,16 @@ sg_protect_event_logs
 # Temp: whatever runs as SYSTEM then had no TEMP -- msiexec, run as an
 # administrator, could not open its copy of a package (transacted storage
 # needs a temporary file) and stopped with 91, or 2 for Edge's installer.
+# All of the standard folders, as a user's profile has them (sg-profile-create):
+# Steam started as an administrator crashed on its first download without
+# AppData\LocalLow (cryptnet keeps its revocation cache there).
 sg_system_temp() {
-    temp="$SG_PREFIX/drive_c/users/$(id -un)/AppData/Local/Temp"
+    profile="$SG_PREFIX/drive_c/users/$(id -un)"
     [ -d "$SG_PREFIX/drive_c/users" ] || return 0
-    mkdir -p "$temp" 2>/dev/null || sg_log "could not make $temp"
+    (umask 022; cd "$SG_PREFIX/drive_c/users" && mkdir -p "$profile" && cd "$profile" && mkdir -p \
+        AppData/Local/Temp AppData/LocalLow AppData/Roaming \
+        Desktop Documents Downloads Music Pictures Videos Favorites Links \
+        Contacts Searches "Saved Games") 2>/dev/null || sg_log "could not make the folders of $profile"
 }
 sg_system_temp
 
