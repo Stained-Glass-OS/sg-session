@@ -1,3 +1,12 @@
+sg-session (0.1.0-59) unstable; urgency=medium
+
+  * An elevated program's display has no tray: Wine's stand-in tray, a
+    small untitled window at the top left, appeared once the program added
+    a notification icon (Microsoft 365 setup). sg-elevated-run sets
+    ShowSystray=0 for it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 28 Sep 2026 20:00:00 -0700
+
 sg-session (0.1.0-58) unstable; urgency=medium
 
   * First-run setup draws keyboard focus as a solid light frame, and only

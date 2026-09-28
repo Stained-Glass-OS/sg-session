@@ -178,9 +178,12 @@ static void apply_user_look(void)
     int fd, st;
     pid_t pid;
 
-    if (!valid_bit(apps) && !valid_bit(sys) && !valid_hex8(accent)) goto done;
     if ((fd = mkstemp(path)) < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) { close(fd); unlink(path); } goto done; }
     fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n");
+    /* This display has no taskbar: Wine's stand-in tray, a small untitled
+     * window at the top left, appeared once the program added a notification
+     * icon (Microsoft 365 setup's) -- no tray here, as on a secure desktop. */
+    fprintf(f, "[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\r\n\"ShowSystray\"=dword:00000000\r\n\r\n");
     if (valid_bit(apps) || valid_bit(sys)) {
         fprintf(f, "[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize]\r\n");
         if (valid_bit(apps)) fprintf(f, "\"AppsUseLightTheme\"=dword:0000000%s\r\n", apps);
