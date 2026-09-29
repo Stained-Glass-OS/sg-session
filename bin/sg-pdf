@@ -1,7 +1,10 @@
 #!/usr/bin/python3
-# sg-pdf -- the PDF viewer's Linux half: Debian's poppler reads the document,
-# renders its pages to bitmaps and reports their text layout, links, outline
-# and search hits. sg-shell's sg-pdf64.exe (the Windows viewer) draws them.
+# sg-pdf -- SG PDF's Linux half: MuPDF (Debian's python3-pymupdf) reads the
+# document, renders its pages to bitmaps, reports their text layout, links,
+# outline and search hits, and makes every edit -- text and pictures,
+# comments, forms and signatures, true redaction, pages, passwords, export
+# (the engine: pdf/sgpdf.py, installed in /usr/lib/stained-glass/pdf).
+# sg-shell's sg-pdf64.exe (the Windows program) draws them and drives it.
 #
 #   sg-pdf --bridge PROGRAM [ARGS]  run PROGRAM (the Windows viewer, through
 #                                   wine) with pipes as its stdin and stdout
@@ -46,272 +49,80 @@
 #   outline  "DEPTH<TAB>PAGE<TAB>TOP<TAB>OPEN<TAB>TITLE" lines, in order (PAGE
 #            -1: none; OPEN 1: the document shows it expanded)
 #
-# Only the file the viewer names is read; nothing touches the network.
+# The editor's requests (pdf/sgpdf.py's COMMANDS; text fields escape \t \n
+# \r and \\ with a backslash; options are key=value fields):
+#
+#   state | undo | redo | save PATH [apply=1] | properties title=..
+#   objects PAGE            text blocks, images, paths: "KIND ID RECT ..."
+#   edittext PAGE ID RECT TEXT [font= size= color= bold= italic= align=]
+#   addtext PAGE RECT TEXT [...] | addimage PAGE RECT FILE
+#   moveobj PAGE ID RECT | delobj PAGE ID | replaceimage PAGE ID FILE
+#   annot PAGE KIND key=value.. (highlight underline strikeout squiggly
+#     note freetext rect ellipse line arrow ink) | annots [PAGE]
+#   delannot PAGE XREF | moveannot PAGE XREF RECT | setannot PAGE XREF ..
+#   fields | setfield PAGE XREF VALUE | flatten [forms=1 annots=0]
+#   signature PAGE RECT ink|text|image DATA
+#   redactmark PAGE rects=.. | redactfind WHAT [FLAGS [MARK]] (WHAT may be
+#     pattern:phone|email|ssn|card|date) | redactapply | sanitize [what=0..]
+#   rotate PAGES DEG | delete PAGES | move PAGES TO | insertblank AT [W H]
+#   insertfile AT FILE [PW] | extract PAGES FILE [DELETE] | split N DIR BASE
+#   combine OUT FILE.. | protect mode=aes256|none user= owner= perms=..
+#   unlock OWNERPW | export png|jpeg|txt|html|docx FILE [pages= dpi=]
+#
+# A request that changes the document answers like open, with its state
+# (undo= redo= dirty= perms= encrypted= protect= form= redactions=) in
+# the header; PAGES are 0-based lists ("0,2,4-6").
+#
+# Only the files the program names are read and written; nothing touches
+# the network.
 #
 # Copyright (C) 2026 Stained Glass OS contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import math
 import os
 import select
-import struct
 import subprocess
 import sys
-import urllib.parse
 
-MAX_PIXELS = 60_000_000       # one page's bitmap: 60 Mpixel (240 MB) at most
-MAX_REQUEST = 1 << 16
 
+def _engine_path():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (os.environ.get("SG_PDF_LIB"), os.path.join(here, "..", "pdf"), "/usr/lib/stained-glass/pdf"):
+        if d and os.path.isfile(os.path.join(d, "sgpdf.py")):
+            return d
+    return "/usr/lib/stained-glass/pdf"
+
+
+sys.path.insert(0, _engine_path())
 try:
-    import gi
-    gi.require_version("Poppler", "0.18")
-    from gi.repository import GLib, Poppler  # noqa: E402
-    import cairo  # noqa: E402
-    HAVE_POPPLER = True
-except (ImportError, ValueError) as e:  # the package's Depends bring these
-    HAVE_POPPLER = False
-    POPPLER_ERROR = str(e)
+    import sgpdf  # noqa: E402
+    HAVE_ENGINE = True
+except ImportError as e:  # the package's Depends bring python3-pymupdf
+    HAVE_ENGINE = False
+    ENGINE_ERROR = str(e)
 
-
-def one_line(s):
-    return " ".join((s or "").split())
-
-
-class Document:
-    def __init__(self):
-        self.doc = None
-        self.pages = []
-
-    # ---- requests ----------------------------------------------------------------------
-
-    def open(self, path, password=None):
-        if not HAVE_POPPLER:
-            return "ERR failed poppler is not installed: " + POPPLER_ERROR, b""
-        if not os.path.isfile(path):
-            return "ERR open no such file", b""
-        uri = "file://" + urllib.parse.quote(os.path.abspath(path))
-        try:
-            doc = Poppler.Document.new_from_file(uri, password or None)
-        except GLib.Error as e:
-            if e.matches(Poppler.error_quark(), Poppler.Error.ENCRYPTED):
-                return "ERR password the document needs a password", b""
-            return "ERR open " + one_line(e.message), b""
-        self.doc = doc
-        self.pages = [doc.get_page(i) for i in range(doc.get_n_pages())]
-        out = []
-        for p in self.pages:
-            w, h = p.get_size()
-            out.append("size %.3f %.3f" % (w, h))
-        out.append("title " + one_line(doc.get_title()))
-        out.append("author " + one_line(doc.get_author()))
-        data = ("\n".join(out) + "\n").encode("utf-8")
-        return "OK pages=%d bytes=%d" % (len(self.pages), len(data)), data
-
-    def page(self, n):
-        if not self.doc:
-            raise Refusal("notopen", "no document is open")
-        try:
-            n = int(n)
-        except ValueError:
-            raise Refusal("invalid", "page is not a number")
-        if not 0 <= n < len(self.pages):
-            raise Refusal("range", "no such page")
-        return self.pages[n]
-
-    def render(self, n, scale, rot):
-        p = self.page(n)
-        try:
-            scale = float(scale)
-            rot = int(rot) % 360
-        except ValueError:
-            raise Refusal("invalid", "scale or rotation is not a number")
-        if not (0.01 <= scale <= 64) or math.isnan(scale) or rot not in (0, 90, 180, 270):
-            raise Refusal("invalid", "scale or rotation out of range")
-        pw, ph = p.get_size()
-        w, h = max(1, int(math.ceil(pw * scale))), max(1, int(math.ceil(ph * scale)))
-        if rot in (90, 270):
-            w, h = h, w
-        if w * h > MAX_PIXELS:
-            raise Refusal("toolarge", "the page would be too large a bitmap")
-        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h)
-        cr = cairo.Context(surf)
-        cr.set_source_rgb(1, 1, 1)
-        cr.paint()
-        if rot == 90:
-            cr.translate(w, 0)
-        elif rot == 180:
-            cr.translate(w, h)
-        elif rot == 270:
-            cr.translate(0, h)
-        cr.rotate(math.radians(rot))
-        cr.scale(scale, scale)
-        p.render(cr)
-        surf.flush()
-        stride = surf.get_stride()
-        buf = bytes(surf.get_data())
-        if stride != w * 4:
-            buf = b"".join(buf[y * stride:y * stride + w * 4] for y in range(h))
-        # ARGB32 is native-endian B,G,R,A; the page is opaque (white under it)
-        return "OK w=%d h=%d bytes=%d" % (w, h, len(buf)), buf
-
-    def text(self, n):
-        p = self.page(n)
-        text = p.get_text() or ""
-        ok, rects = p.get_text_layout()
-        if not ok:
-            rects = []
-        units = []
-        boxes = []
-        for i, ch in enumerate(text):
-            r = rects[i] if i < len(rects) else None
-            box = (r.x1, r.y1, r.x2, r.y2) if r else (0.0, 0.0, 0.0, 0.0)
-            u = ch.encode("utf-16-le", "surrogatepass")
-            units.append(u)
-            for _ in range(len(u) // 2):
-                boxes.append(box)
-        data = b"".join(units) + b"".join(struct.pack("<4f", *b) for b in boxes)
-        return "OK n=%d bytes=%d" % (len(boxes), len(data)), data
-
-    def find(self, needle, flags=""):
-        if not self.doc:
-            raise Refusal("notopen", "no document is open")
-        if not needle:
-            raise Refusal("invalid", "nothing to find")
-        opts = Poppler.FindFlags.DEFAULT
-        if "c" in flags:
-            opts |= Poppler.FindFlags.CASE_SENSITIVE
-        if "w" in flags:
-            opts |= Poppler.FindFlags.WHOLE_WORDS_ONLY
-        out = []
-        for i, p in enumerate(self.pages):
-            _, ph = p.get_size()
-            hits = p.find_text_with_options(needle, opts) or []
-            # PDF coordinates (origin bottom-left) -> top-left; in reading order
-            boxes = sorted(((r.x1, ph - r.y2, r.x2, ph - r.y1) for r in hits), key=lambda b: (round(b[1]), b[0]))
-            out += ["%d %.3f %.3f %.3f %.3f" % ((i,) + b) for b in boxes]
-        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
-        return "OK n=%d bytes=%d" % (len(out), len(data)), data
-
-    def dest_target(self, dest):
-        """(page 0-based, top in top-left points) of a destination, or None."""
-        if dest is None:
-            return None
-        if dest.type == Poppler.DestType.NAMED:
-            dest = self.doc.find_dest(dest.named_dest)
-            if dest is None:
-                return None
-        page = dest.page_num - 1
-        if not 0 <= page < len(self.pages):
-            return None
-        top = 0.0
-        if dest.change_top:
-            _, ph = self.pages[page].get_size()
-            top = max(0.0, ph - dest.top)
-        return page, top
-
-    def action_target(self, action):
-        t = action.type
-        if t == Poppler.ActionType.GOTO_DEST:
-            tgt = self.dest_target(action.goto_dest.dest)
-            return ("goto", tgt) if tgt else None
-        if t == Poppler.ActionType.URI:
-            uri = action.uri.uri or ""
-            return ("uri", one_line(uri)) if uri else None
-        return None
-
-    def links(self, n):
-        p = self.page(n)
-        _, ph = p.get_size()
-        out = []
-        for m in p.get_link_mapping() or []:
-            a = m.area
-            box = "%.3f %.3f %.3f %.3f" % (a.x1, ph - a.y2, a.x2, ph - a.y1)
-            tgt = self.action_target(m.action)
-            if not tgt:
-                continue
-            if tgt[0] == "goto":
-                out.append("%s\tgoto\t%d\t%.3f" % (box, tgt[1][0], tgt[1][1]))
-            else:
-                out.append("%s\turi\t%s" % (box, tgt[1]))
-        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
-        return "OK n=%d bytes=%d" % (len(out), len(data)), data
-
-    def outline(self):
-        if not self.doc:
-            raise Refusal("notopen", "no document is open")
-        out = []
-
-        def walk(it, depth):
-            while it and len(out) < 20000:
-                a = it.get_action()
-                title, page, top = "", -1, 0.0
-                if a is not None:
-                    if a.type == Poppler.ActionType.GOTO_DEST:
-                        title = a.goto_dest.title or ""
-                        tgt = self.dest_target(a.goto_dest.dest)
-                        if tgt:
-                            page, top = tgt
-                    elif a.type == Poppler.ActionType.URI:
-                        title = a.uri.title or ""
-                out.append("%d\t%d\t%.3f\t%d\t%s" % (depth, page, top, 1 if it.is_open() else 0, one_line(title)))
-                child = it.get_child()
-                if child and depth < 32:
-                    walk(child, depth + 1)
-                if not it.next():
-                    break
-
-        # A document without bookmarks has no index: poppler's constructor
-        # returns NULL, which PyGObject raises as a TypeError.
-        try:
-            first = Poppler.IndexIter.new(self.doc)
-        except TypeError:
-            first = None
-        if first is not None:
-            walk(first, 0)
-        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
-        return "OK n=%d bytes=%d" % (len(out), len(data)), data
-
-
-class Refusal(Exception):
-    def __init__(self, kind, message):
-        super().__init__(message)
-        self.kind = kind
+MAX_REQUEST = 1 << 20
+# SG_PDF_TRACE=<file>: every request and its answer's first line, appended (debugging)
+TRACE = os.environ.get("SG_PDF_TRACE")
 
 
 def handle(doc, line):
-    """One request line -> (header, payload), or None to stop."""
-    f = line.split("\t")
-    cmd, args = f[0], f[1:]
-    try:
-        if cmd == "open" and 1 <= len(args) <= 2:
-            return doc.open(args[0], args[1] if len(args) > 1 else None)
-        if cmd == "render" and len(args) == 3:
-            return doc.render(*args)
-        if cmd == "text" and len(args) == 1:
-            return doc.text(args[0])
-        if cmd == "find" and 1 <= len(args) <= 2:
-            return doc.find(args[0], args[1] if len(args) > 1 else "")
-        if cmd == "links" and len(args) == 1:
-            return doc.links(args[0])
-        if cmd == "outline" and not args:
-            return doc.outline()
-        if cmd == "quit":
+    if not HAVE_ENGINE:
+        if line.split("\t")[0] == "quit":
             return None
-        return "ERR invalid unknown request", b""
-    except Refusal as e:
-        return "ERR %s %s" % (e.kind, e), b""
-    except (GLib.Error if HAVE_POPPLER else OSError, MemoryError, cairo.Error if HAVE_POPPLER else OSError) as e:
-        return "ERR failed " + one_line(str(e)), b""
-    except Exception as e:  # never let one request take the viewer's bridge down
-        print("sg-pdf: %s failed: %s: %s" % (cmd, type(e).__name__, e), file=sys.stderr)
-        return "ERR failed " + one_line("%s: %s" % (type(e).__name__, e)), b""
+        return "ERR failed MuPDF (python3-pymupdf) is not installed: " + " ".join(ENGINE_ERROR.split()), b""
+    return sgpdf.handle(doc, line)
+
+
+def new_engine():
+    return sgpdf.Engine() if HAVE_ENGINE else None
 
 
 def serve(fd_in, out, alive=None):
     """Answer requests from fd_in on out (a binary file) until quit or EOF.
     `alive` is polled while idle: the bridge's child may exit while a process
     it started (wineserver) still holds the pipe open."""
-    doc = Document()
+    doc = new_engine()
     pending = b""
     while True:
         if alive is not None:
@@ -331,7 +142,14 @@ def serve(fd_in, out, alive=None):
             line = raw.decode("utf-8", "replace").strip("\r")
             if not line:
                 continue
+            if TRACE:
+                secret = line.startswith(("protect", "unlock")) or (line.startswith("open\t") and line.count("\t") >= 2)
+                with open(TRACE, "a") as t:
+                    t.write((line.split("\t")[0] + "\t(passwords not logged)" if secret else line[:2000]) + "\n")
             ans = handle(doc, line)
+            if TRACE and ans:
+                with open(TRACE, "a") as t:
+                    t.write("  -> " + ans[0][:300] + "\n")
             if ans is None:
                 return 0
             head, data = ans
@@ -374,26 +192,22 @@ def thumbnail(path, size, out):
         return fail("invalid size")
     if not 16 <= size <= 1024:
         return fail("invalid size")
-    doc = Document()
+    if not HAVE_ENGINE:
+        return fail("MuPDF (python3-pymupdf) is not installed")
+    doc = sgpdf.Engine()
     head, _ = doc.open(path)
-    if not head.startswith("OK") or not doc.pages:
+    if not head.startswith("OK") or not doc.doc.page_count:
         return fail(head)
-    pw, ph = doc.pages[0].get_size()
-    if pw <= 0 or ph <= 0:
+    r = doc.doc[0].rect
+    if r.width <= 0 or r.height <= 0:
         return fail("empty page")
-    scale = size / max(pw, ph)
+    scale = min(size / max(r.width, r.height), 64)
     try:
-        head, buf = doc.render(0, "%.6f" % scale, 0)
-    except Refusal as e:
-        return fail(str(e))
-    w = int(head.split("w=")[1].split()[0])
-    h = int(head.split("h=")[1].split()[0])
-    surf = cairo.ImageSurface.create_for_data(bytearray(buf), cairo.FORMAT_ARGB32, w, h, w * 4)
-    try:
-        surf.write_to_png(out + ".tmp")
+        pix = doc.doc[0].get_pixmap(matrix=sgpdf.fitz.Matrix(scale, scale), alpha=False, annots=True)
+        pix.save(out + ".tmp", output="png")
         os.replace(out + ".tmp", out)
-    except OSError as e:
-        return fail(str(e))
+    except Exception as e:  # MuPDF's own errors, and OSError
+        return fail(" ".join(str(e).split()))
     return 0
 
 
@@ -406,7 +220,10 @@ def main():
     if args[:1] == ["--serve"]:
         return serve(sys.stdin.fileno(), sys.stdout.buffer)
     if args[:1] == ["--info"] and len(args) == 2:
-        doc = Document()
+        if not HAVE_ENGINE:
+            print("ERR failed MuPDF (python3-pymupdf) is not installed")
+            return 1
+        doc = sgpdf.Engine()
         head, data = doc.open(args[1])
         print(head)
         sys.stdout.write(data.decode("utf-8"))

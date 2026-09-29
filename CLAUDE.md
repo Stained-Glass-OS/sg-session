@@ -61,7 +61,7 @@ separately.
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
 | `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
-| `bin/sg-pdf` | the PDF Viewer's Linux half: poppler renders pages and reports text, links, outline and search hits over the viewer's bridge (see below) |
+| `bin/sg-pdf` | SG PDF's Linux half: MuPDF renders, reports and edits (text, pictures, comments, forms, redaction, pages, security, export) over the program's bridge (see below) |
 | `speech/sg-dictate`, `speech/sgspeech.py` | voice typing's engine, its bridge, and sg-speechd, the model download (see below) |
 
 Paths default to `/var/lib/stained-glass` and are overridable via `SG_*`
@@ -1147,54 +1147,89 @@ child, so Settings reads files, as it does sg-dictate's.
   commands, and every refusal. Seen red: device names that start with `-`
   were accepted before the pattern was tightened.
 
-## The PDF Viewer's Linux half: sg-pdf
+## SG PDF's Linux half: sg-pdf
 
-`bin/sg-pdf` (Python, `/usr/bin/sg-pdf`) is what sg-shell's PDF Viewer
-(`sg-pdf64.exe`, the `.pdf` association) draws from: **Debian's poppler**
-through its GObject-introspection bindings (`gir1.2-poppler-0.18`,
-`python3-gi`, `python3-gi-cairo`, `python3-cairo` -- Recommends, and named in
-sg-image's package list). It runs as the user, reads only the file the viewer
-names, and touches no network. The viewer re-launches itself as `sg-pdf
---bridge wine <itself> --bridged <args>` and talks on its standard handles,
-as sg-dictate's toolbar does.
+`bin/sg-pdf` (Python, `/usr/bin/sg-pdf`) with its engine `pdf/sgpdf.py`
+(`/usr/lib/stained-glass/pdf/`, with `sgpdf_content.py` -- a content-stream
+tokenizer -- and `sgpdf_docx.py`, our own .docx writer) is what sg-shell's
+**SG PDF** (`sg-pdf64.exe`, the `.pdf` association: a viewer and an editor)
+draws from and edits through: **MuPDF** via Debian's `python3-pymupdf`
+(AGPL, as we are; Recommends, and named in sg-image's package list). It
+runs as the user, reads and writes only the files the program names, and
+touches no network. The program re-launches itself as `sg-pdf --bridge wine
+<itself> --bridged <args>` and talks on its standard handles, as
+sg-dictate's toolbar does. (Until 0.1.0-63 this was poppler, view-only.)
+
+The viewer's requests (unchanged from the poppler days):
 
 ```
-open PATH [PASSWORD]     OK pages=N bytes=K   "size W H" a page (points), "title T", "author A"
+open PATH [PASSWORD]     OK pages=N <state> bytes=K   "size W H" a page (points), "title T", "author A", ...
 render PAGE SCALE ROT    OK w=W h=H bytes=W*H*4   top-down B,G,R,A rows, opaque (white paper)
-text PAGE                OK n=N bytes=18N     N UTF-16LE units, then N boxes (4 x float32 LE:
-                                              x1 y1 x2 y2); a character beyond the BMP has its box twice
-find NEEDLE [FLAGS]      OK n=N bytes=K       "PAGE X1 Y1 X2 Y2" lines, in reading order;
-                                              FLAGS c = match case, w = whole words
-links PAGE               OK n=N bytes=K       "X1 Y1 X2 Y2<TAB>goto<TAB>PAGE<TAB>TOP" or "...<TAB>uri<TAB>URI"
-outline                  OK n=N bytes=K       "DEPTH<TAB>PAGE<TAB>TOP<TAB>OPEN<TAB>TITLE" lines, in order
-quit
+text PAGE                OK n=N bytes=18N     N UTF-16LE units, then N boxes (4 x float32 LE: x1 y1 x2 y2)
+find NEEDLE [FLAGS]      OK n=N bytes=K       "PAGE X1 Y1 X2 Y2" lines; FLAGS c = match case, w = whole words
+links PAGE / outline     as before
 ```
 
-One request a line, fields separated by tabs; pages are 0-based; every
-coordinate is in points with the origin at the page's top left, unturned
-(poppler's search hits and link areas are bottom-left based and turned
-here). Errors are one line, `ERR <kind> <message>`: `invalid`, `open`,
-`password` (the document needs one: the viewer asks and sends `open PATH
-PASSWORD`), `notopen`, `range`, `toolarge` (a bitmap over 60 Mpixel),
-`failed` (poppler is not installed says so here). `--serve` answers on its
-own stdin/stdout; `--info FILE` prints the open answer. `--thumbnail FILE
-SIZE OUT` is File Explorer's PDF thumbnail (wine-sg 0244's shell32 runs it
-as `\\?\unix/usr/bin/sg-pdf`): page 1 with its longer side SIZE (16-1024)
-as a PNG written to OUT.tmp then renamed, or the reason in OUT.err --
-**shell32 polls for one of the two files** (a Windows program gets no pipe
-to a native one), so both must appear whole and exactly one of them.
+The editor's (every one that changes the document answers like `open`, its
+state in the header: `undo= redo= dirty= perms= encrypted= protect= form=
+redactions=`; text fields escape tab, new line, CR and backslash with a
+backslash; options are `key=value` fields; PAGES are 0-based lists like
+`0,2,4-6`; coordinates are points on the page **as shown** -- its /Rotate
+applied, origin top left -- and turned to MuPDF's unrotated page inside):
 
-- **Gate: `test/pdf-test.py`** (in `make lint`; skips 77 without the GI
-  bindings): a PDF written by hand (Helvetica text, a filled box, a link
-  annotation, a two-entry outline); sizes, a bitmap's size and the box's
-  colour where the page puts it (and where a clockwise quarter turn puts
-  it), the H's box at the top left, find in any case and with match case in
-  reading order and top-left coordinates, the link and the outline, eight
-  refusals, and the bridge serving a stand-in program. Seen red against
-  mutants that leave search hits bottom-left based and that ignore the
-  rotation; `--thumbnail`'s size, no leftovers, and its refusals in
-  OUT.err (a mutant ignoring SIZE fails). sg-shell's `test/pdf-check.sh` is
-  the Windows side; wine-sg's `test/explorer3-gate.sh` the thumbnail's.
+```
+state | undo | redo | save PATH [apply=1] | properties title= author= subject= keywords=
+objects PAGE                      text blocks (font, size, colour, style, alignment, text), images, paths
+edittext PAGE ID RECT|- TEXT [font= size= color= bold= italic= align=]   replace a block: its glyphs
+                                  removed (a private text-only redaction), the new text reflowed in its width
+addtext PAGE RECT TEXT [...] | addimage PAGE RECT FILE | replaceimage PAGE ID FILE
+moveobj PAGE ID RECT | delobj PAGE ID      images: the one "Do" cut from the stream; paths: redrawn
+annot PAGE KIND key=value..       highlight underline strikeout squiggly note freetext rect ellipse line arrow ink
+annots [PAGE] | delannot PAGE XREF | moveannot PAGE XREF RECT | setannot PAGE XREF text= color=
+fields | setfield PAGE XREF VALUE | flatten [forms=1 annots=0] | signature PAGE RECT ink|text|image DATA
+redactmark PAGE rects=.. | redactfind WHAT [FLAGS [MARK]] (WHAT: text or pattern:phone|email|ssn|card|date)
+redactapply | sanitize [metadata= attachments= comments= forms= hidden_text= layers= bookmarks= links= thumbnails=]
+rotate PAGES DEG | delete PAGES | move PAGES TO | insertblank AT [W H] | insertfile AT FILE [PW]
+extract PAGES FILE [DELETE] | split N DIR BASE | combine OUT FILE..
+protect mode=aes256 user= owner= perms=print,copy,.. | protect mode=none | unlock OWNERPW
+export png|jpeg|txt|html|docx FILE [pages= dpi=]
+```
+
+- **True redaction.** Marks are Redact annotations (they survive other
+  edits and undo). Apply runs MuPDF's redaction with text removed, image
+  **pixels** blanked, vector paths touching a mark removed -- form XObjects
+  included -- and then draws again, exactly, the parts of touched
+  rectangles and straight lines outside the marks (table rules and
+  backgrounds survive); a path with curves is not cut but removed whole (its
+  outline could carry lettering). Comments, links and fields over a mark go
+  too. `save` is always a full rewrite with unreferenced objects collected
+  (garbage=3), never incremental, and the in-memory document is reopened
+  from the saved file (a garbage-collecting save renumbers objects under
+  MuPDF's caches). `sanitize` removes metadata/XMP, attachments,
+  JavaScript/OpenAction/AA, links, invisible text (render mode 3, our own
+  tokenizer, page streams and forms), hidden layers' marked content and
+  XObjects (then /OCProperties), comments, bookmarks, thumbnails.
+- **Undo** is whole-document snapshots (`tobytes`, encryption kept), 40
+  levels or 512 MB.
+- **Fonts for new text**: the block's own font when it is embedded *whole*
+  and has every character (a subset's missing glyphs would vanish), else
+  fontconfig's match for the family (Arial -> Liberation Sans, Calibri ->
+  Carlito, ...), else DejaVu/Noto CJK for the characters, else base-14.
+- **Export to Word** is reflowed: paragraphs, runs with font, size,
+  bold/italic, colour, pictures and page breaks; tables, columns and exact
+  positions are not rebuilt (no reliable open-source converter is in Debian).
+- `SG_PDF_TRACE=<file>` logs each request (passwords not logged).
+- **Gates: `test/pdf-test.py`** (the viewer's protocol, above) and
+  **`test/pdf-edit-test.py`** (every editing request through `--serve`,
+  results read from outside: pdftotext, `qpdf --check` on every saved file,
+  qpdf's uncompressed dump for raw searches -- literal, hex and UTF-16 -- and
+  a fresh MuPDF; poppler's GI too for annotations and fields). Its
+  redaction fixture (`test/pdf_fixtures.py`) writes the secrets as literal
+  strings, so the raw search is a real test (the positive control finds
+  them before). Both in `make lint`; they skip 77 without MuPDF.
+  `--thumbnail FILE SIZE OUT` (File Explorer's PDF thumbnails, wine-sg
+  0244) and `--info FILE` are as before. sg-shell's `test/pdf-check.sh` and
+  `test/pdf-editor-check.sh` are the Windows side.
 
 ## Voice typing: sg-dictate (Win+H)
 

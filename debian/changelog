@@ -1,3 +1,25 @@
+sg-session (0.1.0-63) unstable; urgency=medium
+
+  * sg-pdf is SG PDF's editor engine: MuPDF (python3-pymupdf, AGPL) in
+    place of poppler, with pdf/sgpdf.py (installed in
+    /usr/lib/stained-glass/pdf) behind the same bridge and viewer protocol.
+    New requests edit text in place (the block's glyphs removed, the new
+    text reflowed in its width in the matched font), add, move, resize,
+    replace and delete pictures and paths; add, move, edit and delete
+    standard comments (highlight, underline, strikeout, note, free text,
+    shapes, ink); fill AcroForm fields, flatten, place signatures; mark,
+    find (phrases and patterns) and apply true redactions -- text, image
+    pixels and vector paths removed from the content streams, touched
+    rectangles and rules drawn again around the marks, saving a full
+    rewrite -- and remove hidden information (metadata, attachments,
+    JavaScript, links, invisible text, hidden layers, comments); rotate,
+    delete, move, insert, extract, split and combine pages; AES-256
+    passwords and permissions; export to PNG, JPEG, text, HTML and .docx
+    (our own writer, reflowed); undo and redo. Recommends python3-pymupdf.
+    Gate: test/pdf-edit-test.py (in make lint), test/pdf-test.py.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 29 Sep 2026 11:00:00 -0700
+
 sg-session (0.1.0-62) unstable; urgency=medium
 
   * Microsoft Office draws in software for an account with no choice

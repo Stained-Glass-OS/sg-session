@@ -37,8 +37,10 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo $(BINDIR)
-	@# The PDF Viewer's Linux half: poppler through its GI bindings.
+	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
+	install -d $(LIBDIR)/pdf
+	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py $(LIBDIR)/pdf/
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
 	install -m 0755 bin/sg-settingsctl $(BINDIR)
 	@# Voice typing: the engine (sgspeech.py) and its command. The model is
@@ -206,7 +208,9 @@ lint:
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
-	@python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@for f in pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py; do python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' $$f || exit 1; done
+	@/usr/bin/python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@/usr/bin/python3 test/pdf-edit-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-fetch
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
@@ -214,7 +218,7 @@ lint:
 	@sh test/oobe-user-test.sh
 	@sh test/media-test.sh
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
-	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib speech domain rdp broker admin procagent config systemd
+	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-eject bin/sg-netbrowse bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh \
 		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \

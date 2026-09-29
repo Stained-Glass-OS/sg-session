@@ -1,13 +1,14 @@
 #!/usr/bin/python3
-# Unit gate for sg-pdf, the PDF Viewer's Linux half (poppler). A PDF is
+# Unit gate for sg-pdf, SG PDF's Linux half (MuPDF), as a viewer. A PDF is
 # written here by hand (two pages of Helvetica text, a link, an outline), and
 # the checks are the protocol the Windows viewer speaks: page sizes, bitmaps
 # of the right size and colour (turned for 90 degrees), each character's box
 # where the text is, search hits in top-left coordinates, links and
 # bookmarks, and the refusals -- a missing or damaged file, a request before
 # a document, pages out of range, absurd scales, unknown requests -- then the
-# bridge a Windows program talks through. Skips (77) without poppler's GI
-# bindings (gir1.2-poppler-0.18), which the package depends on.
+# bridge a Windows program talks through. Skips (77) without MuPDF
+# (python3-pymupdf), which the package recommends. The editor's requests
+# are test/pdf-edit-test.py's.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import os
@@ -114,8 +115,8 @@ def main():
         f.write("not a pdf\n")
 
     probe = subprocess.run([PDF, "--info", doc], capture_output=True, text=True)
-    if "poppler is not installed" in probe.stdout:
-        print("SKIP: poppler's GI bindings (gir1.2-poppler-0.18) are not installed")
+    if "MuPDF (python3-pymupdf) is not installed" in probe.stdout:
+        print("SKIP: MuPDF (python3-pymupdf) is not installed")
         return 77
 
     c = Client()
