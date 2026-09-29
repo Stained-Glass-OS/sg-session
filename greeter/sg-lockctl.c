@@ -18,13 +18,23 @@
 
 int main( int argc, char **argv )
 {
-    const char *path = getenv( "SG_LOCK_CONTROL" );
+    const char *path = getenv( "SG_LOCK_CONTROL" ), *out_path = NULL;
+    char out_part[4200];
+    FILE *out = stdout;
     struct sockaddr_un addr = { .sun_family = AF_UNIX };
     char cmd[48], reply[256] = "", first[3] = "";
     int got = 0;
     ssize_t n;
     int fd;
 
+    /* a list (WINDOWS, XWINDOWS) goes to --out FILE when asked: Wine hands a
+     * native program no pipe for its output, so the taskbar reads a file */
+    if (argc == 4 && !strcmp( argv[2], "--out" ) && (!strcmp( argv[1], "WINDOWS" ) || !strcmp( argv[1], "XWINDOWS" )) &&
+        argv[3][0] == '/' && strlen( argv[3] ) < 4096)
+    {
+        out_path = argv[3];
+        argc = 2;
+    }
     /* ACTIVATE <display> <window>: bring an elevated program's window forward
      * (the taskbar; ADR 0012). Numbers only: nothing else reaches the socket. */
     if (argc == 4 && !strcmp( argv[1], "ACTIVATE" ) && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) &&
@@ -36,24 +46,33 @@ int main( int argc, char **argv )
     else if (argc == 3 && (!strcmp( argv[1], "XACTIVATE" ) || !strcmp( argv[1], "XMINIMIZE" ) || !strcmp( argv[1], "XCLOSE" )) &&
              *argv[2] && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) && strlen( argv[2] ) < 11)
         snprintf( cmd, sizeof(cmd), "%s %s\n", argv[1], argv[2] );
-    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS|XWINDOWS | ACTIVATE DISPLAY WINDOW | XACTIVATE|XMINIMIZE|XCLOSE WINDOW\n" ); return 2; }
+    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS|XWINDOWS [--out FILE] | ACTIVATE DISPLAY WINDOW | XACTIVATE|XMINIMIZE|XCLOSE WINDOW\n" ); return 2; }
     else snprintf( cmd, sizeof(cmd), "%s\n", argv[1] );
     if (!path || strlen( path ) >= sizeof(addr.sun_path)) { fprintf( stderr, "SG_LOCK_CONTROL not set\n" ); return 2; }
     strcpy( addr.sun_path, path );
     if ((fd = socket( AF_UNIX, SOCK_STREAM, 0 )) < 0) return 1;
     if (connect( fd, (struct sockaddr *)&addr, sizeof(addr) ) < 0) { perror( path ); return 1; }
     if (write( fd, cmd, strlen( cmd ) ) < 0) return 1;
+    if (out_path)
+    {
+        snprintf( out_part, sizeof(out_part), "%s.part", out_path );
+        if (!(out = fopen( out_part, "w" ))) return 1;
+    }
     /* WINDOWS answers with several lines: read until the compositor hangs up */
     for (;;)
     {
         n = read( fd, reply, sizeof(reply) - 1 );
         if (n <= 0) break;
         reply[n] = 0;
-        fputs( reply, stdout );
+        fputs( reply, out );
         if (!got) memcpy( first, reply, 3 );
         got = 1;
     }
     close( fd );
+    if (out_path)
+    {
+        if (fclose( out ) || !got || rename( out_part, out_path )) { unlink( out_part ); return 1; }
+    }
     if (!got) return 1;
     if (argc == 2 && (!strcmp( argv[1], "WINDOWS" ) || !strcmp( argv[1], "XWINDOWS" ))) return 0;   /* a list, ending in END */
     memcpy( reply, first, 3 );

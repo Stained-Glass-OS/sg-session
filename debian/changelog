@@ -3,6 +3,8 @@ sg-session (0.1.0-60) unstable; urgency=medium
   * sg-lockctl carries XWINDOWS, and XACTIVATE, XMINIMIZE and XCLOSE of a
     window id (numbers only): the taskbar lists and drives the session's
     Linux programs' windows through the compositor (sg-compositor sg13).
+    A list (WINDOWS, XWINDOWS) goes to --out FILE when asked: Wine hands
+    a native program no pipe for its output (the taskbar, wine-sg 0496).
     Gate: sg-compositor's test/xwindows-gate.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 29 Sep 2026 00:20:00 -0700
