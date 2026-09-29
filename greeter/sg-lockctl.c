@@ -35,18 +35,19 @@ int main( int argc, char **argv )
         out_path = argv[3];
         argc = 2;
     }
-    /* ACTIVATE <display> <window>: bring an elevated program's window forward
+    /* ACTIVATE|MINIMIZE <display> <window>: bring an elevated program's window
+     * forward, or minimize it
      * (the taskbar; ADR 0012). Numbers only: nothing else reaches the socket. */
-    if (argc == 4 && !strcmp( argv[1], "ACTIVATE" ) && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) &&
+    if (argc == 4 && (!strcmp( argv[1], "ACTIVATE" ) || !strcmp( argv[1], "MINIMIZE" )) && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) &&
         strspn( argv[3], "0123456789" ) == strlen( argv[3] ) && *argv[2] && *argv[3] &&
         strlen( argv[2] ) < 6 && strlen( argv[3] ) < 11)
-        snprintf( cmd, sizeof(cmd), "ACTIVATE %s %s\n", argv[2], argv[3] );
+        snprintf( cmd, sizeof(cmd), "%s %s %s\n", argv[1], argv[2], argv[3] );
     /* XACTIVATE|XMINIMIZE|XCLOSE <window>: a Linux program's window in the
      * session (the taskbar), by its X window id; numbers only */
     else if (argc == 3 && (!strcmp( argv[1], "XACTIVATE" ) || !strcmp( argv[1], "XMINIMIZE" ) || !strcmp( argv[1], "XCLOSE" )) &&
              *argv[2] && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) && strlen( argv[2] ) < 11)
         snprintf( cmd, sizeof(cmd), "%s %s\n", argv[1], argv[2] );
-    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS|XWINDOWS [--out FILE] | ACTIVATE DISPLAY WINDOW | XACTIVATE|XMINIMIZE|XCLOSE WINDOW\n" ); return 2; }
+    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS|XWINDOWS [--out FILE] | ACTIVATE|MINIMIZE DISPLAY WINDOW | XACTIVATE|XMINIMIZE|XCLOSE WINDOW\n" ); return 2; }
     else snprintf( cmd, sizeof(cmd), "%s\n", argv[1] );
     if (!path || strlen( path ) >= sizeof(addr.sun_path)) { fprintf( stderr, "SG_LOCK_CONTROL not set\n" ); return 2; }
     strcpy( addr.sun_path, path );

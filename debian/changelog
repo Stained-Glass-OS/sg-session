@@ -1,3 +1,10 @@
+sg-session (0.1.0-61) unstable; urgency=medium
+
+  * sg-lockctl carries MINIMIZE DISPLAY WINDOW (numbers only), to minimize
+    an elevated window from the taskbar (sg-compositor sg14, wine-sg 0500).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 29 Sep 2026 07:20:00 -0700
+
 sg-session (0.1.0-60) unstable; urgency=medium
 
   * sg-lockctl carries XWINDOWS, and XACTIVATE, XMINIMIZE and XCLOSE of a
