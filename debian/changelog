@@ -1,3 +1,14 @@
+sg-session (0.1.0-62) unstable; urgency=medium
+
+  * Microsoft Office draws in software for an account with no choice
+    recorded (HKCU ...\Office\16.0\Common\Graphics
+    DisableHardwareAcceleration 1, set once at login): its hardware drawing
+    shares Direct3D textures the Vulkan layer cannot share under Wine, and
+    every Office window stayed empty. A value the user set is kept. Gate:
+    test/office-gfx-check.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 29 Sep 2026 08:45:00 -0700
+
 sg-session (0.1.0-61) unstable; urgency=medium
 
   * sg-lockctl carries MINIMIZE DISPLAY WINDOW (numbers only), to minimize

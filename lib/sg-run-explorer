@@ -118,6 +118,16 @@ reg_set() {
 reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
 reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 
+# Microsoft Office draws in software unless the user chose otherwise: its
+# hardware drawing shares Direct3D textures the Vulkan layer cannot share
+# under Wine, and every Office window stayed empty. New users have this from
+# the Default User profile (sg-shell defaults/88-sg-office.reg); an account
+# made before it gets it here, once -- a value already there is the user's.
+_offgfx='HKCU\Software\Microsoft\Office\16.0\Common\Graphics'
+wine reg query "$_offgfx" /v DisableHardwareAcceleration >/dev/null 2>&1 ||
+    wine reg add "$_offgfx" /v DisableHardwareAcceleration /t REG_DWORD /d 1 /f >/dev/null 2>&1 ||
+    sg_log "could not set Office's software drawing"
+
 # A domain user's registry policy (Group Policy, recorded at sign-in by
 # sg-domain-logon) goes into HKCU before the shell starts, as Windows applies
 # it before the desktop. reg.exe, a console program: it opens no desktop.
