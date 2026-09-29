@@ -1,4 +1,5 @@
-/* Send one command (LOCK, STATUS, WINDOWS, ACTIVATE) to the compositor's control socket.
+/* Send one command (LOCK, STATUS, WINDOWS, ACTIVATE, XWINDOWS, XACTIVATE, XMINIMIZE, XCLOSE)
+ * to the compositor's control socket.
  *
  * This is what Wine's LockWorkStation() runs (wine-sg patch 0010): Windows
  * code cannot open a Unix socket -- Wine has no AF_UNIX -- but it can start a
@@ -30,7 +31,12 @@ int main( int argc, char **argv )
         strspn( argv[3], "0123456789" ) == strlen( argv[3] ) && *argv[2] && *argv[3] &&
         strlen( argv[2] ) < 6 && strlen( argv[3] ) < 11)
         snprintf( cmd, sizeof(cmd), "ACTIVATE %s %s\n", argv[2], argv[3] );
-    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS | ACTIVATE DISPLAY WINDOW\n" ); return 2; }
+    /* XACTIVATE|XMINIMIZE|XCLOSE <window>: a Linux program's window in the
+     * session (the taskbar), by its X window id; numbers only */
+    else if (argc == 3 && (!strcmp( argv[1], "XACTIVATE" ) || !strcmp( argv[1], "XMINIMIZE" ) || !strcmp( argv[1], "XCLOSE" )) &&
+             *argv[2] && strspn( argv[2], "0123456789" ) == strlen( argv[2] ) && strlen( argv[2] ) < 11)
+        snprintf( cmd, sizeof(cmd), "%s %s\n", argv[1], argv[2] );
+    else if (argc != 2 || strlen( argv[1] ) > 16) { fprintf( stderr, "usage: sg-lockctl LOCK|STATUS|WINDOWS|XWINDOWS | ACTIVATE DISPLAY WINDOW | XACTIVATE|XMINIMIZE|XCLOSE WINDOW\n" ); return 2; }
     else snprintf( cmd, sizeof(cmd), "%s\n", argv[1] );
     if (!path || strlen( path ) >= sizeof(addr.sun_path)) { fprintf( stderr, "SG_LOCK_CONTROL not set\n" ); return 2; }
     strcpy( addr.sun_path, path );
@@ -49,7 +55,7 @@ int main( int argc, char **argv )
     }
     close( fd );
     if (!got) return 1;
-    if (argc == 2 && !strcmp( argv[1], "WINDOWS" )) return 0;   /* a list, ending in END */
+    if (argc == 2 && (!strcmp( argv[1], "WINDOWS" ) || !strcmp( argv[1], "XWINDOWS" ))) return 0;   /* a list, ending in END */
     memcpy( reply, first, 3 );
     return strncmp( reply, "OK", 2 ) ? 1 : 0;
 }
