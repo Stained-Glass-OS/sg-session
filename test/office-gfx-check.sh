@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # sg-run-explorer turns Microsoft Office's hardware drawing off for an
 # account that has no choice recorded (Office windows stayed empty with it
 # on), and leaves a value the user set alone. Runs the script's own lines
