@@ -6,6 +6,12 @@
 # 0008). On success greetd itself starts the user's session with the command
 # given here -- the greeter cannot choose it.
 set -u
+
+# No core dumps in the user's home: wlroots starts Xwayland with -core, and
+# Xwayland dies at every sign-out -- each left a 20 MB core file in the home
+# (now the user's profile, seen in File Explorer). Nobody reads them here.
+# shellcheck disable=SC3045 # dash (/bin/sh here) has ulimit -c
+ulimit -c 0 2>/dev/null || true
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
 . "$SG_LIB/sg-common.sh"

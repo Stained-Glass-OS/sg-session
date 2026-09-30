@@ -1,3 +1,12 @@
+sg-session (0.1.0-74) unstable; urgency=medium
+
+  * No core dumps in users' homes: wlroots starts Xwayland with -core and it
+    dies at every sign-out, leaving a 20 MB core file in the home -- now the
+    user's profile, in plain sight in File Explorer. The session and the login
+    screen run with core dumps off (ulimit -c 0).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 15:00:00 +0000
+
 sg-session (0.1.0-73) unstable; urgency=medium
 
   * One home for Linux and Windows programs (David 2026-09-30): each user's
