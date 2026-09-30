@@ -136,6 +136,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	@# the deb's postinst registers it with pam-auth-update.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
 	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# One home: /home/<user> is a link to the Windows profile (sg-shared-home.service, and at sign-in).
+	install -m 0755 bin/sg-shared-home $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# The Security log's sign-in/sign-out events (sg-audit, pam_exec at session open and close).
 	install -m 0755 bin/sg-audit $(DESTDIR)$(PREFIX)/libexec/stained-glass/
@@ -155,6 +157,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
 	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol
+	install -m 0644 systemd/sg-shared-home.service $(DESTDIR)$(PREFIX)/lib/systemd/system/
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
@@ -193,12 +196,13 @@ lint:
 	@for f in $$(grep -l WINEPREFIX test/*.sh); do \
 	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/shell-supervisor-test.sh
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh
 	@sh test/prefix-current-test.sh
+	@sh test/shared-home-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
@@ -223,7 +227,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-eject bin/sg-netbrowse bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh \
 		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

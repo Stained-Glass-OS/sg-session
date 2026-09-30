@@ -1,0 +1,15 @@
+[Unit]
+Description=Stained Glass OS: each user's Linux home is their Windows profile
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# /home/<user> becomes a link to C:\users\<user> (sg-shared-home). At boot,
+# before anyone signs in, so no program has a user's home open while it moves.
+After=local-fs.target sg-prefix-init.service
+Before=systemd-user-sessions.service greetd.service sg-live.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/stained-glass/sg-shared-home --boot
+
+[Install]
+WantedBy=multi-user.target

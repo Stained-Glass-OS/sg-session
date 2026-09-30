@@ -1,3 +1,19 @@
+sg-session (0.1.0-73) unstable; urgency=medium
+
+  * One home for Linux and Windows programs (David 2026-09-30): each user's
+    /home/<user> is a link to their Windows profile, C:\users\<user>, which
+    stays an ordinary folder. sg-shared-home: at boot (sg-shared-home.service,
+    before anyone signs in) for every Windows user -- a home that is a folder
+    is kept as /home/.<user>.pre-shared-home and its files are copied into the
+    profile, never over one the profile has; at sign-in for a new account.
+    /etc/stained-glass/no-shared-home turns it off. Needs wine-sg 10.0-120
+    (0583: a shell folder is never linked to itself). Note: ssh public-key
+    sign-in for a Windows user is refused by sshd's StrictModes (the profile
+    carries the SYSTEM account's ACL); passwords work.
+    Gate: test/shared-home-test.sh (in lint).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 14:30:00 +0000
+
 sg-session (0.1.0-72) unstable; urgency=medium
 
   * Depends on sg-d3d, the Direct3D layers (DXVK with Stained Glass OS's

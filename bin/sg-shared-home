@@ -1,0 +1,90 @@
+#!/bin/sh
+# One home for a user's Linux and Windows programs: /home/<user> is a link to
+# the user's Windows profile, C:\users\<user> -- the profile stays an ordinary
+# folder, so the Windows side is as on Windows, and Linux programs see the same
+# Desktop, Documents, Downloads... (David 2026-09-30).
+#
+#   sg-shared-home --boot          every Windows user, before anyone signs in
+#   sg-shared-home --login USER    one user, from sg-profile-create at sign-in:
+#                                  only a missing home, or one holding nothing
+#                                  but the default files (/etc/skel) -- a home
+#                                  in use is moved at the next boot instead
+#
+# A home that is a folder is renamed /home/.<user>.pre-shared-home (kept, never
+# deleted), and its files are copied into the profile as the user, never over
+# a file the profile already has. /etc/stained-glass/no-shared-home turns it
+# off. Run as root; always exits 0 (a boot or a sign-in must not fail over it).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+HOMES="${SG_HOMES:-/home}"
+PROFILE_CREATE="${SG_PROFILE_CREATE:-/usr/libexec/stained-glass/sg-profile-create}"
+
+[ -e "${SG_NO_SHARED_HOME:-/etc/stained-glass/no-shared-home}" ] && exit 0
+
+# only_skel DIR: nothing in it but what /etc/skel gives a new account
+only_skel() {
+    for _f in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$_f" ] || [ -L "$_f" ] || continue
+        _n=$(basename "$_f")
+        [ -e "/etc/skel/$_n" ] || return 1
+    done
+    return 0
+}
+
+link_home() {   # USER MODE
+    _user=$1 _mode=$2
+    _entry=$(getent passwd "$_user") || return 0
+    _uid=$(echo "$_entry" | cut -d: -f3)
+    _home=$(echo "$_entry" | cut -d: -f6)
+    [ "$_uid" -ge 1000 ] 2>/dev/null || return 0
+    [ "$_user" = "$SG_SYSTEM_USER" ] && return 0
+    # only a home in the usual place, one level below it
+    [ "$_home" = "$HOMES/$_user" ] || return 0
+    _profile="$SG_PREFIX/drive_c/users/$_user"
+    [ -d "$_profile" ] && [ ! -L "$_profile" ] || return 0
+    [ "$(stat -c %U "$_profile")" = "$_user" ] || return 0
+
+    if [ -L "$_home" ]; then
+        [ "$(readlink "$_home")" = "$_profile" ] && return 0
+        return 0    # a link someone made on purpose: left alone
+    fi
+    if [ -e "$_home" ] && [ ! -d "$_home" ]; then return 0; fi
+    if [ -d "$_home" ]; then
+        if [ "$_mode" = login ] && ! only_skel "$_home"; then
+            sg_log "$_user's home is in use: it becomes the user profile at the next start"
+            return 0
+        fi
+        _kept="$HOMES/.$_user.pre-shared-home"
+        [ -e "$_kept" ] && _kept="$_kept.$(date +%Y%m%d%H%M%S)"
+        mv "$_home" "$_kept" || return 0
+        # as the user: the files are theirs, and root copying a tree the user
+        # controls could be sent anywhere by a link
+        runuser -u "$_user" -- cp -a --no-clobber "$_kept/." "$_profile/" 2>/dev/null ||
+            sg_log "WARNING: not everything in $_kept could be copied into $_user's profile"
+        sg_log "$_user's home is now the user profile; the old home is kept at $_kept"
+    else
+        # a new account: the default files, into the profile
+        [ -d /etc/skel ] && runuser -u "$_user" -- cp -a --no-clobber /etc/skel/. "$_profile/" 2>/dev/null
+    fi
+    ln -s "$_profile" "$_home" && chown -h "$_user:" "$_home" 2>/dev/null
+    return 0
+}
+
+case "${1:-}" in
+--login)
+    [ -n "${2:-}" ] && link_home "$2" login ;;
+--boot)
+    getent group "$SG_WINE_GROUP" >/dev/null || exit 0
+    for _u in $(getent group "$SG_WINE_GROUP" | cut -d: -f4 | tr ',' ' '); do
+        # the profile first, as at a sign-in (it creates only what is missing)
+        [ -x "$PROFILE_CREATE" ] && PAM_TYPE=open_session "$PROFILE_CREATE" "$_u" >/dev/null 2>&1
+        link_home "$_u" boot
+    done ;;
+*)
+    echo "usage: sg-shared-home --boot | --login USER" >&2 ;;
+esac
+exit 0

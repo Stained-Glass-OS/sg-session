@@ -95,4 +95,8 @@ if command -v setfacl >/dev/null 2>&1; then
         mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile" "$SG_SYSTEM_USER" 2>/dev/null ||
         sg_log "WARNING: could not give the SYSTEM account access to $user's profile"
 fi
+# One home for Linux and Windows programs: a new account's /home/<user> is
+# made a link to this profile now; a home already in use waits for the next
+# boot (sg-shared-home.service).
+"${SG_SHARED_HOME:-/usr/libexec/stained-glass/sg-shared-home}" --login "$user" 2>/dev/null
 exit 0
