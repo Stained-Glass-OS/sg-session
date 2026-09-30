@@ -1,3 +1,16 @@
+sg-session (0.1.0-76) unstable; urgency=medium
+
+  * Elevated programs can read the user's files again (David: MakeMKV's setup
+    asked for an administrator, then did nothing; an elevated paste did
+    nothing). Merging a home into the profile (0.1.0-73) copied the home's
+    0700 onto the profile folder, which emptied its ACL mask: the SYSTEM
+    account, which elevated programs run as, could open nothing in the
+    profile -- not the installer in Downloads. sg-shared-home gives SYSTEM
+    its access again after a merge; every sign-in restores it on the profile
+    folder, and each profile gets the recursive pass once more.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 18:30:00 +0000
+
 sg-session (0.1.0-75) unstable; urgency=medium
 
   * The live session says on the console that it made its account, as the

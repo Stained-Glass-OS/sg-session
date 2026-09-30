@@ -70,6 +70,16 @@ link_home() {   # USER MODE
         # a new account: the default files, into the profile
         [ -d /etc/skel ] && runuser -u "$_user" -- cp -a --no-clobber /etc/skel/. "$_profile/" 2>/dev/null
     fi
+    # cp -a gave the profile the old home's mode (0700), which empties the ACL
+    # mask, and the files their old ACLs: the SYSTEM account, which elevated
+    # programs run as, lost access to the whole profile -- an installer in
+    # Downloads died after the user said Yes, and so did an elevated paste
+    # (David). SYSTEM's access again, as the user (setfacl -P follows no link).
+    if command -v setfacl >/dev/null 2>&1; then
+        runuser -u "$_user" -- setfacl -R -P -m "u:$SG_SYSTEM_USER:rwX" -m "d:u:$SG_SYSTEM_USER:rwX" \
+            "$_profile" 2>/dev/null ||
+            sg_log "WARNING: could not give the SYSTEM account access to $_user's profile again"
+    fi
     ln -s "$_profile" "$_home" && chown -h "$_user:" "$_home" 2>/dev/null
     return 0
 }

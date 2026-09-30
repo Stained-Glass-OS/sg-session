@@ -86,10 +86,16 @@ runuser -u "$user" -- sh -c 'umask 077; cd "$1" || exit 1
 # theirs, and root walking it could be sent elsewhere by a symbolic link;
 # setfacl -P does not follow them. The recursive pass is once per profile (a
 # marker); the default ACLs carry it from then on.
+#
+# The profile folder's own entry at every sign-in: a chmod of it (cp -a of a
+# home into it, "chmod 700 ~") empties the ACL mask, and SYSTEM loses the whole
+# profile. The marker is "-2": profiles whose homes were merged in before that
+# was known get the recursive pass once more.
 if command -v setfacl >/dev/null 2>&1; then
     # shellcheck disable=SC2016 # $1..$2 are the inner shell's, deliberately
     runuser -u "$user" -- sh -c 'cd "$1" || exit 1
-        mark="AppData/Local/Stained Glass/system-access"
+        setfacl -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null || exit 1
+        mark="AppData/Local/Stained Glass/system-access-2"
         [ -e "$mark" ] && exit 0
         setfacl -R -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null || exit 1
         mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile" "$SG_SYSTEM_USER" 2>/dev/null ||
