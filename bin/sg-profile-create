@@ -97,7 +97,9 @@ if command -v setfacl >/dev/null 2>&1; then
         setfacl -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null || exit 1
         mark="AppData/Local/Stained Glass/system-access-2"
         [ -e "$mark" ] && exit 0
-        setfacl -R -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null || exit 1
+        # files an elevated program made are SYSTEM'"'"'s already: the user
+        # cannot change them, and that is not a failure
+        setfacl -R -P -m "u:$2:rwX" -m "d:u:$2:rwX" . 2>/dev/null
         mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile" "$SG_SYSTEM_USER" 2>/dev/null ||
         sg_log "WARNING: could not give the SYSTEM account access to $user's profile"
 fi

@@ -76,9 +76,9 @@ link_home() {   # USER MODE
     # Downloads died after the user said Yes, and so did an elevated paste
     # (David). SYSTEM's access again, as the user (setfacl -P follows no link).
     if command -v setfacl >/dev/null 2>&1; then
+        # (files an elevated program made are SYSTEM's already, and fail here)
         runuser -u "$_user" -- setfacl -R -P -m "u:$SG_SYSTEM_USER:rwX" -m "d:u:$SG_SYSTEM_USER:rwX" \
-            "$_profile" 2>/dev/null ||
-            sg_log "WARNING: could not give the SYSTEM account access to $_user's profile again"
+            "$_profile" 2>/dev/null
     fi
     ln -s "$_profile" "$_home" && chown -h "$_user:" "$_home" 2>/dev/null
     return 0
