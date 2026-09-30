@@ -1,3 +1,17 @@
+sg-session (0.1.0-71) unstable; urgency=medium
+
+  * On upgrade, repair machines installed from earlier images:
+    - remove the image build's leftover trixie.sources (only that file: it
+      names the -debug archive) -- apt's "Target Packages ... is configured
+      multiple times" warnings on every update (David);
+    - rename sg-splash.initrd to sg-theme.initrd in the boot entries: its
+      name hid the "splash" argument from Plymouth, so the boot showed text;
+    - apply Debian's sysctl defaults now (vm.max_map_count).
+    None of it can fail the upgrade (a live system's ESP is read-only).
+    Tried on the QA VM: apt update without the warnings, entry renamed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 07:30:00 +0000
+
 sg-session (0.1.0-70) unstable; urgency=medium
 
   * Depends on linux-sysctl-defaults (Debian's sysctl defaults, a Recommends

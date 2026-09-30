@@ -12,6 +12,37 @@ case "$1" in
         # every account may ping (60-stained-glass-ping.conf) -- now, not
         # only from the next boot
         sysctl -q -p /usr/lib/sysctl.d/60-stained-glass-ping.conf >/dev/null 2>&1 || true
+        # Debian's sysctl defaults (linux-sysctl-defaults): vm.max_map_count
+        # for programs that map hundreds of DLLs -- now, not at the next boot
+        sysctl -q -p /usr/lib/sysctl.d/50-default.conf >/dev/null 2>&1 || true
+
+        # Machines installed from images before 2026-09-30 kept the image
+        # build's own trixie.sources beside debian.sources: apt warned
+        # "Target Packages ... is configured multiple times" on every update
+        # (David). Only that leftover is removed -- the build's file names
+        # the -debug archive, which no source we write does.
+        _src=/etc/apt/sources.list.d
+        if [ -f "$_src/trixie.sources" ] && [ -f "$_src/debian.sources" ] \
+           && grep -q 'deb.debian.org/debian-debug' "$_src/trixie.sources"; then
+            rm -f "$_src/trixie.sources" || true
+        fi
+
+        # The splash's own initrd was named sg-splash.initrd, and Plymouth,
+        # finding "splash" first inside that name on the command line,
+        # decided the boot had no splash and showed text. Rename it in the
+        # boot entries of machines installed with that name.
+        # (never fatal: a live system's boot medium is read-only)
+        if command -v bootctl >/dev/null 2>&1 && _esp=$(bootctl --print-boot-path 2>/dev/null) \
+           && [ -d "$_esp/loader/entries" ]; then (
+            for _e in "$_esp"/loader/entries/*.conf; do
+                [ -f "$_e" ] && grep -q '^initrd /.*/sg-splash\.initrd$' "$_e" || continue
+                for _i in $(sed -n 's|^initrd \(/.*\)/sg-splash\.initrd$|\1|p' "$_e"); do
+                    [ -f "$_esp$_i/sg-splash.initrd" ] && mv -f "$_esp$_i/sg-splash.initrd" "$_esp$_i/sg-theme.initrd"
+                done
+                sed -i 's|^\(initrd /.*\)/sg-splash\.initrd$|\1/sg-theme.initrd|' "$_e"
+            done
+        ) || true
+        fi
         # The session user owns the system prefix. Phase 0 has exactly one.
         # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
         #
