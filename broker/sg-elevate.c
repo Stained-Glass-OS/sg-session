@@ -75,6 +75,7 @@ int main(int argc, char **argv)
     size_t off = 0;
     int fd, i, first = 1;
     unsigned char status = 2;
+    const char *debug;
 
     if (!sockpath) sockpath = "/run/stained-glass-broker/broker.sock";
     int wine_mode = 0;
@@ -96,6 +97,14 @@ int main(int argc, char **argv)
             if (v) { char kv[4200]; snprintf(kv, sizeof(kv), "%s=%s", pass[i], v); off = put(blob, off, sizeof(blob), kv); }
         }
     }
+    /* "Run with debugging" (sg-debug-run): the elevated program logs too, into
+     * this program's standard error -- the report's log -- which goes to the
+     * broker with the request. Nothing is sent without WINEDEBUG. */
+    if ((debug = getenv("WINEDEBUG")) && *debug) {
+        char kv[600];
+        snprintf(kv, sizeof(kv), "WINEDEBUG=%s", debug);
+        off = put(blob, off, sizeof(blob), kv);
+    } else debug = NULL;
     if (wine_mode) {
         /* The user's light or dark modes and accent colour, for the elevated
          * program to look like the user's others (sg-elevated-run). */
@@ -128,7 +137,22 @@ int main(int argc, char **argv)
         return 2;
     }
     uint32_t len = (uint32_t)off;
-    if (write_full(fd, &len, sizeof(len)) || write_full(fd, blob, off)) { close(fd); return 2; }
+    if (debug && fcntl(2, F_GETFD) >= 0) {
+        /* the length, with standard error attached */
+        struct iovec iov = { &len, sizeof(len) };
+        union { struct cmsghdr h; char buf[CMSG_SPACE(sizeof(int))]; } c;
+        struct msghdr msg;
+        int err = 2;
+        memset(&msg, 0, sizeof(msg)); memset(&c, 0, sizeof(c));
+        msg.msg_iov = &iov; msg.msg_iovlen = 1;
+        msg.msg_control = c.buf; msg.msg_controllen = sizeof(c.buf);
+        CMSG_FIRSTHDR(&msg)->cmsg_level = SOL_SOCKET;
+        CMSG_FIRSTHDR(&msg)->cmsg_type = SCM_RIGHTS;
+        CMSG_FIRSTHDR(&msg)->cmsg_len = CMSG_LEN(sizeof(int));
+        memcpy(CMSG_DATA(CMSG_FIRSTHDR(&msg)), &err, sizeof(int));
+        if (sendmsg(fd, &msg, 0) != (ssize_t)sizeof(len)) { close(fd); return 2; }
+        if (write_full(fd, blob, off)) { close(fd); return 2; }
+    } else if (write_full(fd, &len, sizeof(len)) || write_full(fd, blob, off)) { close(fd); return 2; }
 
     if (read(fd, &status, 1) != 1) { fprintf(stderr, "sg-elevate: broker closed the connection\n"); close(fd); return 2; }
     if (status == 0) {

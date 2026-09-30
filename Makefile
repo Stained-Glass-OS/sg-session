@@ -427,6 +427,11 @@ test-elevate-look:
 test-elevate-console:
 	@sh test/elevate-console-test.sh
 
+# "Run with debugging" keeps logging when the program elevates.
+.PHONY: test-elevate-debug
+test-elevate-debug: procagent
+	@sh test/elevate-debug-test.sh
+
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh

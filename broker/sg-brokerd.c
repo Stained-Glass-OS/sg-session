@@ -470,8 +470,51 @@ static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run"
  * otherwise "done" at once: its caller went on, deleted the package, and the
  * installer found no file. The program itself does not get CONN. Returns FALSE
  * if nothing could be started (the caller answers then). */
+/* A debug request's channel list (WINEDEBUG): letters, digits and + - _ , only
+ * -- a list of channels to trace, nothing Wine could read as more. */
+static int debug_channels_ok(const char *v)
+{
+    size_t n = strlen(v);
+    if (!n || n > 512) return 0;
+    for (; *v; v++)
+        if (!((*v >= 'a' && *v <= 'z') || (*v >= 'A' && *v <= 'Z') || (*v >= '0' && *v <= '9') ||
+              *v == '+' || *v == '-' || *v == '_' || *v == ',')) return 0;
+    return 1;
+}
+
+/* The request's length, and the standard error sent with it (a debug
+ * request's), or -1. Anything else sent along is closed. */
+static int read_request_len(int conn, uint32_t *len, int *errfd)
+{
+    union { struct cmsghdr h; char buf[CMSG_SPACE(4 * sizeof(int))]; } c;
+    struct iovec iov = { len, sizeof(*len) };
+    struct msghdr msg;
+    struct cmsghdr *h;
+    ssize_t n;
+
+    *errfd = -1;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov; msg.msg_iovlen = 1;
+    msg.msg_control = c.buf; msg.msg_controllen = sizeof(c.buf);
+    while ((n = recvmsg(conn, &msg, MSG_CMSG_CLOEXEC)) < 0 && errno == EINTR) ;
+    if (n <= 0) return -1;
+    for (h = CMSG_FIRSTHDR(&msg); h; h = CMSG_NXTHDR(&msg, h)) {
+        if (h->cmsg_level == SOL_SOCKET && h->cmsg_type == SCM_RIGHTS) {
+            int fds[4], i, k = (int)((h->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+            if (k > 4) k = 4;
+            memcpy(fds, CMSG_DATA(h), k * sizeof(int));
+            for (i = 0; i < k; i++) {
+                if (*errfd < 0) *errfd = fds[i];
+                else close(fds[i]);
+            }
+        }
+    }
+    if ((size_t)n < sizeof(*len) && read_full(conn, (char *)len + n, sizeof(*len) - (size_t)n)) return -1;
+    return 0;
+}
+
 static int launch(char **argv, char **envp, const char *cwd, const char *system_user,
-                  const struct surface *sf, uid_t requester_uid, int conn)
+                  const struct surface *sf, uid_t requester_uid, int conn, int errfd)
 {
     struct passwd *pw = getpwnam(system_user);
     pid_t pid = fork(), prog;
@@ -522,7 +565,15 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
         int i;
         for (i = 0; ok[i]; i++)
             if (!strncmp(*envp, ok[i], strlen(ok[i]))) { putenv(*envp); break; }
+        /* "Run with debugging": Wine's debug channels, when the request also
+         * brought the requester's standard error to log into. The requester
+         * could already write there; the program is one it chose itself. */
+        if (errfd >= 0 && !strncmp(*envp, "WINEDEBUG=", 10) && debug_channels_ok(*envp + 10)) {
+            putenv(*envp);
+            dup2(errfd, 2);
+        }
     }
+    if (errfd >= 0) close(errfd);
     if (cwd && cwd[0] && chdir(cwd) != 0) { if (chdir("/") != 0) {} }
     if (sf && sf->control[0]) {
         char uidbuf[16], *xargv[260];
@@ -602,14 +653,16 @@ int main(void)
         unsigned char status = 2;
         char who[MAXFIELD] = "";
         char *cwd, *p, *end, *argv[256], *envp[64];
-        int argc = 0, envc = 0, admin;
+        int argc = 0, envc = 0, admin, errfd = -1;
 
         if (conn < 0) { if (errno == EINTR) continue; break; }
         if (getsockopt(conn, SOL_SOCKET, SO_PEERCRED, &cred, &clen) < 0 || !(rpw = getpwuid(cred.uid))) {
             close(conn); continue;
         }
-        if (read_full(conn, &len, sizeof(len)) || len == 0 || len > sizeof(blob)) { close(conn); continue; }
-        if (read_full(conn, blob, len)) { close(conn); continue; }
+        if (read_request_len(conn, &len, &errfd) || len == 0 || len > sizeof(blob) || read_full(conn, blob, len)) {
+            if (errfd >= 0) close(errfd);
+            close(conn); continue;
+        }
         blob[len - 1] = 0;   /* ensure the last string is terminated */
 
         /* parse: cwd, env KV..., empty, argv... */
@@ -619,7 +672,7 @@ int main(void)
         if (p < end) p += 1;   /* skip the empty separator */
         while (p < end && *p) { if (argc < (int)(sizeof(argv)/sizeof(argv[0])) - 1) argv[argc++] = p; p += strlen(p) + 1; }
         envp[envc] = NULL; argv[argc] = NULL;
-        if (argc == 0) { write_full(conn, &status, 1); close(conn); continue; }
+        if (argc == 0) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
 
         admin = is_admin_name(rpw->pw_name);
         logmsg("request from %s (%s): %s", rpw->pw_name, admin ? "administrator" : "standard user", argv[0]);
@@ -638,7 +691,9 @@ int main(void)
                 const char *st[4] = { by, computer_name(), ADMIN_PRIVILEGES, argv[0] };
                 audit(4672, 1, 12548, st, 4);
             }
-            if (launch(argv, envp, cwd, g_system_user, &used, cred.uid, conn)) {
+            if (errfd >= 0) logmsg("with debug logging, into the requester's log");
+            if (launch(argv, envp, cwd, g_system_user, &used, cred.uid, conn, errfd)) {
+                if (errfd >= 0) close(errfd);
                 logmsg("elevated for %s, authorised by %s: %s", rpw->pw_name, who[0] ? who : rpw->pw_name, argv[0]);
                 close(conn);   /* the launching child answers */
                 if (getenv("SG_BROKER_ONCE")) break;
@@ -651,6 +706,7 @@ int main(void)
         }
         write_full(conn, &status, 1);
         close(conn);
+        if (errfd >= 0) close(errfd);
         if (getenv("SG_BROKER_ONCE")) break;   /* one request, for the gate */
     }
     return 0;

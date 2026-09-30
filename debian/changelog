@@ -1,3 +1,14 @@
+sg-session (0.1.0-78) unstable; urgency=medium
+
+  * "Run with debugging" keeps logging when the program elevates: an
+    installer that asked for an administrator ran without Wine's debug
+    channels and wrote nothing to the report's log. sg-elevate now sends
+    WINEDEBUG and its standard error (the log) with the request, and the
+    broker gives both to the elevated program -- only a plain channel list,
+    only when debugging was asked for. Test: make test-elevate-debug.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 21:00:00 +0000
+
 sg-session (0.1.0-77) unstable; urgency=medium
 
   * In a virtual machine (virtio-gpu, QXL, Bochs, Cirrus) the compositor
