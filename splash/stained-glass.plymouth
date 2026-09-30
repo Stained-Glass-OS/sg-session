@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Stained Glass
+Description=The Stained Glass OS boot splash: the diamond on a dark screen
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/stained-glass
+ScriptFile=/usr/share/plymouth/themes/stained-glass/stained-glass.script

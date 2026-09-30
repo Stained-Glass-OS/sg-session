@@ -6,6 +6,18 @@ sg-session (0.1.0-78) unstable; urgency=medium
     WINEDEBUG and its standard error (the log) with the request, and the
     broker gives both to the elevated program -- only a plain channel list,
     only when debugging was asked for. Test: make test-elevate-debug.
+  * The boot splash comes with this package, so every installed machine gets
+    it, not only ones installed from the newest images (David: "hide the
+    text of the linux boot unless you boot into a recovery mode").
+    sg-boot-splash, run at install: our Plymouth theme, the quiet-boot
+    arguments in /etc/kernel/cmdline and the boot entries, initrds made
+    again with the theme, and a "(recovery mode)" twin of each entry that
+    shows Linux's messages; a kernel-install plugin gives new kernels theirs.
+    The update screen: "Working on updates N%" once (Plymouth's message
+    said it again), a progress bar, and a number that only goes forward
+    (it said 100% and then 29%). No watchdog armed across a reboot (the
+    kernel's "watchdog did not stop!" after the splash). Depends on
+    plymouth and plymouth-label. Test: make test-boot-splash.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 21:00:00 +0000
 

@@ -18,7 +18,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check \
                bin/sg-install-apps bin/sg-apps-check \
-               bin/sg-update-prepare bin/sg-file-access-check \
+               bin/sg-update-prepare bin/sg-boot-splash bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser
@@ -158,6 +158,20 @@ install: d3d-probe greeter token-probe procagent rdp
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
 	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol
 	install -m 0644 systemd/sg-shared-home.service $(DESTDIR)$(PREFIX)/lib/systemd/system/
+	@# The boot splash (splash/): our Plymouth theme, its pictures drawn here;
+	@# when Plymouth quits and starts at shutdown; the recovery entries of new
+	@# kernels. sg-boot-splash (postinst) makes it the machine's.
+	install -d $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass
+	install -m 0644 splash/stained-glass.plymouth splash/stained-glass.script $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/
+	python3 splash/make-splash.py $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/diamond.png 192
+	python3 splash/make-splash.py --bar $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/bar-fill.png 8a2be2
+	python3 splash/make-splash.py --bar $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/bar-track.png 3a3a44
+	for d in systemd/plymouth/*.service.d; do \
+	    install -d $(DESTDIR)$(PREFIX)/lib/systemd/system/$${d#systemd/plymouth/}; \
+	    install -m 0644 $$d/*.conf $(DESTDIR)$(PREFIX)/lib/systemd/system/$${d#systemd/plymouth/}/; \
+	done
+	install -D -m 0644 systemd/system.conf.d/60-sg-quiet-reboot.conf $(DESTDIR)$(PREFIX)/lib/systemd/system.conf.d/60-sg-quiet-reboot.conf
+	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
@@ -428,6 +442,11 @@ test-elevate-console:
 	@sh test/elevate-console-test.sh
 
 # "Run with debugging" keeps logging when the program elevates.
+# The quiet boot on installed machines, and its recovery-mode entries.
+.PHONY: test-boot-splash
+test-boot-splash:
+	@sh test/boot-splash-test.sh
+
 .PHONY: test-elevate-debug
 test-elevate-debug: procagent
 	@sh test/elevate-debug-test.sh

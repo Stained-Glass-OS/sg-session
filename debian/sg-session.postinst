@@ -143,6 +143,10 @@ case "$1" in
         # sg-audit, the Security log's sign-in/sign-out events
         # (stained-glass-audit).
         pam-auth-update --package
+
+        # The quiet boot (the splash, no Linux text) and its recovery-mode
+        # entries, on machines installed before they came (sg-boot-splash).
+        /usr/bin/sg-boot-splash apply || true
         ;;
 esac
 

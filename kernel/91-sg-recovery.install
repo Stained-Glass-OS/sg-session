@@ -1,0 +1,19 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): a new kernel's boot entry gets its
+# "(recovery mode)" twin -- the same kernel with Linux's start-up messages
+# shown (sg-boot-splash) -- and a removed kernel's twin goes with it.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+COMMAND=${1:-}
+KERNEL_VERSION=${2:-}
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+[ -n "${KERNEL_INSTALL_BOOT_ROOT:-}" ] && [ -n "${KERNEL_INSTALL_ENTRY_TOKEN:-}" ] || exit 0
+dir="$KERNEL_INSTALL_BOOT_ROOT/loader/entries"
+case "$COMMAND" in
+add)
+    for e in "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION.conf" "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"+*.conf; do
+        [ -f "$e" ] && /usr/bin/sg-boot-splash recovery-entry "$e"
+    done ;;
+remove)
+    rm -f "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION-recovery.conf" "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"+*-recovery.conf ;;
+esac
+exit 0

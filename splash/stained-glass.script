@@ -1,0 +1,113 @@
+# Stained Glass OS boot splash: the diamond (diamond.png, drawn at build time
+# by make-splash.py) centred on a near-black screen, breathing gently while the
+# machine starts. Nothing else while it starts; "Restarting", "Shutting down";
+# and while updates install at a restart, the screen a PC shows then: "Working
+# on updates", how far, a progress bar, and not to turn the computer off.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+Window.SetBackgroundTopColor(0.063, 0.063, 0.078);
+Window.SetBackgroundBottomColor(0.063, 0.063, 0.078);
+
+cx = Window.GetX() + Window.GetWidth() / 2;
+cy = Window.GetY() + Window.GetHeight() / 2;
+
+diamond.image = Image("diamond.png");
+diamond.sprite = Sprite(diamond.image);
+diamond.sprite.SetX(cx - diamond.image.GetWidth() / 2);
+diamond.sprite.SetY(cy - diamond.image.GetHeight() / 2);
+diamond.sprite.SetOpacity(0);
+below = cy + diamond.image.GetHeight() / 2;
+
+tick = 0;
+fun refresh_callback ()
+{
+    tick++;
+    if (tick < 25)
+        diamond.sprite.SetOpacity(tick / 25);
+    else
+        diamond.sprite.SetOpacity(0.8 + 0.2 * Math.Cos((tick - 25) / 40));
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+status_sprite = Sprite();
+note_sprite = Sprite();
+fun show_status (text, note)
+{
+    img = Image.Text(text, 0.95, 0.95, 0.95, 1, "Sans 16");
+    status_sprite.SetImage(img);
+    status_sprite.SetX(cx - img.GetWidth() / 2);
+    status_sprite.SetY(below + 44);
+    nimg = Image.Text(note, 0.68, 0.68, 0.72, 1, "Sans 11");
+    note_sprite.SetImage(nimg);
+    note_sprite.SetX(cx - nimg.GetWidth() / 2);
+    note_sprite.SetY(below + 120);
+}
+
+# The progress bar: a dim track and the accent fill over it, both scaled from
+# one-pixel pictures (bar-track.png, bar-fill.png).
+bar_w = 320;
+bar_h = 4;
+bar_track = Image("bar-track.png");
+bar_fill = Image("bar-fill.png");
+track_sprite = Sprite();
+fill_sprite = Sprite();
+fun show_bar (percent)
+{
+    track_sprite.SetImage(bar_track.Scale(bar_w, bar_h));
+    track_sprite.SetX(cx - bar_w / 2);
+    track_sprite.SetY(below + 88);
+    w = Math.Int(bar_w * percent / 100);
+    if (w < 1)
+        w = 1;
+    fill_sprite.SetImage(bar_fill.Scale(w, bar_h));
+    fill_sprite.SetX(cx - bar_w / 2);
+    fill_sprite.SetY(below + 88);
+    fill_sprite.SetZ(track_sprite.GetZ() + 1);
+}
+
+mode = Plymouth.GetMode();
+updating = (mode == "updates" || mode == "system-upgrade" || mode == "firmware-upgrade");
+if (mode == "shutdown")
+    show_status("Shutting down", "");
+else if (mode == "reboot")
+    show_status("Restarting", "");
+else if (updating)
+{
+    show_status("Working on updates  0%", "Don't turn off your computer. This will take a while.");
+    show_bar(0);
+}
+
+# The offline update reports two runs of 0-100%: a short preparation, then
+# the installation. One number that only goes forward: the preparation is the
+# first 5%, the installation the rest -- the screen said 100% and then 29%.
+last = -1;
+phase = 0;
+shown = 0;
+fun update_callback (progress)
+{
+    if (last >= 0 && progress < last - 20)
+        phase = 1;
+    last = progress;
+    if (phase == 0)
+        overall = progress * 0.05;
+    else
+        overall = 5 + progress * 0.95;
+    if (overall > shown)
+        shown = overall;
+    show_status("Working on updates  " + Math.Int(shown) + "%", "Don't turn off your computer. This will take a while.");
+    show_bar(shown);
+}
+Plymouth.SetSystemUpdateFunction(update_callback);
+
+# A message from the system, under the rest -- but not while updates install:
+# the offline update's own "Installing Updates - 45%" said the same again.
+message_sprite = Sprite();
+fun message_callback (text)
+{
+    if (updating || Plymouth.GetMode() == "updates")
+        return;
+    img = Image.Text(text, 0.85, 0.85, 0.85);
+    message_sprite.SetImage(img);
+    message_sprite.SetX(cx - img.GetWidth() / 2);
+    message_sprite.SetY(below + 150);
+}
+Plymouth.SetMessageFunction(message_callback);

@@ -1,0 +1,130 @@
+#!/bin/sh
+# sg-boot-splash -- the quiet boot, on every installed machine, and a way
+# round it: the Stained Glass splash instead of Linux's start-up text, and a
+# "(recovery mode)" boot entry that shows all of it.
+#
+#   sg-boot-splash apply                 (sg-session's postinst)
+#   sg-boot-splash recovery-entry FILE   make FILE's recovery twin (the
+#                                        kernel-install plugin, a new kernel)
+#
+# apply: Plymouth's theme is ours (plymouthd.conf: Theme, shown at once);
+# /etc/kernel/cmdline and each boot entry get the quiet-boot arguments
+# (machines installed from images before the splash showed every line);
+# each entry gets a recovery twin; and the initrds are made again when the
+# theme in them is not the one installed. Live entries (*-live.conf, a
+# read-only medium) are left alone. Never fatal: a failure leaves a machine
+# that boots as it did.
+#
+# SG_ESP, SG_KERNEL_CMDLINE, SG_PLYMOUTHD_CONF, SG_THEME_DIR: other places,
+# for the gate. SG_NO_INITRD=1: do not make initrds again.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
+set -u
+
+QUIET="quiet splash plymouth.ignore-serial-consoles loglevel=3 rd.udev.log_level=3 udev.log_level=3 systemd.show_status=auto vt.global_cursor_default=0"
+CMDLINE=${SG_KERNEL_CMDLINE:-/etc/kernel/cmdline}
+CONF=${SG_PLYMOUTHD_CONF:-/etc/plymouth/plymouthd.conf}
+THEME_DIR=${SG_THEME_DIR:-/usr/share/plymouth/themes/stained-glass}
+
+esp() {
+    if [ -n "${SG_ESP:-}" ]; then echo "$SG_ESP"; return; fi
+    command -v bootctl >/dev/null 2>&1 || return 1
+    bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
+}
+
+# the quiet arguments added to a command line, the loud ones it had dropped
+quiet_line() {
+    line=" $* "
+    for a in $QUIET; do
+        k=${a%%=*}
+        # an older value of the same argument goes (loglevel=7, show_status=yes)
+        line=$(printf '%s' "$line" | sed "s# $k=[^ ]*# #g; s# $k # #g")
+        line="$line $a "
+    done
+    printf '%s\n' "$line" | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+
+# the recovery twin's command line: the quiet arguments gone, every message on
+loud_line() {
+    line=" $* "
+    for a in $QUIET; do
+        k=${a%%=*}
+        line=$(printf '%s' "$line" | sed "s# $k=[^ ]*# #g; s# $k # #g")
+    done
+    printf '%s systemd.show_status=yes loglevel=7 plymouth.enable=0\n' "$line" | tr -s ' ' | sed 's/^ //'
+}
+
+# FILE's twin, FILE with -recovery before .conf: its own title and command
+# line, the rest (kernel, initrds, sort key) the same
+recovery_entry() {
+    e=$1
+    case "$e" in *-recovery.conf|*-live.conf) return 0 ;; esac
+    [ -f "$e" ] || return 0
+    twin="${e%.conf}-recovery.conf"
+    opts=$(sed -n 's/^options[[:space:]]*//p' "$e" | head -1)
+    {
+        sed -e '/^options[[:space:]]/d' -e 's/^\(title[[:space:]]*\)\(.*\)$/\1\2 (recovery mode)/' "$e"
+        printf 'options    %s\n' "$(loud_line "$opts")"
+    } > "$twin.tmp" && mv -f "$twin.tmp" "$twin"
+}
+
+apply() {
+    # --- Plymouth: our theme, at once -------------------------------------------
+    if [ -f "$THEME_DIR/stained-glass.plymouth" ]; then
+        mkdir -p "$(dirname "$CONF")"
+        [ -f "$CONF" ] || printf '[Daemon]\n' > "$CONF"
+        grep -q '^\[Daemon\]' "$CONF" || printf '[Daemon]\n' >> "$CONF"
+        for kv in Theme=stained-glass ShowDelay=0 DeviceTimeout=8; do
+            k=${kv%%=*}
+            if grep -q "^$k=" "$CONF"; then sed -i "s|^$k=.*|$kv|" "$CONF"
+            else sed -i "/^\[Daemon\]/a $kv" "$CONF"; fi
+        done
+    fi
+
+    # --- the command line for kernels to come -----------------------------------
+    if [ -f "$CMDLINE" ]; then
+        new=$(quiet_line "$(cat "$CMDLINE")")
+        [ "$new" = "$(cat "$CMDLINE")" ] || printf '%s\n' "$new" > "$CMDLINE"
+    fi
+
+    # --- the boot entries: quiet, each with its recovery twin -------------------
+    if E=$(esp) && [ -d "$E/loader/entries" ]; then
+        for e in "$E"/loader/entries/*.conf; do
+            [ -f "$e" ] || continue
+            case "$e" in *-live.conf|*-recovery.conf) continue ;; esac
+            opts=$(sed -n 's/^options[[:space:]]*//p' "$e" | head -1)
+            if [ -n "$opts" ]; then
+                new=$(quiet_line "$opts")
+                [ "$new" = "$opts" ] || sed -i "s#^options[[:space:]].*#options    $new#" "$e"
+            fi
+            recovery_entry "$e"
+        done
+        # a twin whose entry is gone (an old kernel removed) goes too
+        for t in "$E"/loader/entries/*-recovery.conf; do
+            [ -f "$t" ] && [ ! -f "${t%-recovery.conf}.conf" ] && rm -f "$t"
+        done
+    fi
+
+    # --- the initrds: the theme in them is the one installed -------------------
+    # (not in an image build's chroot: the image makes its own)
+    if [ "${SG_NO_INITRD:-0}" != 1 ] && ! systemd-detect-virt -q --chroot 2>/dev/null && [ -f "$THEME_DIR/stained-glass.script" ] && command -v update-initramfs >/dev/null 2>&1; then
+        stamp=/var/lib/stained-glass/splash-initrd.sum
+        sum=$(cat "$THEME_DIR"/* "$CONF" 2>/dev/null | md5sum | cut -d' ' -f1)
+        if [ "$(cat "$stamp" 2>/dev/null)" != "$sum" ]; then
+            if update-initramfs -u -k all >/dev/null 2>&1; then
+                mkdir -p "$(dirname "$stamp")" && echo "$sum" > "$stamp"
+            else
+                echo "sg-boot-splash: the initrds could not be made again" >&2
+            fi
+        fi
+    fi
+    return 0
+}
+
+case "${1:-}" in
+apply) apply ;;
+recovery-entry) [ $# -eq 2 ] && recovery_entry "$2" ;;
+*) echo "usage: sg-boot-splash apply | recovery-entry FILE" >&2; exit 2 ;;
+esac
+exit 0
