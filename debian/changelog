@@ -1,3 +1,12 @@
+sg-session (0.1.0-70) unstable; urgency=medium
+
+  * Depends on linux-sysctl-defaults (Debian's sysctl defaults, a Recommends
+    the image never had): vm.max_map_count 1048576 for programs that map
+    hundreds of DLLs and for games, and the fs.protected_* hardening, on
+    machines installed before the image carried it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 07:00:00 +0000
+
 sg-session (0.1.0-69) unstable; urgency=medium
 
   * Boot: the login screen 20 s and more sooner. sg-prefix-init started Wine
