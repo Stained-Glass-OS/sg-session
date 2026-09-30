@@ -29,6 +29,9 @@ if ! getent passwd "$LIVE_USER" >/dev/null; then
     # decides, with nullok), on this boot only.
     passwd -d "$LIVE_USER" >/dev/null || { sg_log "cannot clear the live account's password"; exit 1; }
     sg_log "made the live account"
+    # and on the console, as sg-live-iso does: the boot tests wait for it
+    # (the audit record of useradd is rate-limited away in a busy boot)
+    echo "<5>sg-live-setup: made the live account" > /dev/kmsg 2>/dev/null || :
 fi
 
 # The shortcuts, in the machine's Windows system as SYSTEM: the all-users
