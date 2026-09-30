@@ -46,7 +46,7 @@ sg_desktop_follow() {
     _df_settings="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-settings64.exe"
     while sleep "${SG_DESKTOP_WATCH_SECONDS:-2}" && kill -0 "$_df_session" 2>/dev/null; do
         _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
-        [ -n "$_df_now" ] && [ "$_df_now" != "$_df_last" ] || continue
+        if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi
         sg_log "the output is now $_df_now (was $_df_last): the desktop follows"
         [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
         _df_last=$_df_now
