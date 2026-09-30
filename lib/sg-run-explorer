@@ -44,6 +44,16 @@ if [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && [ -z "${DISPLAY:-}" ]; then
     fi
 fi
 
+# The resolution and scale the user chose in Settings > Display, per monitor
+# (sg-settingsctl keeps them): put back before the desktop is measured, so it
+# comes up at that size -- a mode set in Settings was gone after a reboot.
+if command -v sg-settingsctl >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    if restored=$(sg-settingsctl display restore 2>/dev/null) && echo "$restored" | grep -q '^RESTORED'; then
+        sg_log "display restored: $(echo "$restored" | grep '^RESTORED' | tr '\t\n' ' ')"
+        sleep 1   # Xwayland takes the output's new size a moment later
+    fi
+fi
+
 # The desktop is the monitor's size. A fixed default (SG_DESKTOP_W x _H) either
 # leaves a larger screen unfilled or asks Wine for a mode the output cannot
 # show -- and when that mode is refused, a fresh prefix keeps Wine's 1024x768

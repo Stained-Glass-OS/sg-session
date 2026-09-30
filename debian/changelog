@@ -1,3 +1,15 @@
+sg-session (0.1.0-64) unstable; urgency=medium
+
+  * The resolution and scale chosen in Settings > Display are kept for each
+    monitor (by make, model and serial, in the user's settings.json) and put
+    back when the session starts, before the desktop is measured -- a
+    resolution set in Settings was gone after a reboot (David 2026-09-29).
+    sg-settingsctl display restore; a mode the monitor no longer offers is
+    left alone. VM-verified: 1920x1080 set, session restarted, desktop at
+    1920x1080. Gate: make test (settingsctl-test; mutation-tested).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 02:30:00 +0000
+
 sg-session (0.1.0-63) unstable; urgency=medium
 
   * sg-pdf is SG PDF's editor engine: MuPDF (python3-pymupdf, AGPL) in

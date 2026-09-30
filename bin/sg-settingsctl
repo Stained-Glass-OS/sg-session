@@ -27,6 +27,9 @@
 #       MODE <name>\t<WxH@Hz>\t<current yes|no>\t<preferred yes|no>
 #   sg-settingsctl display mode OUTPUT WxH[@Hz]
 #   sg-settingsctl display scale OUTPUT SCALE                  (1-3, steps of .25)
+#       (both kept for that monitor, in the user's settings.json)
+#   sg-settingsctl display restore     the kept resolution and scale, at session start
+#       RESTORED <name>\tmode|scale\t<value>
 #   sg-settingsctl nightlight [on|off] [--temp K]
 #       NIGHTLIGHT on|off\t<K>\t<available yes|no>\t<running yes|no>
 #   sg-settingsctl power [--screen MIN] [--sleep MIN]         (0 = never)
@@ -357,8 +360,53 @@ def display(args):
             if not re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", args[2]):
                 raise Fail("invalid", "the scale is 1 to 3 in steps of 0.25")
             run(["wlr-randr", "--output", args[1], "--scale", args[2]])
+        # kept for this monitor, as Windows keeps each monitor's settings, and
+        # put back when the next session starts (display restore)
+        o = next(o for o in outputs() if o.get("name") == args[1])
+        c = load_config()
+        c.setdefault("display", {}).setdefault(monitor_key(o), {})[args[0]] = args[2]
+        save_config(c)
         return []
-    raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S]")
+    if args == ["restore"]:
+        return display_restore()
+    raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S | restore]")
+
+
+def monitor_key(o):
+    """A monitor, not the port it is on: make, model and serial when the
+    compositor knows them, else the output's name."""
+    parts = [str(o.get(k) or "").strip() for k in ("make", "model", "serial")]
+    return "/".join(parts) if any(parts) else "output:%s" % o.get("name", "")
+
+
+def display_restore():
+    """The resolution and scale the user chose for each connected monitor,
+    where the monitor still offers them (a session starts at the monitor's
+    preferred mode otherwise: David, 1080p set in Settings was gone after a
+    reboot)."""
+    saved = load_config().get("display", {})
+    out = []
+    for o in outputs():
+        want = saved.get(monitor_key(o))
+        if not isinstance(want, dict):
+            continue
+        name = o.get("name", "")
+        m = MODE.fullmatch(str(want.get("mode", "")))
+        if m:
+            w, h = int(m.group(1)), int(m.group(2))
+            hz = float(m.group(3)) if m.group(3) else None
+            fits = [x for x in o.get("modes", []) if x.get("width") == w and x.get("height") == h
+                    and (hz is None or abs(float(x.get("refresh") or 0) - hz) < 0.5)]
+            cur = next((x for x in o.get("modes", []) if x.get("current")), {})
+            if fits and not (cur.get("width") == w and cur.get("height") == h
+                             and (hz is None or abs(float(cur.get("refresh") or 0) - hz) < 0.5)):
+                run(["wlr-randr", "--output", name, "--mode", want["mode"]])
+                out.append("RESTORED %s\tmode\t%s" % (clean(name), want["mode"]))
+        s = str(want.get("scale", ""))
+        if re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", s) and abs(float(o.get("scale") or 1) - float(s)) > 0.01:
+            run(["wlr-randr", "--output", name, "--scale", s])
+            out.append("RESTORED %s\tscale\t%s" % (clean(name), s))
+    return out
 
 
 # ---- night light (the compositor's gamma, through wlsunset) --------------------------------

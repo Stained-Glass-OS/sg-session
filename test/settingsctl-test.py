@@ -187,6 +187,30 @@ check("display: its modes", "MODE Virtual-1\t1280x720@59.94\tno\tno" in lines an
 calls()
 code, lines = ctl("display", "mode", "Virtual-1", "1280x720@59.94")
 check("display mode: wlr-randr --mode", code == 0 and "wlr-randr --output Virtual-1 --mode 1280x720@59.94" in calls(), lines)
+# kept for this monitor and put back at the next session start (David 2026-09-29:
+# 1080p set in Settings was gone after a reboot)
+try:
+    with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json")) as f:
+        cfg = json.load(f)
+except (OSError, ValueError):
+    cfg = {}
+check("display mode: kept for the monitor", cfg.get("display", {}).get("output:Virtual-1", {}).get("mode") == "1280x720@59.94", cfg)
+open(LOG, "w").close()
+code, lines = ctl("display", "restore")
+cl = calls()
+check("display restore: the kept mode is set again (the monitor came back at its preferred mode)",
+      code == 0 and "wlr-randr --output Virtual-1 --mode 1280x720@59.94" in cl
+      and "RESTORED Virtual-1\tmode\t1280x720@59.94" in lines, (lines, cl))
+c2 = dict(cfg); c2["display"] = {"output:Virtual-1": {"mode": "2560x1440@60", "scale": "1.5"}}
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json"), "w") as f:
+    json.dump(c2, f)
+open(LOG, "w").close()
+code, lines = ctl("display", "restore")
+cl = calls()
+check("display restore: a mode the monitor no longer offers is left alone; the scale is put back",
+      code == 0 and not [c for c in cl if "--mode" in c] and "wlr-randr --output Virtual-1 --scale 1.5" in cl, (lines, cl))
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json"), "w") as f:
+    json.dump(cfg, f)
 code, lines = ctl("display", "mode", "Virtual-9", "1280x720")
 check("display mode: an unknown output is refused", code == 5, lines)
 calls()
