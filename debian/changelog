@@ -1,3 +1,14 @@
+sg-session (0.1.0-67) unstable; urgency=medium
+
+  * Updates: sg-update-prepare publishes what it downloads, per file, in
+    /run/sg-update (plan, progress, state: apt's partial/ is root's), and
+    sg-settingsctl updates reports it (DOWNLOAD name, bytes, bytes here;
+    DOWNLOADING; "updates progress" for a fast re-read) -- Settings shows
+    each update's download (sg-shell 0.1.0-77). Gates:
+    test/update-prepare-test.sh (in lint), test/settingsctl-test.py.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 05:30:00 +0000
+
 sg-session (0.1.0-66) unstable; urgency=medium
 
   * The shell desktop follows the output. It was sized to the output only

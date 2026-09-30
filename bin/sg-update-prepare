@@ -18,6 +18,50 @@ set -eu
 
 log() { printf '[sg-update] %s\n' "$*"; }
 
+# What is being downloaded, for Settings > Updates (David: "it should show the
+# download progress of each update"). apt keeps a download in progress in
+# partial/, which only root may look into, so this publishes it:
+#   $STATE/plan       one line per file to fetch: FILE SIZE
+#   $STATE/progress   the same with the bytes already here: FILE SIZE DONE
+#   $STATE/state      downloading | ready | idle
+STATE=${SG_UPDATE_STATE:-/run/sg-update}
+ARCHIVES=${SG_APT_ARCHIVES:-/var/cache/apt/archives}
+
+publish() {     # $1: file, then its content on stdin; readers never see half of it
+    cat > "$STATE/$1.tmp" && mv -f "$STATE/$1.tmp" "$STATE/$1"
+}
+
+write_progress() {
+    [ -r "$STATE/plan" ] || return 0
+    while read -r _f _size; do
+        _done=0
+        if [ -f "$ARCHIVES/$_f" ]; then _done=$(stat -c %s "$ARCHIVES/$_f")
+        elif [ -f "$ARCHIVES/partial/$_f" ]; then _done=$(stat -c %s "$ARCHIVES/partial/$_f")
+        fi
+        printf '%s %s %s\n' "$_f" "$_size" "$_done"
+    done < "$STATE/plan" | publish progress
+}
+
+# apt lists only what is not downloaded yet; asked with an empty archive it
+# lists everything the upgrade needs, so a rerun still shows the whole plan
+make_plan() {
+    _empty=$(mktemp -d)
+    mkdir -p "$_empty/partial"
+    apt-get --print-uris -qq -o Debug::NoLocking=1 -o Dir::Cache::Archives="$_empty/" dist-upgrade 2>/dev/null |
+        awk 'NF >= 3 && $3 ~ /^[0-9]+$/ {print $2, $3}' | publish plan
+    rm -rf "$_empty"
+}
+
+mkdir -p "$STATE"
+chmod 755 "$STATE"
+WATCH=
+finish() {
+    [ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null
+    write_progress
+    if [ -e "${SG_SYSTEM_UPDATE:-/system-update}" ]; then echo ready; else echo idle; fi | publish state
+}
+trap finish EXIT
+
 command -v pkcon >/dev/null 2>&1 || { log "PackageKit (pkcon) is not installed"; exit 0; }
 
 # pkcon's exit codes: 0 success, 5 "nothing useful was done" (for example,
@@ -34,6 +78,11 @@ pk() {
 
 log "refreshing package lists"
 pk refresh
+
+make_plan
+echo downloading | publish state
+( while :; do write_progress; sleep 1; done ) &
+WATCH=$!
 
 log "downloading available updates"
 out=$(pkcon --noninteractive update --only-download 2>&1) && rc=0 || rc=$?

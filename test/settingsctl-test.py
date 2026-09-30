@@ -91,7 +91,8 @@ EOF""")
 
 ENV = dict(os.environ, SG_SETTINGSCTL_TOOLS=tools, XDG_CONFIG_HOME=os.path.join(tmp, "config"),
            XDG_RUNTIME_DIR=os.path.join(tmp, "run"), WAYLAND_DISPLAY="wayland-test",
-           SG_SYSTEM_UPDATE=os.path.join(tmp, "system-update"), PATH="/usr/bin:/bin")
+           SG_SYSTEM_UPDATE=os.path.join(tmp, "system-update"), SG_UPDATE_STATE=os.path.join(tmp, "sg-update"),
+           PATH="/usr/bin:/bin")
 os.makedirs(ENV["XDG_RUNTIME_DIR"])
 
 
@@ -325,6 +326,25 @@ open(os.path.join(tmp, "polkit-no"), "w").close()
 code, lines = ctl("updates", "check")
 check("updates check refused: an error, not silence", code != 0 and lines and lines[-1].startswith("ERROR"), (code, lines))
 os.unlink(os.path.join(tmp, "polkit-no"))
+calls()
+# the download, per package, as sg-update-prepare publishes it
+os.makedirs(ENV["SG_UPDATE_STATE"])
+with open(os.path.join(ENV["SG_UPDATE_STATE"], "progress"), "w") as f:
+    f.write("libfoo1_1.2-3+deb13u1_amd64.deb 1000 1000\n"
+            "wine-sg_10.0-38_amd64.deb 4000 1000\nwine-sg-data_10.0-38_all.deb 500 700\n")
+with open(os.path.join(ENV["SG_UPDATE_STATE"], "state"), "w") as f:
+    f.write("downloading\n")
+code, lines = ctl("updates", "progress")
+check("updates progress: bytes per package, a partial file counted, never past the size",
+      code == 0 and "DOWNLOAD libfoo1\t1000\t1000" in lines and "DOWNLOAD wine-sg\t4000\t1000" in lines and
+      "DOWNLOAD wine-sg-data\t500\t500" in lines and "DOWNLOADING yes" in lines and not calls(), (code, lines))
+code, lines = ctl("updates")
+check("updates: the list and the download together", "UPDATE wine-sg\t10.0-37\t10.0-38" in lines and
+      "DOWNLOAD wine-sg\t4000\t1000" in lines, lines)
+with open(os.path.join(ENV["SG_UPDATE_STATE"], "state"), "w") as f:
+    f.write("ready\n")
+code, lines = ctl("updates", "progress")
+check("updates progress: not downloading once ready", "DOWNLOADING no" in lines, lines)
 calls()
 code, lines = ctl("updates", "install")
 check("updates refuses other words", code == 2, (code, lines))

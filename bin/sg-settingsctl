@@ -40,7 +40,9 @@
 #   sg-settingsctl shutdown poweroff|reboot   when the session's programs have closed
 #                                     (wineboot --end-session), systemctl poweroff|reboot
 #   sg-settingsctl updates
-#       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no
+#       UPDATE <package>\t<installed version>\t<new version>, STAGED yes|no,
+#       DOWNLOAD <package>\t<bytes>\t<bytes downloaded>, DOWNLOADING yes|no
+#   sg-settingsctl updates progress   only the DOWNLOAD/DOWNLOADING/STAGED lines (fast)
 #   sg-settingsctl session-start      apply night light and the idle timers
 #                                     (swayidle also locks before any sleep)
 #   sg-settingsctl lockscreen
@@ -681,13 +683,41 @@ def shutdown_now(args):
 
 # ---- updates (apt's cache; fetching is sg-admind's update-check) ----------------------------
 
+def update_progress():
+    """What sg-update-prepare is downloading, per package (it publishes this:
+    apt's partial/ is root's). DOWNLOAD name<TAB>bytes<TAB>bytes-here."""
+    state = os.environ.get("SG_UPDATE_STATE", "/run/sg-update")
+    out, sizes = [], {}
+    try:
+        with open(os.path.join(state, "progress"), encoding="utf-8") as f:
+            for line in f:
+                p = line.split()
+                if len(p) == 3 and p[1].isdigit() and p[2].isdigit():
+                    name = p[0].split("_", 1)[0]            # name_version_arch.deb
+                    size, done = sizes.get(name, (0, 0))
+                    sizes[name] = (size + int(p[1]), done + min(int(p[2]), int(p[1])))
+    except OSError:
+        pass
+    for name in sorted(sizes):
+        out.append("DOWNLOAD %s\t%d\t%d" % (name, sizes[name][0], sizes[name][1]))
+    try:
+        with open(os.path.join(state, "state"), encoding="utf-8") as f:
+            st = f.read().strip()
+    except OSError:
+        st = ""
+    out.append("DOWNLOADING %s" % yn(st == "downloading"))
+    return out
+
+
 def updates(args):
+    if args == ["progress"]:
+        return update_progress() + ["STAGED %s" % yn(os.path.lexists(os.environ.get("SG_SYSTEM_UPDATE", "/system-update")))]
     if args == ["check"]:
         # anyone at the PC may check (config/polkit/50-stained-glass-updates.rules)
         run(["systemctl", "start", "--no-block", "sg-update-prepare.service"], timeout=30)
         return []
     if args:
-        raise Fail("invalid", "usage: updates [check]")
+        raise Fail("invalid", "usage: updates [check|progress]")
     out = []
     text = run(["apt", "list", "--upgradable"], timeout=60, check=False)
     for line in text.splitlines():
@@ -695,6 +725,7 @@ def updates(args):
         m = re.match(r"([^/\s]+)/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]", line)
         if m:
             out.append("UPDATE %s\t%s\t%s" % (m.group(1), m.group(3), m.group(2)))
+    out += update_progress()
     out.append("STAGED %s" % yn(os.path.lexists(os.environ.get("SG_SYSTEM_UPDATE", "/system-update"))))
     return out
 
