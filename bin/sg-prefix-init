@@ -38,6 +38,19 @@ run_installers() {
     done
 }
 
+# Is the prefix up to date with the installed Wine? Wine's own test: the
+# prefix's .update-timestamp holds wine.inf's modification time ("disable"
+# turns updates off). Not knowing where wine.inf is means "update", as before.
+prefix_current() {
+    if [ -n "${SG_WINE_INF:-}" ]; then _inf=$SG_WINE_INF
+    elif [ -n "${SG_WINE_DIR:-}" ]; then _inf="$SG_WINE_DIR/share/wine/wine.inf"   # wine is a function then
+    else _inf="$(dirname "$(command -v wine)")/../share/wine/wine.inf"
+    fi
+    _ts=$(tr -d '\r\n ' < "$SG_PREFIX/.update-timestamp" 2>/dev/null) || return 1   # Wine writes it CRLF
+    [ "$_ts" = disable ] && return 0
+    [ -f "$_inf" ] && [ "$_ts" = "$(stat -c %Y "$_inf")" ]
+}
+
 # Machine-wide Wine settings, in HKLM, written as the SYSTEM account: which
 # graphics driver this machine's display path needs (multi-user debt D4). Every
 # boot, so a changed display path or an upgraded prefix picks it up.
@@ -119,10 +132,19 @@ if [ -e "$STAMP" ]; then
     # whatever process starts it first. Start one here -- at boot, as the
     # machine account, with the Mono/Gecko prompts suppressed -- rather than
     # leave that update to a user's desktop or a Windows service.
-    sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
-    # Bounded: auto-start services never exit, so an unbounded wait would
-    # hang boot on a machine that has any.
-    timeout 120 wineserver -w || true
+    #
+    # Only then: Wine calls a prefix stale when its .update-timestamp is not
+    # wine.inf's modification time. Starting Wine and waiting for its server
+    # to go cost every boot 25 s or more before the login screen could come.
+    if prefix_current; then
+        sg_log "prefix is current with this Wine"
+    else
+        sg_log "Wine was updated: updating the prefix"
+        sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
+        # Bounded: auto-start services never exit, so an unbounded wait would
+        # hang boot on a machine that has any.
+        timeout 120 wineserver -w || true
+    fi
     import_defaults
     set_machine_settings
     run_installers

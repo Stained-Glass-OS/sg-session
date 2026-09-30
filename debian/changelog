@@ -1,3 +1,14 @@
+sg-session (0.1.0-69) unstable; urgency=medium
+
+  * Boot: the login screen 20 s and more sooner. sg-prefix-init started Wine
+    and waited for its server on every boot, to bring the prefix up to date
+    after a Wine update; it now does so only when Wine was updated (the
+    prefix's .update-timestamp, which Wine writes with CRLF, is not
+    wine.inf's time). QA VM: greetd at 11 s instead of 33 s.
+    Gate: test/prefix-current-test.sh (in lint).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 06:30:00 +0000
+
 sg-session (0.1.0-68) unstable; urgency=medium
 
   * Shut down and restart without a console broadcast: sg-settingsctl runs
