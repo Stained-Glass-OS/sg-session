@@ -1,3 +1,14 @@
+sg-session (0.1.0-66) unstable; urgency=medium
+
+  * The shell desktop follows the output. It was sized to the output only
+    when the session started, or when Settings changed the mode; a size change
+    made any other way (a monitor swapped, sg-settingsctl, the compositor)
+    left the taskbar off the screen. sg_desktop_follow watches the X root and
+    resizes the desktop (sg-settings --set desktop, sg-shell 0.1.0-76).
+    Gate: test/desktop-follow-test.sh (in lint).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 05:00:00 +0000
+
 sg-session (0.1.0-65) unstable; urgency=medium
 
   * Display: a mode with a fractional refresh rate can be chosen -- the list

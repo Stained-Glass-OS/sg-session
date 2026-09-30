@@ -34,6 +34,25 @@ SG_WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
 # answer. Domain groups map onto it later (P2).
 SG_ADMIN_GROUP="${SG_ADMIN_GROUP:-sg-admins}"
 
+# The desktop follows the output. Settings resizes the shell when it changes the
+# mode; a change made any other way -- a monitor plugged in or swapped, another
+# tool, the compositor -- left the desktop at the old size and the taskbar off
+# the screen (David 2026-09-29: the shell did not fill the space after a display
+# resize). The X root is the output: when its size changes, Wine's desktop
+# takes it (sg-settings --set desktop WxH). Runs until the session (PID $2)
+# ends. $1 is the size the desktop was started at.
+sg_desktop_follow() {
+    _df_last=$1 _df_session=$2
+    _df_settings="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-settings64.exe"
+    while sleep "${SG_DESKTOP_WATCH_SECONDS:-2}" && kill -0 "$_df_session" 2>/dev/null; do
+        _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
+        [ -n "$_df_now" ] && [ "$_df_now" != "$_df_last" ] || continue
+        sg_log "the output is now $_df_now (was $_df_last): the desktop follows"
+        [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
+        _df_last=$_df_now
+    done
+}
+
 # The Wine graphics driver the display path needs. A machine-level fact
 # (multi-user debt D4): sg-prefix-init writes it to HKLM, as SYSTEM, and every
 # user's explorer reads it from there (wine-sg patch 0023).

@@ -233,6 +233,11 @@ _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
     fi
 ) &
 
+# The desktop follows the output after it starts, too (sg_desktop_follow).
+if [ "${SG_DESKTOP_AUTO:-1}" != 0 ] && [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && command -v xwininfo >/dev/null 2>&1; then
+    sg_desktop_follow "$GEOM" $$ &
+fi
+
 # The shell: a single virtual-desktop window named "shell" at the output size.
 #
 # Supervised, not exec'd (multi-user debt D7). This script is the compositor's
