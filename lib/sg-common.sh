@@ -298,6 +298,24 @@ sg_renderer_env() {
 }
 sg_renderer_env
 
+# A virtual machine's display (virtio-gpu, QXL, Bochs, Cirrus) shows the
+# hardware cursor plane wrongly: in QEMU over VNC the pointer was drawn upside
+# down and away from where it points (David). The compositor draws the
+# pointer itself there. WLR_NO_HARDWARE_CURSORS set by hand still wins.
+sg_cursor_env() {
+    [ -n "${WLR_NO_HARDWARE_CURSORS:-}" ] && return 0
+    for _c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*; do
+        case "${_c##*/}" in *-*) continue ;; esac
+        [ -e "$_c/device/driver" ] || continue
+        _drv=$(readlink -f "$_c/device/driver"); _drv=${_drv##*/}
+        case "$_drv" in
+        virtio-pci|virtio_gpu|qxl|bochs|bochs-drm|cirrus|cirrus-qemu) export WLR_NO_HARDWARE_CURSORS=1 ;;
+        esac
+    done
+    return 0
+}
+sg_cursor_env
+
 # Where a session's compositor puts its privileged and control sockets: one
 # directory per session user, named by uid, under a seat directory that
 # tmpfiles creates 1770 root:sgwine. Per-uid because the sticky bit would stop

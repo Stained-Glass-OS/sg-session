@@ -203,6 +203,7 @@ lint:
 	@sh test/update-prepare-test.sh
 	@sh test/prefix-current-test.sh
 	@sh test/shared-home-test.sh
+	@sh test/cursor-env-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
