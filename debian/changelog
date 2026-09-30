@@ -18,6 +18,15 @@ sg-session (0.1.0-78) unstable; urgency=medium
     (it said 100% and then 29%). No watchdog armed across a reboot (the
     kernel's "watchdog did not stop!" after the splash). Depends on
     plymouth and plymouth-label. Test: make test-boot-splash.
+  * Linux programs follow the user's light or dark mode and accent (David).
+    sg-settingsctl look dark|light RRGGBB: GTK 3 and 4's settings.ini, the
+    desktop's color-scheme and nearest accent-color (gsettings), kept and
+    applied again at session start. The session names its desktop
+    (XDG_CURRENT_DESKTOP=StainedGlass) and stainedglass-portals.conf gives
+    the portal GTK's backend, which tells GTK 4, Qt 6 and browsers. Depends
+    on xdg-desktop-portal(-gtk), dconf-gsettings-backend, libglib2.0-bin.
+    Test: test/settingsctl-test.py (mutant: no color-scheme). VM: the
+    portal answers color-scheme 1; zenity (GTK 4) draws dark.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 21:00:00 +0000
 

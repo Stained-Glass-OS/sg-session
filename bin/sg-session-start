@@ -34,6 +34,19 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
     chmod 700 "$XDG_RUNTIME_DIR"
 fi
 
+# The desktop's name, for Linux programs: the portal (xdg-desktop-portal)
+# chooses its backends by it (stainedglass-portals.conf: GTK's), and through
+# it GTK 4, Qt 6 and browsers learn the user's light or dark mode and accent
+# (sg-settingsctl look). The portal is started by D-Bus in the user's
+# manager, so the name goes there too.
+: "${XDG_CURRENT_DESKTOP:=StainedGlass}"
+: "${XDG_SESSION_DESKTOP:=stained-glass}"
+export XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
+fi
+
 # A remote session (started by sg-rdp-authd, ADR 0010) has no screen of its
 # own: the compositor runs headless, at the RDP client's size, and the RDP
 # daemon streams it through the compositor's privileged socket. Its seat

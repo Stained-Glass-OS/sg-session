@@ -45,6 +45,12 @@
 #   sg-settingsctl updates progress   only the DOWNLOAD/DOWNLOADING/STAGED lines (fast)
 #   sg-settingsctl session-start      apply night light and the idle timers
 #                                     (swayidle also locks before any sleep)
+#   sg-settingsctl look [dark|light RRGGBB]   Linux programs follow the user's mode
+#       LOOK <dark|light>\t<RRGGBB>          and accent: GTK 3/4's settings.ini, the
+#                                     desktop's color-scheme and accent-color
+#                                     (gsettings; the portal tells GTK 4, Qt 6
+#                                     and browsers); kept, and applied again
+#                                     at session start
 #   sg-settingsctl lockscreen
 #       LOCKSCREEN <picture published yes|no>\t<shown on sign-in yes|no>
 #   sg-settingsctl lockscreen picture FILE | default
@@ -732,9 +738,88 @@ def updates(args):
     return out
 
 
+# the desktop's named accents (org.gnome.desktop.interface accent-color), for
+# the nearest to the user's own colour
+ACCENTS = {"blue": (0x35, 0x84, 0xe4), "teal": (0x21, 0x90, 0xa4), "green": (0x3a, 0x94, 0x4a),
+           "yellow": (0xc8, 0x88, 0x00), "orange": (0xed, 0x5b, 0x00), "red": (0xe6, 0x2d, 0x42),
+           "pink": (0xd5, 0x61, 0x99), "purple": (0x91, 0x41, 0xac), "slate": (0x6f, 0x83, 0x96)}
+
+
+def nearest_accent(hexrgb):
+    r, g, b = int(hexrgb[0:2], 16), int(hexrgb[2:4], 16), int(hexrgb[4:6], 16)
+    return min(ACCENTS, key=lambda n: sum((a - c) ** 2 for a, c in zip(ACCENTS[n], (r, g, b))))
+
+
+def set_ini(path, key, value):
+    """KEY=VALUE in the file's [Settings] group, the rest of it kept"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    out, group, done = [], None, False
+    for line in lines:
+        m = re.match(r"\s*\[(.*)\]\s*$", line)
+        if m:
+            if group == "Settings" and not done:
+                out.append("%s=%s" % (key, value))
+                done = True
+            group = m.group(1)
+        elif group == "Settings" and re.match(r"\s*%s\s*=" % re.escape(key), line):
+            if not done:
+                out.append("%s=%s" % (key, value))
+                done = True
+            continue
+        out.append(line)
+    if not done:
+        if group != "Settings":
+            if "[Settings]" not in lines:
+                out.append("[Settings]")
+        out.append("%s=%s" % (key, value))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(tmp, path)
+
+
+def apply_look(c):
+    look = c.get("look")
+    if not isinstance(look, dict) or look.get("mode") not in ("dark", "light"):
+        return
+    dark = look["mode"] == "dark"
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    for gtk in ("gtk-3.0", "gtk-4.0"):
+        set_ini(os.path.join(base, gtk, "settings.ini"), "gtk-application-prefer-dark-theme", "true" if dark else "false")
+    try:
+        run(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" if dark else "default"])
+        accent = look.get("accent", "")
+        # accent-color is newer than some desktops' schemas: only where it is known
+        if re.fullmatch(r"[0-9a-fA-F]{6}", accent) and \
+                "accent-color" in run(["gsettings", "list-keys", "org.gnome.desktop.interface"], check=False).split():
+            run(["gsettings", "set", "org.gnome.desktop.interface", "accent-color", nearest_accent(accent)])
+    except Fail:
+        pass   # no gsettings: GTK's own files still say it
+
+
+def look(args):
+    c = load_config()
+    if args:
+        if len(args) != 2:
+            raise Fail("invalid", "usage: look [dark|light RRGGBB]")
+        mode = one_of(args[0], ("dark", "light"), "mode")
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", args[1]):
+            raise Fail("invalid", "the accent is six hex digits")
+        c["look"] = {"mode": mode, "accent": args[1].lower()}
+        save_config(c)
+        apply_look(c)
+    lk = c.get("look") or {}
+    return ["LOOK %s\t%s" % (lk.get("mode", "light"), lk.get("accent", ""))]
+
+
 def session_start(args):
     c = load_config()
-    for f in (apply_nightlight, apply_power):
+    for f in (apply_nightlight, apply_power, apply_look):
         try:
             f(c)
         except Fail:
@@ -745,7 +830,7 @@ def session_start(args):
 COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
-            "lockscreen": lockscreen}
+            "lockscreen": lockscreen, "look": look}
 
 
 def main(argv):

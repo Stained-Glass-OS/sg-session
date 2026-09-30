@@ -378,6 +378,51 @@ code, lines = ctl("lockscreen", "picture", "default")
 check("lockscreen: back to the system's picture", code == 0 and "LOCKSCREEN no\tno" in lines, lines)
 check("lockscreen: no temporary files left in the drop", sorted(os.listdir(drop)) == [me + ".signin"], os.listdir(drop))
 
+# ---- look: Linux programs follow the user's mode and accent
+stand_in("gsettings", """[ "$1" = list-keys ] && printf 'color-scheme\\naccent-color\\ngtk-theme\\n'; exit 0""")
+cfg = ENV["XDG_CONFIG_HOME"]
+os.makedirs(os.path.join(cfg, "gtk-3.0"), exist_ok=True)
+with open(os.path.join(cfg, "gtk-3.0", "settings.ini"), "w") as f:
+    f.write("[Settings]\ngtk-font-name=Inter 10\ngtk-application-prefer-dark-theme=false\n")
+
+
+def ini(ver):
+    try:
+        with open(os.path.join(cfg, ver, "settings.ini")) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+open(LOG, "w").close()
+code, lines = ctl("look", "dark", "7B2FBE")
+check("look dark: answers the look", code == 0 and "LOOK dark\t7b2fbe" in lines, lines)
+check("look dark: GTK 3 and 4 prefer dark, the file's other settings kept",
+      "gtk-application-prefer-dark-theme=true" in ini("gtk-3.0") and "gtk-font-name=Inter 10" in ini("gtk-3.0")
+      and ini("gtk-3.0").count("prefer-dark-theme") == 1 and "gtk-application-prefer-dark-theme=true" in ini("gtk-4.0"),
+      ini("gtk-3.0") + "|" + ini("gtk-4.0"))
+got = calls()
+check("look dark: the desktop's color-scheme and the nearest accent (purple)",
+      "gsettings set org.gnome.desktop.interface color-scheme prefer-dark" in got
+      and "gsettings set org.gnome.desktop.interface accent-color purple" in got, got)
+open(LOG, "w").close()
+code, lines = ctl("look", "light", "0078d4")
+got = calls()
+check("look light: GTK light, color-scheme default, accent blue",
+      "gtk-application-prefer-dark-theme=false" in ini("gtk-3.0") and "gtk-application-prefer-dark-theme=false" in ini("gtk-4.0")
+      and "gsettings set org.gnome.desktop.interface color-scheme default" in got
+      and "gsettings set org.gnome.desktop.interface accent-color blue" in got, got)
+code, lines = ctl("look", "dim", "123456")
+check("look: a mode that is not dark or light is refused", code == 2, lines)
+code, lines = ctl("look", "dark", "12345z")
+check("look: an accent that is not six hex digits is refused", code == 2, lines)
+os.remove(os.path.join(cfg, "gtk-4.0", "settings.ini"))
+open(LOG, "w").close()
+code, lines = ctl("session-start")
+got = calls()
+check("session-start: the kept look again", "gtk-application-prefer-dark-theme=false" in ini("gtk-4.0")
+      and "gsettings set org.gnome.desktop.interface color-scheme default" in got, got)
+
 # ---- usage
 code, lines = ctl("reboot")
 check("an unknown command is refused", code == 2 and lines[-1].startswith("ERROR invalid"), lines)
