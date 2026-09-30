@@ -355,7 +355,8 @@ def display(args):
             m = MODE.fullmatch(args[2])
             if not m:
                 raise Fail("invalid", "a mode is WIDTHxHEIGHT[@HZ]")
-            run(["wlr-randr", "--output", args[1], "--mode", args[2]])
+            o = next(o for o in outputs() if o.get("name") == args[1])
+            run(["wlr-randr", "--output", args[1], "--mode", exact_mode(o, m) or args[2]])
         else:
             if not re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", args[2]):
                 raise Fail("invalid", "the scale is 1 to 3 in steps of 0.25")
@@ -370,6 +371,20 @@ def display(args):
     if args == ["restore"]:
         return display_restore()
     raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S | restore]")
+
+
+def exact_mode(o, m):
+    """The output's own spelling of a mode (WxH@74.992): the list shows 74.99,
+    and wlr-randr refuses a rate that is not exactly the monitor's ("unknown
+    mode" -- Settings could not pick such a mode). None when not offered."""
+    w, h = int(m.group(1)), int(m.group(2))
+    hz = float(m.group(3)) if m.group(3) else None
+    fits = [x for x in o.get("modes", []) if x.get("width") == w and x.get("height") == h
+            and (hz is None or abs(float(x.get("refresh") or 0) - hz) < 0.5)]
+    if not fits:
+        return None
+    best = min(fits, key=lambda x: abs(float(x.get("refresh") or 0) - (hz or float(x.get("refresh") or 0))))
+    return "%dx%d@%.3f" % (w, h, float(best.get("refresh") or 0)) if best.get("refresh") else "%dx%d" % (w, h)
 
 
 def monitor_key(o):
@@ -400,7 +415,7 @@ def display_restore():
             cur = next((x for x in o.get("modes", []) if x.get("current")), {})
             if fits and not (cur.get("width") == w and cur.get("height") == h
                              and (hz is None or abs(float(cur.get("refresh") or 0) - hz) < 0.5)):
-                run(["wlr-randr", "--output", name, "--mode", want["mode"]])
+                run(["wlr-randr", "--output", name, "--mode", exact_mode(o, m) or want["mode"]])
                 out.append("RESTORED %s\tmode\t%s" % (clean(name), want["mode"]))
         s = str(want.get("scale", ""))
         if re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", s) and abs(float(o.get("scale") or 1) - float(s)) > 0.01:

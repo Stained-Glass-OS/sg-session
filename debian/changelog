@@ -1,3 +1,13 @@
+sg-session (0.1.0-65) unstable; urgency=medium
+
+  * Display: a mode with a fractional refresh rate can be chosen -- the list
+    shows 74.99 Hz, the monitor's rate is 74.992, and wlr-randr refused the
+    rounded rate ("unknown mode": Settings said the display did not accept
+    it). The monitor's own spelling is passed, for Settings and for the mode
+    put back at session start. Gate: settingsctl-test. VM: 1280x800@74.99.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 04:30:00 +0000
+
 sg-session (0.1.0-64) unstable; urgency=medium
 
   * The resolution and scale chosen in Settings > Display are kept for each
