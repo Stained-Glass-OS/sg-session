@@ -677,7 +677,9 @@ def shutdown_now(args):
     time.sleep(0.5)                  # ExitWindowsEx starts wineboot first; let it show up
     while ending_sessions() and time.time() - start < limit:
         time.sleep(0.25)
-    run(["systemctl", args[0]], timeout=60)
+    # --no-wall: no "The system will reboot now!" on the console under the
+    # shutdown splash (polkit lets the person at the PC turn the message off)
+    run(["systemctl", "--no-wall", args[0]], timeout=60)
     return []
 
 

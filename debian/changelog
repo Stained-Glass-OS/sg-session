@@ -1,3 +1,12 @@
+sg-session (0.1.0-68) unstable; urgency=medium
+
+  * Shut down and restart without a console broadcast: sg-settingsctl runs
+    systemctl --no-wall (polkit lets the person at the PC turn the message
+    off), so the shutdown splash is not preceded by "The system will reboot
+    now!" on the console. Gate: test/settingsctl-test.py.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 30 Sep 2026 06:00:00 +0000
+
 sg-session (0.1.0-67) unstable; urgency=medium
 
   * Updates: sg-update-prepare publishes what it downloads, per file, in

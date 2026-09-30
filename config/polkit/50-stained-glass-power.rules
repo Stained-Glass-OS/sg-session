@@ -9,7 +9,9 @@
 // machine policy (NoClose) is enforced by the shell before it asks.
 polkit.addRule(function(action, subject) {
     var ids = ["org.freedesktop.login1.power-off", "org.freedesktop.login1.power-off-multiple-sessions",
-               "org.freedesktop.login1.reboot", "org.freedesktop.login1.reboot-multiple-sessions"];
+               "org.freedesktop.login1.reboot", "org.freedesktop.login1.reboot-multiple-sessions",
+               // systemctl --no-wall: the console shows the shutdown splash, not a broadcast
+               "org.freedesktop.login1.set-wall-message"];
     if (ids.indexOf(action.id) < 0)
         return polkit.Result.NOT_HANDLED;
     if (subject.local && subject.active)
