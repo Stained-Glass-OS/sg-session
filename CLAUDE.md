@@ -474,6 +474,30 @@ Things that bit:
   (SIGPIPE on the reply). This is fixed in sg-compositor. The broker still
   sends `STATUS` on its probe connection rather than connecting bare.
 
+## polkit: the session's agent (sg-polkit-agent)
+
+Linux programs that want root ask polkit (pkexec: GParted, Timeshift; udisks,
+NetworkManager for what our rules do not already allow), and polkit asks the
+session's authentication agent. `sg-polkit-agent` (broker/, GIO only) runs as
+the user from sg-session-start and registers for `$XDG_SESSION_ID` (polkit
+refuses an agent for a session the caller is not in). Its BeginAuthentication
+goes to sg-brokerd as a request with cwd `@polkit` and POLKIT_COOKIE,
+POLKIT_ACTION, POLKIT_IDENTITIES (the unix-user uids polkit would accept --
+polkitd expands admin groups); the program shown is pkexec's `program`
+detail or the path quoted in its message. The broker runs the same consent
+(admin Yes/No, else an administrator's credentials); the one who consented
+must be in the identity list. Then the **root monitor** answers polkitd
+(`AuthenticationAgentResponse2`, root only) through `sg-polkit-respond` --
+only for an administrator identity, and never for an agent of root's or of the
+SYSTEM account's. SYSTEM could already reach root (sg-admind adds
+administrators), so this widens nothing. The agent's reply comes after
+polkitd has the answer. Gate: `make test-polkit` (private bus, stand-in
+polkitd in test/polkit-fixture.c). Testing in the VM from ssh: the agent and
+pkexec must be in the graphical session -- move a shell into
+`/sys/fs/cgroup/user.slice/user-1000.slice/session-N.scope/cgroup.procs`
+first. The monitor ignored SIGCHLD (inherited from the broker), so waitpid
+failed: it now restores the default.
+
 ## Elevated programs' displays: sg-elevated-run (B56)
 
 **Status (2026-09-26): shipped (0.1.0-40). sg-image `make elevated-test` passes 13/13 in a VM; `make test` and `make test-consent` pass.**

@@ -43,6 +43,8 @@ static FILE *g_log;
 static int   g_monitor = -1;
 static const char *g_admin_group = "sg-admins";
 static const char *g_system_user = "sgsystem";
+static const char *g_polkit_respond = "/usr/libexec/stained-glass/sg-polkit-respond";
+static int is_admin_name(const char *name);
 
 static void logmsg(const char *fmt, ...)
 {
@@ -85,11 +87,59 @@ static int run_pamcheck(const char *helper, const char *user, const char *pass)
     if (n > 0) reply[n] = 0;
     return WIFEXITED(status) && !WEXITSTATUS(status) && !strncmp(reply, "OK", 2);
 }
+/* polkit's answer, as root (polkitd takes it from root only): the
+ * authentication with COOKIE, begun by the agent of AGENT_UID, was made by
+ * IDENTITY. Only an administrator answers, and never for an agent of root's
+ * or of the SYSTEM account's (sg-polkit-agent runs as the session's user):
+ * the broker that asks has the consent; this checks what it can itself. */
+#define MONITOR_POLKIT 0xffffffffu
+static int monitor_polkit(uint32_t agent_uid, uint32_t identity_uid, const char *cookie)
+{
+    struct passwd *sys = getpwnam(g_system_user), *id = getpwuid(identity_uid);
+    char a[16], i[16], name[MAXFIELD];
+    const char *c;
+    int status;
+    pid_t pid;
+
+    if (!agent_uid || (sys && agent_uid == sys->pw_uid) || !id) return 0;
+    snprintf(name, sizeof(name), "%s", id->pw_name);
+    if (!is_admin_name(name)) return 0;
+    if (!*cookie) return 0;
+    for (c = cookie; *c; c++)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || strchr("-_.:", *c)))
+            return 0;
+    snprintf(a, sizeof(a), "%u", agent_uid);
+    snprintf(i, sizeof(i), "%u", identity_uid);
+    if ((pid = fork()) < 0) return 0;
+    if (!pid) {
+        int null = open("/dev/null", O_RDWR);
+        if (null >= 0) { dup2(null, 0); dup2(null, 1); }
+        execl(g_polkit_respond, g_polkit_respond, a, cookie, i, (char *)NULL);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) return 0;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 static void monitor_loop(int fd, const char *helper)
 {
+    /* the broker ignores SIGCHLD (its launches are fire and forget); the
+     * monitor waits for its helpers' exit status */
+    signal(SIGCHLD, SIG_DFL);
     for (;;) {
         unsigned ulen, plen; char user[MAXFIELD], pass[MAXFIELD]; unsigned char ok;
-        if (read_full(fd, &ulen, sizeof(ulen)) || read_full(fd, &plen, sizeof(plen))) _exit(0);
+        if (read_full(fd, &ulen, sizeof(ulen))) _exit(0);
+        if (ulen == MONITOR_POLKIT) {
+            uint32_t agent_uid, identity_uid, clen;
+            char cookie[MAXFIELD];
+            if (read_full(fd, &agent_uid, sizeof(agent_uid)) || read_full(fd, &identity_uid, sizeof(identity_uid)) ||
+                read_full(fd, &clen, sizeof(clen)) || clen >= MAXFIELD || read_full(fd, cookie, clen)) _exit(0);
+            cookie[clen] = 0;
+            ok = (unsigned char)monitor_polkit(agent_uid, identity_uid, cookie);
+            if (write_full(fd, &ok, 1)) _exit(0);
+            continue;
+        }
+        if (read_full(fd, &plen, sizeof(plen))) _exit(0);
         if (ulen >= MAXFIELD || plen >= MAXFIELD) _exit(1);
         if (read_full(fd, user, ulen) || read_full(fd, pass, plen)) _exit(0);
         user[ulen] = 0; pass[plen] = 0;
@@ -105,6 +155,18 @@ static int check_password(const char *user, const char *pass)
     if (ulen >= MAXFIELD || plen >= MAXFIELD) return 0;
     if (write_full(g_monitor, &ulen, sizeof(ulen)) || write_full(g_monitor, &plen, sizeof(plen)) ||
         write_full(g_monitor, user, ulen) || write_full(g_monitor, pass, plen) || read_full(g_monitor, &ok, 1))
+        return 0;
+    return ok == 1;
+}
+
+static int polkit_respond(uid_t agent_uid, uid_t identity_uid, const char *cookie)
+{
+    uint32_t marker = MONITOR_POLKIT, a = agent_uid, i = identity_uid, clen = (uint32_t)strlen(cookie);
+    unsigned char ok = 0;
+    if (clen >= MAXFIELD) return 0;
+    if (write_full(g_monitor, &marker, sizeof(marker)) || write_full(g_monitor, &a, sizeof(a)) ||
+        write_full(g_monitor, &i, sizeof(i)) || write_full(g_monitor, &clen, sizeof(clen)) ||
+        write_full(g_monitor, cookie, clen) || read_full(g_monitor, &ok, 1))
         return 0;
     return ok == 1;
 }
@@ -638,6 +700,7 @@ int main(void)
     if ((env = getenv("SG_SEAT_DIR"))) g_seat_dir = env;
     if ((env = getenv("SG_CONSENT_UI"))) g_consent_ui = env;
     if ((env = getenv("SG_ELEVATED_RUN"))) g_elevated_run = env;
+    if ((env = getenv("SG_POLKIT_RESPOND"))) g_polkit_respond = env;
     /* PAM policy for elevation credential prompts */
     setenv("SG_REMOTE_PAM_SERVICE", "stained-glass-elevate", 0);
     g_log = logpath ? fopen(logpath, "a") : stderr;
@@ -692,6 +755,58 @@ int main(void)
         if (argc == 0) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
 
         admin = is_admin_name(rpw->pw_name);
+
+        /* polkit (sg-polkit-agent): a Linux program asks to act as an
+         * administrator -- pkexec, a disk or backup tool. The same consent on
+         * the secure surface; then root tells polkitd who authenticated. The
+         * request: cwd "@polkit", the environment POLKIT_COOKIE,
+         * POLKIT_ACTION and POLKIT_IDENTITIES (the uids polkit would accept,
+         * comma-separated), and what to show as the program. */
+        if (!strcmp(cwd, "@polkit")) {
+            const char *cookie = NULL, *action = NULL, *ids = NULL;
+            struct surface used;
+            int i, ok = 0;
+
+            for (i = 0; i < envc; i++) {
+                if (!strncmp(envp[i], "POLKIT_COOKIE=", 14)) cookie = envp[i] + 14;
+                else if (!strncmp(envp[i], "POLKIT_ACTION=", 14)) action = envp[i] + 14;
+                else if (!strncmp(envp[i], "POLKIT_IDENTITIES=", 18)) ids = envp[i] + 18;
+            }
+            if (!cookie || !action || !ids) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
+            logmsg("polkit request from %s (%s): %s (%s)", rpw->pw_name, admin ? "administrator" : "standard user",
+                   action, argv[0]);
+            memset(&used, 0, sizeof(used));
+            if (obtain_consent(admin, rpw->pw_name, cred.uid, argv, who, sizeof(who), &used)) {
+                const char *by = who[0] ? who : rpw->pw_name;
+                struct passwd *bpw = getpwnam(by);
+                char list[MAXFIELD], *tok, *save = NULL;
+
+                /* the one who consented must be one polkit would take */
+                snprintf(list, sizeof(list), "%s", ids);
+                for (tok = strtok_r(list, ",", &save); tok && bpw; tok = strtok_r(NULL, ",", &save))
+                    if ((uid_t)strtoul(tok, NULL, 10) == bpw->pw_uid) ok = 1;
+                if (!ok) logmsg("polkit: %s is not one polkit asked for (%s); refusing", by, ids);
+                else if (!polkit_respond(cred.uid, bpw->pw_uid, cookie)) {
+                    logmsg("polkit: polkitd did not take the answer for %s", action);
+                    ok = 0;
+                }
+                if (ok) {
+                    const char *st[4] = { by, computer_name(), ADMIN_PRIVILEGES, action };
+                    audit(4672, 1, 12548, st, 4);
+                    logmsg("polkit: %s for %s, authorised by %s", action, rpw->pw_name, by);
+                }
+                status = ok ? 0 : 2;
+            } else {
+                status = 1;
+                logmsg("polkit: denied for %s: %s", rpw->pw_name, action);
+            }
+            write_full(conn, &status, 1);
+            close(conn);
+            if (errfd >= 0) close(errfd);
+            if (getenv("SG_BROKER_ONCE")) break;
+            continue;
+        }
+
         logmsg("request from %s (%s): %s", rpw->pw_name, admin ? "administrator" : "standard user", argv[0]);
 
         struct surface used;

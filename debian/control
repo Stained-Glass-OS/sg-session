@@ -5,14 +5,14 @@ Maintainer: Stained Glass OS <ke7oxh@gmail.com>
 Build-Depends: debhelper-compat (= 13), libpam0g-dev, pkgconf, zlib1g-dev, libssl-dev,
  gcc-mingw-w64-x86-64, gcc-mingw-w64-i686,
  freerdp3-dev, libwayland-dev, libwayland-bin, libxkbcommon-dev,
- python3:any
+ python3:any, libglib2.0-dev
 Standards-Version: 4.7.0
 Homepage: https://github.com/Stained-Glass-OS/sg-session
 Rules-Requires-Root: no
 
 Package: sg-session
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-120) | wine, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, dconf-gsettings-backend, libglib2.0-bin,
+Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-120) | wine, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, dconf-gsettings-backend, libglib2.0-bin, polkitd,
 Recommends: sg-shell, avahi-utils,
          python3-numpy, python3-onnxruntime, pulseaudio-utils,
          python3-pymupdf, gir1.2-poppler-0.18, python3-gi, python3-gi-cairo, python3-cairo,

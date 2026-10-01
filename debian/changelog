@@ -8,6 +8,17 @@ sg-session (0.1.0-82) unstable; urgency=medium
     default one for later files; the existing trees once. sg-common.sh
     sg_system_access, from sg-prefix-init. Test: test/programdata-test.sh
     (mutant: no entries).
+  * The session has a polkit agent: a Linux program that asks to act as an
+    administrator (pkexec -- GParted, Timeshift) gets the "Run as
+    administrator" consent on the secure surface. Without an agent polkit
+    refused at once (the Store walk: GParted, Timeshift). sg-polkit-agent
+    runs as the user (sg-session-start) and asks sg-brokerd; after a Yes
+    from someone polkit asked for, the broker's root monitor gives polkitd
+    the answer (sg-polkit-respond, never for an agent of root's or
+    SYSTEM's). The monitor waits for its helpers again (SIGCHLD).
+    Test: make test-polkit (private bus, stand-in polkitd; mutants: the
+    broker's and the monitor's checks). VM: pkexec id as alex -> consent ->
+    uid=0; No -> "Request dismissed".
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 

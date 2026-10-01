@@ -76,6 +76,14 @@ else
     sg_log "note: sg-procagent not present; cross-process operations limited"
 fi
 
+# The session's polkit agent: a Linux program that asks to act as an
+# administrator (pkexec: GParted, Timeshift) gets the same consent as "Run as
+# administrator", through the broker. Without an agent polkit just refused.
+if [ -x "$SG_LIBEXEC/sg-polkit-agent" ]; then
+    "$SG_LIBEXEC/sg-polkit-agent" &
+    sg_log "started sg-polkit-agent (pid $!) for $(id -un)"
+fi
+
 sg_log "starting session: display path=$SG_DISPLAY_PATH geometry=$GEOM"
 
 case "$SG_DISPLAY_PATH" in

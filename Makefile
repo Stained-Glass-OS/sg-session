@@ -32,7 +32,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter token-probe procagent rdp
+install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
@@ -103,6 +103,8 @@ install: d3d-probe greeter token-probe procagent rdp
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass
 	install -m 0755 build/sg-procagent build/sg-brokerd build/sg-elevate build/sg-elevated-run build/sg-netmountd \
 	    $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# The session's polkit agent and the broker monitor's answer to polkitd.
+	install -m 0755 build/sg-polkit-agent build/sg-polkit-respond $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@if [ -f build/sg-procmem-probe.exe ]; then \
 	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
@@ -256,6 +258,13 @@ lint:
 
 test: lint test-session
 
+# The session's polkit agent and the broker's polkit path, on a private bus
+# with a stand-in polkitd: pkexec's request through the consent (mutants: the
+# broker or the monitor checks skipped).
+.PHONY: test-polkit
+test-polkit: procagent polkitagent
+	@sh test/polkit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
 # Voice typing with the real model: espeak-ng speech through --transcribe-file
 # and the microphone path. Skips (77) without the model or espeak-ng; set
 # SG_SPEECH_MODEL to a downloaded model directory.
@@ -356,6 +365,15 @@ greeter:
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
 	@echo "built: the greeter, its bridge and the protocol stub"
+
+# --- the session's polkit agent: pkexec and the rest through the broker's ---
+# consent (sg-polkit-agent as the user; sg-polkit-respond for the broker's
+# root monitor). GIO only.
+.PHONY: polkitagent
+polkitagent:
+	@mkdir -p build
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polkit-agent broker/sg-polkit-agent.c $$(pkg-config --cflags --libs gio-2.0)
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polkit-respond broker/sg-polkit-respond.c $$(pkg-config --cflags --libs gio-2.0)
 
 # --- the per-user process agent (ADR 0014, debt D16/D19) -------------------
 # Native: it delegates ptrace/signal/affinity for the wineserver on the user's
