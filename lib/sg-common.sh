@@ -431,19 +431,65 @@ sg_program_files_protected() {
 # The compositor's window manager (wlroots') says what it supports first; the
 # work area goes beside that. The bar's height is the one the compositor
 # keeps maximized windows above (DECOR_TASKBAR_H, 40). Needs DISPLAY.
+#
+# _NET_SUPPORTED is a list of atoms, and xprop -set cannot write one: it made
+# the whole list ONE atom named "_NET_WM_STATE, ..., _NET_WORKAREA", so Qt and
+# GTK saw a window manager supporting nothing -- no _NET_WM_MOVERESIZE (SG
+# Office's title bar could not be dragged), no _NET_WM_STATE, no
+# _NET_ACTIVE_WINDOW. sg_x11_add_supported appends one atom to the list with
+# Xlib (python3's ctypes); without python3 the list is left as it is.
+sg_x11_add_supported() {
+    command -v python3 >/dev/null 2>&1 || return 2
+    python3 - "$1" <<'PY'
+import ctypes, ctypes.util, sys
+x = ctypes.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
+x.XOpenDisplay.restype = ctypes.c_void_p
+x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+x.XDefaultRootWindow.restype = ctypes.c_ulong
+x.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+x.XInternAtom.restype = ctypes.c_ulong
+x.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+x.XGetWindowProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_long, ctypes.c_long,
+                                 ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_ulong),
+                                 ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong))]
+x.XChangeProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_int,
+                              ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+x.XFree.argtypes = [ctypes.c_void_p]
+x.XCloseDisplay.argtypes = [ctypes.c_void_p]
+XA_ATOM, PROP_MODE_REPLACE = 4, 0
+d = x.XOpenDisplay(None)
+if not d:
+    sys.exit(1)
+root = x.XDefaultRootWindow(d)
+supported = x.XInternAtom(d, b"_NET_SUPPORTED", 0)
+want = x.XInternAtom(d, sys.argv[1].encode(), 0)
+kind, fmt, n, after = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_ulong(), ctypes.c_ulong()
+data = ctypes.POINTER(ctypes.c_ulong)()
+if (x.XGetWindowProperty(d, root, supported, 0, 4096, 0, XA_ATOM, ctypes.byref(kind), ctypes.byref(fmt),
+                         ctypes.byref(n), ctypes.byref(after), ctypes.byref(data)) != 0
+        or kind.value != XA_ATOM or fmt.value != 32 or n.value == 0):
+    sys.exit(1)                     # no window manager's list (yet)
+atoms = [data[i] for i in range(n.value)]
+x.XFree(data)
+if want not in atoms:
+    atoms.append(want)
+    x.XChangeProperty(d, root, supported, XA_ATOM, 32, PROP_MODE_REPLACE,
+                      (ctypes.c_ulong * len(atoms))(*atoms), len(atoms))
+x.XCloseDisplay(d)
+PY
+}
+
 sg_x11_workarea() {
-    _w=$1 _h=$2 _tries=0 _supported=""
+    _w=$1 _h=$2 _tries=0
     command -v xprop >/dev/null 2>&1 || return 0
     case "$_w$_h" in *[!0-9]*|"") return 0 ;; esac
+    # the window manager's list first (it may not be there yet), then ours beside it
     while [ "$_tries" -lt "${SG_WORKAREA_TRIES:-20}" ]; do
-        _supported=$(xprop -root -notype _NET_SUPPORTED 2>/dev/null | sed -n 's/^_NET_SUPPORTED = //p')
-        [ -n "$_supported" ] && break
+        sg_x11_add_supported _NET_WORKAREA 2>/dev/null; _rc=$?
+        [ "$_rc" -ne 1 ] && break
         sleep 0.5; _tries=$((_tries + 1))
     done
-    [ -n "$_supported" ] || return 0
-    case ", $_supported," in *", _NET_WORKAREA,"*) ;; *)
-        xprop -root -f _NET_SUPPORTED 32a -set _NET_SUPPORTED "$_supported, _NET_WORKAREA" 2>/dev/null ;;
-    esac
     xprop -root -f _NET_WORKAREA 32c -set _NET_WORKAREA "0, 0, $_w, $((_h - ${SG_TASKBAR_H:-40}))" 2>/dev/null &&
         sg_log "work area for Linux programs: ${_w}x$((_h - ${SG_TASKBAR_H:-40}))"
     return 0

@@ -1,5 +1,15 @@
 sg-session (0.1.0-83) unstable; urgency=medium
 
+  * _NET_SUPPORTED stays a list of atoms. sg_x11_workarea added
+    _NET_WORKAREA with xprop -set, which cannot write a list: the whole
+    list became ONE atom named "_NET_WM_STATE, ..., _NET_WORKAREA", so Qt
+    and GTK saw a window manager supporting nothing. SG Office's title bar
+    could not be dragged (Qt's startSystemMove needs _NET_WM_MOVERESIZE),
+    and _NET_WM_STATE and _NET_ACTIVE_WINDOW went unused. Now
+    sg_x11_add_supported appends the atom with Xlib (python3 ctypes);
+    without python3 the window manager's list is left alone. Test:
+    test/workarea-test.sh now checks each entry is an atom of its own
+    (the old xprop -set as a mutant fails it).
   * Linux programs draw through Xwayland: the session tells GTK, Qt, SDL,
     Firefox and Electron to use X11 (GDK_BACKEND=x11, QT_QPA_PLATFORM=xcb,
     SDL_VIDEODRIVER=x11, MOZ_ENABLE_WAYLAND=0,
