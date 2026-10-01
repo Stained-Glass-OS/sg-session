@@ -24,6 +24,10 @@ sg-session (0.1.0-82) unstable; urgency=medium
     asks for consent for a highestAvailable program, as Windows asks an
     administrator (Geany's installer had installed into the profile). Only
     whether to ask: the broker still checks who answers.
+  * sg-wineserver.service: CAP_SYS_PTRACE permitted too, for wine-sg 0624
+    (the server traces the SYSTEM account's own processes, which have
+    SYSTEM's group, not the prefix's: debuggers and ReadProcessMemory on
+    elevated programs; MediaMonkey's setup no longer crashes and hangs).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 

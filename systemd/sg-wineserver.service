@@ -30,8 +30,13 @@ ExecStart=/usr/bin/sg-wineserver
 # Windows (an elevated installer moving a download from the user's Temp into
 # the machine's folders, then resetting its DACL). wine-sg 0466 keeps
 # CAP_FOWNER permitted only -- it clears the ambient and effective sets at
-# start -- and raises it for that one fchmod. Nothing else of root's.
-AmbientCapabilities=CAP_FOWNER
+# start -- and raises it for that one fchmod. And SYSTEM's own processes may
+# be traced (wine-sg 0624): an elevated program has SYSTEM's group, the server
+# the prefix's, and the kernel let the server read or write the memory only of
+# processes whose groups match its own -- debuggers, ReadProcessMemory and
+# MediaMonkey's setup failed. CAP_SYS_PTRACE is likewise permitted only and
+# raised for one attach, only for a process of SYSTEM's. Nothing else of root's.
+AmbientCapabilities=CAP_FOWNER CAP_SYS_PTRACE
 # The prefix must be initialized before there is anything to serve, but a
 # oneshot that has not finished holds this unit off entirely -- and a machine
 # with no Windows system is worse than one that waits a little longer for it.
