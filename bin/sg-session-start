@@ -47,6 +47,9 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
 fi
 
+# Linux programs through Xwayland, not full screen as native Wayland ones
+sg_linux_app_env
+
 # An administrator's session (wine-sg 0623): a program whose manifest asks for
 # the highest level available (highestAvailable; NSIS "highest") asks for
 # consent, as Windows does for an administrator; for a standard user it runs

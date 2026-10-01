@@ -364,6 +364,28 @@ sg_system_access() {
     return 0
 }
 
+# Linux programs draw through Xwayland, where the session's windows are
+# managed: title bars, the taskbar, placement. A native Wayland toplevel is
+# shown full screen over everything, taskbar included (GNOME Calculator from
+# SG Store's Open, D-Bus-activated). So GTK, Qt, SDL, Firefox and Electron
+# are told to use X11 -- in this environment, the user's systemd manager and
+# D-Bus activation, which start most desktop programs.
+#   sg_linux_app_env
+SG_LINUX_APP_ENV="GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11"
+sg_linux_app_env() {
+    _names=""
+    for _kv in $SG_LINUX_APP_ENV; do
+        export "${_kv?}"
+        _names="$_names ${_kv%%=*}"
+    done
+    # shellcheck disable=SC2086  # the names, split
+    systemctl --user import-environment $_names >/dev/null 2>&1 || true
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        dbus-update-activation-environment $_names >/dev/null 2>&1 || true
+    fi
+}
+
 # Program Files is the administrators': users may read and run what is there,
 # not change it -- as on Windows, where Users have read and execute only. The
 # prefix is made by SYSTEM with the Wine group's write (umask 002), so every

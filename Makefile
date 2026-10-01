@@ -259,7 +259,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-session
+test: lint test-linuxappenv test-session
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -267,6 +267,11 @@ test: lint test-session
 .PHONY: test-polkit
 test-polkit: procagent polkitagent
 	@sh test/polkit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# Linux programs go through Xwayland (sg_linux_app_env): native Wayland ones
+# were shown full screen over the taskbar. Stand-in systemctl/D-Bus.
+test-linuxappenv:
+	@sh test/linux-app-env-test.sh
 
 # Voice typing with the real model: espeak-ng speech through --transcribe-file
 # and the microphone path. Skips (77) without the model or espeak-ng; set
