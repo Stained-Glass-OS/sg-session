@@ -149,6 +149,7 @@ if [ -e "$STAMP" ]; then
     import_defaults
     set_machine_settings
     run_installers
+    sg_d3d_backend "$SG_D3D_DIR" "$SG_STATE"
     sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
     sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
     sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
@@ -243,6 +244,7 @@ fi
 # nobody else owns.
 set_machine_settings
 run_installers
+sg_d3d_backend "$SG_D3D_DIR" "$SG_STATE"
 sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
 sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
 sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
