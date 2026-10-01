@@ -19,6 +19,11 @@ sg-session (0.1.0-82) unstable; urgency=medium
     Test: make test-polkit (private bus, stand-in polkitd; mutants: the
     broker's and the monitor's checks). VM: pkexec id as alex -> consent ->
     uid=0; No -> "Request dismissed".
+  * An administrator's session says so to its programs (SG_USER_ADMIN=1 for
+    the administrators' group, from sg-session-start): wine-sg 0623 then
+    asks for consent for a highestAvailable program, as Windows asks an
+    administrator (Geany's installer had installed into the profile). Only
+    whether to ask: the broker still checks who answers.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 

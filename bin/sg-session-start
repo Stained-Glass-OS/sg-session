@@ -47,6 +47,15 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
 fi
 
+# An administrator's session (wine-sg 0623): a program whose manifest asks for
+# the highest level available (highestAvailable; NSIS "highest") asks for
+# consent, as Windows does for an administrator; for a standard user it runs
+# as the user. Only whether to ask: the broker still checks who answers.
+case " $(id -nG 2>/dev/null) " in
+    *" $SG_ADMIN_GROUP "*) SG_USER_ADMIN=1; export SG_USER_ADMIN ;;
+    *) unset SG_USER_ADMIN ;;
+esac
+
 # A remote session (started by sg-rdp-authd, ADR 0010) has no screen of its
 # own: the compositor runs headless, at the RDP client's size, and the RDP
 # daemon streams it through the compositor's privileged socket. Its seat
