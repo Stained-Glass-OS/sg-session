@@ -6,6 +6,14 @@ sg-session (0.1.0-81) unstable; urgency=medium
     non-ASCII name (Go's MSI failed with 1603; the Store walk). Test:
     test/elevate-debug-test.sh (de_DE.UTF-8 passes; a LANG that is not a
     locale name, or an empty one, gives C.UTF-8; mutant: no LANG).
+  * C:\ProgramData is shared as Windows shares it: what anyone makes in it
+    stays writable for the machine's users. An elevated installer (the
+    SYSTEM account) made its folder there 755 and the user's program could
+    not write in it (Epic Games Launcher: "Self Update Failed"; the Store
+    walk). The folder is the Wine group's and setgid, with a default ACL
+    giving the group write; what is there already gets it once. sg-common.sh
+    sg_programdata_shared, from sg-prefix-init. Test:
+    test/programdata-test.sh (mutant: nothing changed).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 06:20:00 +0000
 

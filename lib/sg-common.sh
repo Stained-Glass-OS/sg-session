@@ -316,6 +316,30 @@ sg_cursor_env() {
 }
 sg_cursor_env
 
+# C:\ProgramData is shared the way Windows shares it: what anyone makes in it
+# stays writable for the users of the machine (Windows' "Users: create" that
+# its subfolders inherit). An elevated installer runs as the SYSTEM account and
+# made its folder there 755 and its own group; the program, run by the user,
+# could not write in it (Epic Games Launcher: "Self Update Failed", cannot
+# create C:\ProgramData\Epic\...). The folder is the Wine group's, setgid,
+# with a default ACL giving the group write; what is already there gets the
+# same once (STATE stamp), later boots only the folder itself.
+#   sg_programdata_shared PROGRAMDATA GROUP STATEDIR
+sg_programdata_shared() {
+    _pd=$1 _grp=$2 _st=$3
+    [ -d "$_pd" ] || return 0
+    chgrp "$_grp" "$_pd" 2>/dev/null || :
+    chmod 2775 "$_pd" 2>/dev/null || :
+    command -v setfacl >/dev/null 2>&1 || return 0
+    if [ ! -e "$_st/programdata-shared-1" ]; then
+        setfacl -R -P -m "g:$_grp:rwX" -m "d:g:$_grp:rwX" "$_pd" 2>/dev/null || :
+        : > "$_st/programdata-shared-1" 2>/dev/null || :
+    else
+        setfacl -P -m "g:$_grp:rwX" -m "d:g:$_grp:rwX" "$_pd" 2>/dev/null || :
+    fi
+    return 0
+}
+
 # The work area for Linux programs on X11: the screen (W H) less the taskbar.
 # Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
 # program that sizes itself to it (SG Office's editors) covered the taskbar.
