@@ -259,7 +259,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-session
+test: lint test-linuxappenv test-deskcomp-start test-session
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -267,6 +267,12 @@ test: lint test-linuxappenv test-session
 .PHONY: test-polkit
 test-polkit: procagent polkitagent
 	@sh test/polkit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The session starts the desktop's compositor (sg_start_deskcomp), and the
+# test fails without the launch (its --mutant).
+test-deskcomp-start:
+	@sh test/deskcomp-start-test.sh
+	@! sh test/deskcomp-start-test.sh --mutant >/dev/null
 
 # Linux programs go through Xwayland (sg_linux_app_env): native Wayland ones
 # were shown full screen over the taskbar. Stand-in systemctl/D-Bus.

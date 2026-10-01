@@ -524,6 +524,18 @@ SG_DEFAULTS_DIR="${SG_DEFAULTS_DIR:-/usr/share/stained-glass/defaults.d}"
 SG_APPS_DIR="${SG_APPS_DIR:-/opt/sg-apps}"
 
 
+# The desktop's compositor (sg-compositor's sg-deskcomp): drop shadows, real
+# alpha and the window effects for the Windows programs' windows, which are
+# all children of Wine's desktop window. It waits for the desktop's picture
+# (wine-sg 0744) and, if it ends, X draws the desktop as before; so it is
+# started once and not supervised. SG_DESKCOMP=0 leaves it out.
+sg_start_deskcomp() {
+    _dc="${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-deskcomp"
+    [ "${SG_DESKCOMP:-1}" != 0 ] && [ -x "$_dc" ] || return 0
+    sg_log "starting the desktop's compositor (sg-deskcomp)"
+    "$_dc" </dev/null &
+}
+
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
 export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER

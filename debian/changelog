@@ -25,6 +25,10 @@ sg-session (0.1.0-83) unstable; urgency=medium
     (0700, no inherited entries). wine-sg 0638 hands it to SYSTEM
     processes from GetTempPath2; elevated installers (Omaha) unpack there.
     Test: programdata-test (mutant NOSYSTEMTEMP).
+  * The session starts sg-compositor's sg-deskcomp (sg_start_deskcomp, from
+    sg-run-explorer once the desktop is up): window shadows, real alpha and
+    the window effects for Windows programs. SG_DESKCOMP=0 leaves it out.
+    Test: test-deskcomp-start (and its mutant without the launch).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 16:40:00 +0000
 
