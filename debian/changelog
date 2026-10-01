@@ -1,5 +1,12 @@
 sg-session (0.1.0-83) unstable; urgency=medium
 
+  * One pointer in a virtual machine (David 2026-10-01: the OS drew a
+    pointer and the VM's viewer drew its own). The compositor draws the
+    pointer itself only when it renders with GL on a virtual GPU (virgl),
+    where the hardware cursor came out upside down; rendered in software
+    (pixman, a VM without 3D) the hardware cursor is upright and the
+    viewer shows just that one. Test: test/cursor-env-test.sh (a virgl
+    card, plain virtio and QXL; the old rule fails it).
   * _NET_SUPPORTED stays a list of atoms. sg_x11_workarea added
     _NET_WORKAREA with xprop -set, which cannot write a list: the whole
     list became ONE atom named "_NET_WM_STATE, ..., _NET_WORKAREA", so Qt

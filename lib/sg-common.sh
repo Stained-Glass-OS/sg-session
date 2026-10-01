@@ -298,12 +298,16 @@ sg_renderer_env() {
 }
 sg_renderer_env
 
-# A virtual machine's display (virtio-gpu, QXL, Bochs, Cirrus) shows the
-# hardware cursor plane wrongly: in QEMU over VNC the pointer was drawn upside
-# down and away from where it points (David). The compositor draws the
-# pointer itself there. WLR_NO_HARDWARE_CURSORS set by hand still wins.
+# The hardware cursor plane of a virtual machine's display (virtio-gpu, QXL,
+# Bochs, Cirrus) comes out upside down when the compositor renders with GL
+# (virgl: QEMU over VNC drew the pointer upside down and off target, David
+# 2026-09-30); the compositor then draws the pointer itself. Rendered in
+# software (pixman: a VM without 3D) the hardware cursor is right, and the
+# VM's viewer shows that one pointer -- drawing our own as well gave two
+# pointers (David 2026-10-01). WLR_NO_HARDWARE_CURSORS set by hand still wins.
 sg_cursor_env() {
     [ -n "${WLR_NO_HARDWARE_CURSORS:-}" ] && return 0
+    [ "${WLR_RENDERER:-}" = pixman ] && return 0
     for _c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*; do
         case "${_c##*/}" in *-*) continue ;; esac
         [ -e "$_c/device/driver" ] || continue
