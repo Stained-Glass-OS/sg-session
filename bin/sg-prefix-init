@@ -152,6 +152,7 @@ if [ -e "$STAMP" ]; then
     sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
     sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
     sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
+    sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
     exit 0
 fi
 
@@ -246,6 +247,7 @@ run_installers
 sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
 sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
 sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
+sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
 
 # The prefix is machine state, not user state.
 # MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the

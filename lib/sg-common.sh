@@ -386,6 +386,20 @@ sg_linux_app_env() {
     fi
 }
 
+# The SYSTEM account's temporary folder, %SystemRoot%\SystemTemp, as Windows
+# has it: only SYSTEM may enter (wine-sg 0638 gives it to SYSTEM processes
+# from GetTempPath2; elevated installers unpack there). Made at every boot.
+#   sg_systemroot_temp DRIVE_C SYSTEM_USER
+sg_systemroot_temp() {
+    _st="$1/windows/SystemTemp"
+    mkdir -p "$_st" || return 0
+    [ "$(id -u)" = 0 ] && chown "$2" "$_st" 2>/dev/null
+    chmod 0700 "$_st"
+    # not the shared folders' inherited entries: nobody else reads in here
+    command -v setfacl >/dev/null 2>&1 && setfacl -b "$_st" 2>/dev/null
+    return 0
+}
+
 # Program Files is the administrators': users may read and run what is there,
 # not change it -- as on Windows, where Users have read and execute only. The
 # prefix is made by SYSTEM with the Wine group's write (umask 002), so every

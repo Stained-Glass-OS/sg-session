@@ -10,6 +10,11 @@ sg-session (0.1.0-83) unstable; urgency=medium
     opened from SG Store. Now a normal window with its taskbar button (QA
     VM). Test: make test-linuxappenv (stand-in systemctl and
     dbus-update-activation-environment; mutant NOENV).
+  * The SYSTEM account's temporary folder, C:\Windows\SystemTemp, as
+    Windows has it: made at every boot by sg-prefix-init, SYSTEM's alone
+    (0700, no inherited entries). wine-sg 0638 hands it to SYSTEM
+    processes from GetTempPath2; elevated installers (Omaha) unpack there.
+    Test: programdata-test (mutant NOSYSTEMTEMP).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 16:40:00 +0000
 

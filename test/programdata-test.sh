@@ -51,4 +51,16 @@ canw "$T/p/Program Files/Common Files/System/shared.dll" && getfacl -p "$T/p/Pro
     || { echo "FAIL  SYSTEM lost write: $(getfacl -p "$T/p/Program Files/Common Files/System/shared.dll" 2>/dev/null | tr '\n' ' ')"; RC=1; }
 gw "$T/p/Program Files/Steam/steam.exe" && echo "PASS  a folder an installer shared with the users (setgid) stays shared" \
     || { echo "FAIL  Steam lost its sharing"; RC=1; }
+# sg_systemroot_temp: %SystemRoot%\SystemTemp, only the SYSTEM account may enter
+mkdir -p "$T/s/windows"; setfacl -d -m g::rwx "$T/s/windows" 2>/dev/null
+( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_systemroot_temp "$T/s" "$me" )
+[ -d "$T/s/windows/SystemTemp" ] && [ "$(stat -c %a "$T/s/windows/SystemTemp")" = 700 ] && \
+    ! getfacl -p "$T/s/windows/SystemTemp" 2>/dev/null | grep -q "^default:" \
+    && echo "PASS  windows\\SystemTemp: made, SYSTEM's alone (0700, no inherited entries)" \
+    || { echo "FAIL  SystemTemp: $(stat -c %a "$T/s/windows/SystemTemp" 2>&1) $(getfacl -p "$T/s/windows/SystemTemp" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+# mutant: the function does nothing
+sed '/^sg_systemroot_temp() {/,/^}/c\sg_systemroot_temp() { :; }' "$HERE/lib/sg-common.sh" > "$T/mut.sh"
+mkdir -p "$T/m/windows"
+( . "$T/mut.sh" >/dev/null 2>&1; sg_systemroot_temp "$T/m" "$me" )
+[ ! -d "$T/m/windows/SystemTemp" ] && echo "PASS  MUTANT NOSYSTEMTEMP leaves no folder (test catches it)" || { echo "FAIL  mutant not detected"; RC=1; }
 exit $RC
