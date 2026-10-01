@@ -140,6 +140,7 @@ if [ -e "$STAMP" ]; then
         sg_log "prefix is current with this Wine"
     else
         sg_log "Wine was updated: updating the prefix"
+        rm -f "$SG_STATE/program-files-protected-1"   # what the update made, protected again
         sg_wine_unattended wine cmd /c exit >/dev/null 2>&1 || true
         # Bounded: auto-start services never exit, so an unbounded wait would
         # hang boot on a machine that has any.
@@ -150,6 +151,7 @@ if [ -e "$STAMP" ]; then
     run_installers
     sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
     sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
+    sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
     exit 0
 fi
 
@@ -243,6 +245,7 @@ set_machine_settings
 run_installers
 sg_programdata_shared "$SG_PREFIX/drive_c/ProgramData" "$SG_WINE_GROUP" "$SG_STATE"
 sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
+sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
 
 # The prefix is machine state, not user state.
 # MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the

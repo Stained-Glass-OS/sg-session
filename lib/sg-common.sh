@@ -364,6 +364,31 @@ sg_system_access() {
     return 0
 }
 
+# Program Files is the administrators': users may read and run what is there,
+# not change it -- as on Windows, where Users have read and execute only. The
+# prefix is made by SYSTEM with the Wine group's write (umask 002), so every
+# user could replace a program or a DLL in Common Files that an administrator
+# or SYSTEM later runs. The owning group loses write (setfacl g::, so the ACL
+# mask and SYSTEM's own entry stay); SYSTEM still writes there by its entry
+# (sg_system_access). A folder an installer shared with the users (setgid, the
+# server's sg_users_group: Steam's) keeps its sharing. The whole trees once
+# (STATE stamp, cleared when Wine updates the prefix), the roots at every boot.
+#   sg_program_files_protected DRIVE_C GROUP STATEDIR
+sg_program_files_protected() {
+    _c=$1 _grp=$2 _st=$3
+    command -v setfacl >/dev/null 2>&1 || return 0
+    for _d in "Program Files" "Program Files (x86)"; do
+        [ -d "$_c/$_d" ] || continue
+        setfacl -m g::r-x "$_c/$_d" 2>/dev/null || :
+        [ -e "$_st/program-files-protected-1" ] && continue
+        find "$_c/$_d" -mindepth 1 -type d -perm -2000 -group "$_grp" -prune -o \
+            ! -type l -group "$_grp" -perm -g=w -print0 2>/dev/null |
+            xargs -0 -r setfacl -m g::r-X 2>/dev/null || :
+    done
+    : > "$_st/program-files-protected-1" 2>/dev/null || :
+    return 0
+}
+
 # The work area for Linux programs on X11: the screen (W H) less the taskbar.
 # Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
 # program that sizes itself to it (SG Office's editors) covered the taskbar.

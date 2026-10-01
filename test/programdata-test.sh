@@ -33,4 +33,22 @@ mkdir -p "$T/c/Program Files/App" "$T/c/users/Public" "$T/st2"
 canw "$T/c/Program Files/App/app.exe" && echo "PASS  a file already in Program Files: the SYSTEM account may write it" || { echo "FAIL  existing file: $(getfacl -p "$T/c/Program Files/App/app.exe" 2>/dev/null | tr '\n' ' ')"; RC=1; }
 ( umask 022; : > "$T/c/users/Public/later.txt" )
 canw "$T/c/users/Public/later.txt" && echo "PASS  a file made later in users\\Public (umask 022): the SYSTEM account may write it" || { echo "FAIL  later file: $(getfacl -p "$T/c/users/Public/later.txt" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+# sg_program_files_protected: users may not change Program Files; SYSTEM may
+mkdir -p "$T/p/Program Files/Common Files/System" "$T/p/Program Files/Steam" "$T/p/Program Files (x86)" "$T/st3"
+chmod 775 "$T/p/Program Files" "$T/p/Program Files (x86)" "$T/p/Program Files/Common Files" "$T/p/Program Files/Common Files/System"
+( umask 002; : > "$T/p/Program Files/Common Files/System/shared.dll" )
+chmod 2775 "$T/p/Program Files/Steam"; ( umask 002; : > "$T/p/Program Files/Steam/steam.exe" )
+( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_system_access "$T/p" "$me" "$T/st3"
+  sg_program_files_protected "$T/p" "$grp" "$T/st3" )
+gw() { getfacl -p "$1" 2>/dev/null | grep -qx "group::rw[x-]"; }
+! gw "$T/p/Program Files" && ! gw "$T/p/Program Files (x86)" && echo "PASS  Program Files: the users' group may not write in it" \
+    || { echo "FAIL  Program Files root: $(getfacl -p "$T/p/Program Files" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+! gw "$T/p/Program Files/Common Files/System" && ! gw "$T/p/Program Files/Common Files/System/shared.dll" \
+    && echo "PASS  nor change what is in it (Common Files, a DLL)" \
+    || { echo "FAIL  Common Files: $(getfacl -p "$T/p/Program Files/Common Files/System/shared.dll" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+canw "$T/p/Program Files/Common Files/System/shared.dll" && getfacl -p "$T/p/Program Files/Common Files/System/shared.dll" 2>/dev/null | grep -qx "mask::rw-" \
+    && echo "PASS  the SYSTEM account still may (its entry, the mask)" \
+    || { echo "FAIL  SYSTEM lost write: $(getfacl -p "$T/p/Program Files/Common Files/System/shared.dll" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+gw "$T/p/Program Files/Steam/steam.exe" && echo "PASS  a folder an installer shared with the users (setgid) stays shared" \
+    || { echo "FAIL  Steam lost its sharing"; RC=1; }
 exit $RC

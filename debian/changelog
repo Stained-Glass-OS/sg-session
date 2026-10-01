@@ -28,6 +28,17 @@ sg-session (0.1.0-82) unstable; urgency=medium
     (the server traces the SYSTEM account's own processes, which have
     SYSTEM's group, not the prefix's: debuggers and ReadProcessMemory on
     elevated programs; MediaMonkey's setup no longer crashes and hangs).
+  * Program Files is the administrators': users may read and run what is
+    there, not change it, as on Windows. The prefix gave the Wine group
+    (every user) write in Program Files, Program Files (x86) and Common
+    Files, so a standard user could replace a program or a DLL that SYSTEM
+    or an administrator runs later. sg_program_files_protected (sg-common)
+    takes the owning group's write (setfacl g::, so SYSTEM's own entry
+    stays); folders an installer shared with the users (setgid: Steam's)
+    stay shared. The whole trees once (stamp, cleared when Wine updates
+    the prefix), the roots at every boot. Test: test/programdata-test.sh
+    (mutants: none; chmod, which took SYSTEM's write too). VM: alex is
+    refused, SYSTEM writes, an elevated install (Geany) still works.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 
