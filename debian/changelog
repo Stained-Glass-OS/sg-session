@@ -45,15 +45,6 @@ sg-session (0.1.0-82) unstable; urgency=medium
     started (Total Commander's installer gave up on its elevated copy
     during the consent prompt). /usr/share/stained-glass/sg-elevate.features
     says it can. Test: test/elevate-debug-test.sh (launched, declined).
-  * Direct3D 8-11 on a machine without a GPU uses Wine's own wined3d
-    instead of DXVK: with only a software Vulkan device (lavapipe -- a VM,
-    a machine without its GPU's driver) DXVK's frames never reached the
-    screen (a cleared swap chain stayed black) while wined3d draws.
-    sg_d3d_backend (sg-common, from sg-prefix-init at every boot) sets the
-    DXVK DLLs' machine overrides to builtin or native from vulkaninfo's
-    device types, touching the registry only when that changes; Depends
-    vulkan-tools. Test: test/d3d-backend-test.sh (stand-ins; mutant: always
-    a GPU). VM: the D3D11 test window shows its colour.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 

@@ -389,39 +389,6 @@ sg_program_files_protected() {
     return 0
 }
 
-# Direct3D 8-11 on a machine without a GPU: Wine's own (wined3d, on llvmpipe's
-# OpenGL) instead of DXVK. With only a software Vulkan device (lavapipe: a
-# virtual machine, a machine without its GPU's driver) DXVK's frames never
-# reached the screen -- Telegram, Brave, Audacity 4 drew nothing, a cleared
-# swap chain stayed black -- while wined3d draws. Decided at every boot from
-# the Vulkan devices (the same image boots in a VM and on a laptop); the
-# registry is touched only when the answer changes (STATE), so an ordinary
-# boot starts no Wine for it. D3D12 (VKD3D-Proton) needs Vulkan either way.
-#   sg_d3d_backend D3D_DIR STATEDIR       (in a prefix environment)
-sg_d3d_class() {
-    command -v vulkaninfo >/dev/null 2>&1 || { echo unknown; return 0; }
-    _types=$(vulkaninfo --summary 2>/dev/null | sed -n 's/.*deviceType *= *PHYSICAL_DEVICE_TYPE_//p')
-    [ -n "$_types" ] || { echo unknown; return 0; }
-    for _t in $_types; do [ "$_t" = CPU ] || { echo gpu; return 0; }; done
-    echo cpu
-}
-sg_d3d_backend() {
-    _dir=$1 _st=$2
-    [ -d "$_dir/dxvk/x64" ] || return 0
-    _class=$(sg_d3d_class)
-    [ "$_class" = unknown ] && return 0
-    [ "$(cat "$_st/d3d-backend" 2>/dev/null)" = "$_class" ] && return 0
-    _how=native; [ "$_class" = cpu ] && _how=builtin
-    for _dll in "$_dir"/dxvk/x64/*.dll; do
-        [ -e "$_dll" ] || continue
-        wine reg add 'HKLM\Software\Wine\DllOverrides' /v "$(basename "$_dll" .dll)" /t REG_SZ /d "$_how" /f \
-            >/dev/null 2>&1 || { sg_log "WARNING: could not set the D3D backend"; return 0; }
-    done
-    sg_log "Direct3D 8-11: $_how ($_class Vulkan devices)"
-    printf '%s\n' "$_class" > "$_st/d3d-backend" 2>/dev/null || :
-    return 0
-}
-
 # The work area for Linux programs on X11: the screen (W H) less the taskbar.
 # Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
 # program that sizes itself to it (SG Office's editors) covered the taskbar.
