@@ -94,6 +94,9 @@ if [ "${SG_DESKTOP_AUTO:-1}" != 0 ] && [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && 
     fi
 fi
 
+# The work area for Linux programs: the screen less the taskbar (sg-common.sh).
+[ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && sg_x11_workarea "${GEOM%x*}" "${GEOM#*x}"
+
 # Publish where the session lives, so a check running over ssh can attach to it
 # without having to guess. Without this the gate cannot find the display.
 mkdir -p "$SG_STATE"

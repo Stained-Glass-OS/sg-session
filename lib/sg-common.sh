@@ -316,6 +316,30 @@ sg_cursor_env() {
 }
 sg_cursor_env
 
+# The work area for Linux programs on X11: the screen (W H) less the taskbar.
+# Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
+# program that sizes itself to it (SG Office's editors) covered the taskbar.
+# The compositor's window manager (wlroots') says what it supports first; the
+# work area goes beside that. The bar's height is the one the compositor
+# keeps maximized windows above (DECOR_TASKBAR_H, 40). Needs DISPLAY.
+sg_x11_workarea() {
+    _w=$1 _h=$2 _tries=0 _supported=""
+    command -v xprop >/dev/null 2>&1 || return 0
+    case "$_w$_h" in *[!0-9]*|"") return 0 ;; esac
+    while [ "$_tries" -lt "${SG_WORKAREA_TRIES:-20}" ]; do
+        _supported=$(xprop -root -notype _NET_SUPPORTED 2>/dev/null | sed -n 's/^_NET_SUPPORTED = //p')
+        [ -n "$_supported" ] && break
+        sleep 0.5; _tries=$((_tries + 1))
+    done
+    [ -n "$_supported" ] || return 0
+    case ", $_supported," in *", _NET_WORKAREA,"*) ;; *)
+        xprop -root -f _NET_SUPPORTED 32a -set _NET_SUPPORTED "$_supported, _NET_WORKAREA" 2>/dev/null ;;
+    esac
+    xprop -root -f _NET_WORKAREA 32c -set _NET_WORKAREA "0, 0, $_w, $((_h - ${SG_TASKBAR_H:-40}))" 2>/dev/null &&
+        sg_log "work area for Linux programs: ${_w}x$((_h - ${SG_TASKBAR_H:-40}))"
+    return 0
+}
+
 # Where a session's compositor puts its privileged and control sockets: one
 # directory per session user, named by uid, under a seat directory that
 # tmpfiles creates 1770 root:sgwine. Per-uid because the sticky bit would stop
