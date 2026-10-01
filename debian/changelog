@@ -1,3 +1,17 @@
+sg-session (0.1.0-79) unstable; urgency=medium
+
+  * Screen sharing and OBS's screen capture work (David: OBS captured
+    black; "let any app capture, with lock and consent screens blanked"):
+    the portal's ScreenCast and Screenshot are wlroots' backend
+    (xdg-desktop-portal-wlr, now a dependency with pipewire), which captures
+    through sg-compositor 0.2.0+sg16's screencopy for everyone; the session
+    tells the user's service manager where the compositor is
+    (WAYLAND_DISPLAY), and the screen is taken without a chooser
+    (/etc/xdg/xdg-desktop-portal-wlr/config). VM: an ordinary client
+    captured the desktop.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 00:20:00 +0000
+
 sg-session (0.1.0-78) unstable; urgency=medium
 
   * "Run with debugging" keeps logging when the program elevates: an

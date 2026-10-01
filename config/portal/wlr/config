@@ -1,0 +1,5 @@
+# xdg-desktop-portal-wlr in the Stained Glass session: screen sharing takes
+# the screen without asking which (one output, or the first), as a PC's
+# "share your screen" does; the program asking still shows what it shares.
+[screencast]
+chooser_type=none

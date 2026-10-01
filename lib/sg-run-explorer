@@ -44,6 +44,16 @@ if [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && [ -z "${DISPLAY:-}" ]; then
     fi
 fi
 
+# The session's displays for services D-Bus starts in the user's manager:
+# the portal's screen sharing (xdg-desktop-portal-wlr) captures this
+# compositor's output, so it must know where it is (OBS's screen capture).
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY >/dev/null 2>&1 || true
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY >/dev/null 2>&1 || true
+    fi
+fi
+
 # The resolution and scale the user chose in Settings > Display, per monitor
 # (sg-settingsctl keeps them): put back before the desktop is measured, so it
 # comes up at that size -- a mode set in Settings was gone after a reboot.

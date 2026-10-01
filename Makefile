@@ -172,6 +172,7 @@ install: d3d-probe greeter token-probe procagent rdp
 	done
 	install -D -m 0644 systemd/system.conf.d/60-sg-quiet-reboot.conf $(DESTDIR)$(PREFIX)/lib/systemd/system.conf.d/60-sg-quiet-reboot.conf
 	install -D -m 0644 config/portal/stainedglass-portals.conf $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/stainedglass-portals.conf
+	install -D -m 0644 config/portal/wlr/config $(DESTDIR)/etc/xdg/xdg-desktop-portal-wlr/config
 	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
