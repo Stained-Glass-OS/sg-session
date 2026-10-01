@@ -15,6 +15,8 @@ sg-session (0.1.0-79) unstable; urgency=medium
     (sg-compositor 0.2.0+sg16). On Wayland, GTK 4's windows (zenity) came
     up at the screen's corner, unmovable. VM: zenity centred, dragged by
     its headerbar, on the taskbar.
+  * CI: lint passes again where it runs as root -- the shared-home test
+    skips there (exit 77) and lint took the skip for a failure.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 00:20:00 +0000
 
