@@ -54,6 +54,15 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
     fi
 fi
 
+# Linux programs' windows go through Xwayland, where the compositor places
+# them, gives them title bars, Minimize and taskbar buttons, and honours what
+# client-drawn title bars ask (GTK 4's). Natively on Wayland, GTK 4 and Qt
+# windows came up at the screen's corner with none of that (zenity). Set for
+# everything started from here -- the Start menu's Linux apps among it.
+: "${GDK_BACKEND:=x11}"
+: "${QT_QPA_PLATFORM:=xcb}"
+export GDK_BACKEND QT_QPA_PLATFORM
+
 # The resolution and scale the user chose in Settings > Display, per monitor
 # (sg-settingsctl keeps them): put back before the desktop is measured, so it
 # comes up at that size -- a mode set in Settings was gone after a reboot.

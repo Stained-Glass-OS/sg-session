@@ -9,6 +9,12 @@ sg-session (0.1.0-79) unstable; urgency=medium
     (WAYLAND_DISPLAY), and the screen is taken without a chooser
     (/etc/xdg/xdg-desktop-portal-wlr/config). VM: an ordinary client
     captured the desktop.
+  * GTK and Qt programs open on X11 in the session (GDK_BACKEND=x11,
+    QT_QPA_PLATFORM=xcb): there the compositor centres them, gives them
+    taskbar buttons and Minimize, and honours their own title bars' moves
+    (sg-compositor 0.2.0+sg16). On Wayland, GTK 4's windows (zenity) came
+    up at the screen's corner, unmovable. VM: zenity centred, dragged by
+    its headerbar, on the taskbar.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 00:20:00 +0000
 
