@@ -472,6 +472,18 @@ static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run"
  * if nothing could be started (the caller answers then). */
 /* A debug request's channel list (WINEDEBUG): letters, digits and + - _ , only
  * -- a list of channels to trace, nothing Wine could read as more. */
+/* A locale name (en_US.UTF-8, de_DE@euro, C.UTF-8): letters, digits and
+ * _ . - @ only, as the requester's LANG may be passed on */
+static int locale_ok(const char *v)
+{
+    size_t n = strlen(v);
+    if (!n || n > 64) return 0;
+    for (; *v; v++)
+        if (!((*v >= 'a' && *v <= 'z') || (*v >= 'A' && *v <= 'Z') || (*v >= '0' && *v <= '9') ||
+              *v == '_' || *v == '.' || *v == '-' || *v == '@')) return 0;
+    return 1;
+}
+
 static int debug_channels_ok(const char *v)
 {
     size_t n = strlen(v);
@@ -551,6 +563,10 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
      * (an elevated Windows program is started as "wine ...": B56 VM gate, exit 127). */
     setenv("PATH", "/opt/wine-sg/bin:/usr/local/bin:/usr/bin:/bin", 1);
     setenv("SG_IN_BROKER", "1", 1);   /* the elevated program must not re-broker */
+    /* a language: with none, the elevated program ran in the "C" locale and
+     * an installer could not make a file with a non-ASCII name (Go's MSI
+     * failed with 1603). The requester's when it is a plain locale name. */
+    setenv("LANG", "C.UTF-8", 1);
     /* Only a fixed set of environment variables from the requester are honoured.
      * The requester is not trusted: a hostile client could otherwise send
      * LD_PRELOAD, PATH or WINEDLLOVERRIDES and run its own code as the SYSTEM
@@ -568,6 +584,7 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
         /* "Run with debugging": Wine's debug channels, when the request also
          * brought the requester's standard error to log into. The requester
          * could already write there; the program is one it chose itself. */
+        if (!strncmp(*envp, "LANG=", 5) && locale_ok(*envp + 5)) setenv("LANG", *envp + 5, 1);
         if (errfd >= 0 && !strncmp(*envp, "WINEDEBUG=", 10) && debug_channels_ok(*envp + 10)) {
             putenv(*envp);
             dup2(errfd, 2);

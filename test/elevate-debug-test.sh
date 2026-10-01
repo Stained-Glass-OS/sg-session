@@ -18,6 +18,7 @@ me=$(id -un); grp=$(id -gn)
 cat > "$T/prog" <<EOP
 #!/bin/sh
 echo "prog-stderr WINEDEBUG=\${WINEDEBUG:-none} LD_PRELOAD=\${LD_PRELOAD:-none}" >&2
+echo "\${LANG:-none}" > "$T/lang"
 echo "\${WINEDEBUG:-none}" > "$T/seen"
 EOP
 chmod 755 "$T/prog"
@@ -49,6 +50,15 @@ elevate "$T/log3" 'WINEDEBUG=+seh;touch /tmp/x'
     && pass "a hostile channel list is dropped, and the log with it" \
     || fail "hostile WINEDEBUG: seen $(cat "$T/seen" 2>/dev/null), log3: $(cat "$T/log3")"
 
-[ "$(grep -c 'exit 0' "$T/exits")" = 3 ] && pass "every request was answered and run" || fail "exits: $(cat "$T/exits")"
+# a language: the requester's when it is a locale name, else C.UTF-8 (an MSI
+# without one could not make a file with a non-ASCII name: Go's)
+elevate "$T/log4" LANG=de_DE.UTF-8
+[ "$(cat "$T/lang" 2>/dev/null)" = de_DE.UTF-8 ] && pass "the requester's language passes (de_DE.UTF-8)" || fail "LANG: $(cat "$T/lang" 2>/dev/null)"
+elevate "$T/log5" 'LANG=x;rm -rf /'
+[ "$(cat "$T/lang" 2>/dev/null)" = C.UTF-8 ] && pass "a LANG that is not a locale name gives C.UTF-8" || fail "hostile LANG: $(cat "$T/lang" 2>/dev/null)"
+elevate "$T/log6" LANG=
+[ "$(cat "$T/lang" 2>/dev/null)" = C.UTF-8 ] && pass "an empty LANG: C.UTF-8" || fail "empty LANG: $(cat "$T/lang" 2>/dev/null)"
+
+[ "$(grep -c 'exit 0' "$T/exits")" = 6 ] && pass "every request was answered and run" || fail "exits: $(cat "$T/exits")"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

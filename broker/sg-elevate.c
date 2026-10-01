@@ -89,9 +89,9 @@ int main(int argc, char **argv)
     /* payload: cwd, then a few env vars as KEY=VALUE, then a NUL, then argv */
     off = put(blob, off, sizeof(blob), cwd);
     {
-        /* Only the prefix: an elevated program gets a display of its own
-         * (sg-elevated-run), never the session's. */
-        static const char *pass[] = { "WINEPREFIX", NULL };
+        /* Only the prefix and the language: an elevated program gets a
+         * display of its own (sg-elevated-run), never the session's. */
+        static const char *pass[] = { "WINEPREFIX", "LANG", NULL };
         for (i = 0; pass[i]; i++) {
             const char *v = getenv(pass[i]);
             if (v) { char kv[4200]; snprintf(kv, sizeof(kv), "%s=%s", pass[i], v); off = put(blob, off, sizeof(blob), kv); }

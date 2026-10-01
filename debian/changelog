@@ -1,3 +1,14 @@
+sg-session (0.1.0-81) unstable; urgency=medium
+
+  * Elevated programs have a language: the requester's LANG when it is a
+    plain locale name, else C.UTF-8. The broker cleared it, and an
+    installer running in the "C" locale could not make a file with a
+    non-ASCII name (Go's MSI failed with 1603; the Store walk). Test:
+    test/elevate-debug-test.sh (de_DE.UTF-8 passes; a LANG that is not a
+    locale name, or an empty one, gives C.UTF-8; mutant: no LANG).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 06:20:00 +0000
+
 sg-session (0.1.0-80) unstable; urgency=medium
 
   * Linux programs know the work area: the screen less the taskbar
