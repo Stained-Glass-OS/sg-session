@@ -340,6 +340,30 @@ sg_programdata_shared() {
     return 0
 }
 
+# The SYSTEM account may write in the prefix's shared trees -- Program Files,
+# Program Files (x86), ProgramData, users\Public -- as SYSTEM may anywhere on
+# Windows: what a program installed or wrote there as the user (made by the
+# user, 644) the elevated reinstall could not replace (Mp3tag: "Could not write
+# file"). An ACL entry for the account, and a default one so later files get
+# it too; the existing trees once (STATE stamp), the folders themselves at
+# every boot. User profiles get the same from sg-profile-create.
+#   sg_system_access DRIVE_C SYSTEM_USER STATEDIR
+sg_system_access() {
+    _c=$1 _su=$2 _st=$3
+    command -v setfacl >/dev/null 2>&1 || return 0
+    id "$_su" >/dev/null 2>&1 || return 0
+    for _d in "Program Files" "Program Files (x86)" "ProgramData" "users/Public"; do
+        [ -d "$_c/$_d" ] || continue
+        if [ ! -e "$_st/system-access-1" ]; then
+            setfacl -R -P -m "u:$_su:rwX" -m "d:u:$_su:rwX" "$_c/$_d" 2>/dev/null || :
+        else
+            setfacl -P -m "u:$_su:rwX" -m "d:u:$_su:rwX" "$_c/$_d" 2>/dev/null || :
+        fi
+    done
+    : > "$_st/system-access-1" 2>/dev/null || :
+    return 0
+}
+
 # The work area for Linux programs on X11: the screen (W H) less the taskbar.
 # Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
 # program that sizes itself to it (SG Office's editors) covered the taskbar.

@@ -1,3 +1,16 @@
+sg-session (0.1.0-82) unstable; urgency=medium
+
+  * The SYSTEM account may write in the prefix's shared trees (Program
+    Files, Program Files (x86), ProgramData, users\Public), as SYSTEM may
+    anywhere on Windows: a file a program installed or wrote there as the
+    user, the elevated reinstall could not replace (Mp3tag: "Could not
+    write file"; the Store walk). An ACL entry for the account and a
+    default one for later files; the existing trees once. sg-common.sh
+    sg_system_access, from sg-prefix-init. Test: test/programdata-test.sh
+    (mutant: no entries).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
+
 sg-session (0.1.0-81) unstable; urgency=medium
 
   * Elevated programs have a language: the requester's LANG when it is a
