@@ -5,6 +5,11 @@ sg-session (0.1.0-84) unstable; urgency=medium
     image, so machines installed before a fix get it with their updates
     (David 2026-10-01). The athenaNet Device Manager's service and tray
     program and SQL Server Compact's installer need this build.
+  * sg_systemroot_temp (0.1.0-83): its chown no longer ends sg-prefix-init
+    where it cannot change the owner -- the image build, whose user
+    namespace maps no other uid, stopped there ("postinst final returned
+    1"). Test: test/systemroot-temp-test.sh (run under set -e with a chown
+    that fails).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 23:00:00 +0000
 

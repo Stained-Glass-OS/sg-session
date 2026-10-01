@@ -397,7 +397,10 @@ sg_linux_app_env() {
 sg_systemroot_temp() {
     _st="$1/windows/SystemTemp"
     mkdir -p "$_st" || return 0
-    [ "$(id -u)" = 0 ] && chown "$2" "$_st" 2>/dev/null
+    # not fatal: the image build's user namespace maps no other uid (and a
+    # failing last command of an && list ends a set -e caller: it ended
+    # sg-prefix-init in the image build); sg-prefix-init at boot runs as root
+    if [ "$(id -u)" = 0 ]; then chown "$2" "$_st" 2>/dev/null || :; fi
     chmod 0700 "$_st"
     # not the shared folders' inherited entries: nobody else reads in here
     command -v setfacl >/dev/null 2>&1 && setfacl -b "$_st" 2>/dev/null

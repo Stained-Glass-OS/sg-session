@@ -226,6 +226,7 @@ lint:
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
+	@sh test/systemroot-temp-test.sh
 	@sh test/workarea-test.sh || [ $$? -eq 77 ]
 	@sh test/programdata-test.sh || [ $$? -eq 77 ]
 	@sh test/polimport-test.sh
