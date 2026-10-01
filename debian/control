@@ -12,7 +12,7 @@ Rules-Requires-Root: no
 
 Package: sg-session
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-120) | wine, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, sg-wine-mono (>= 9.4.0+sg1-1), plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, dconf-gsettings-backend, libglib2.0-bin, polkitd,
+Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-120) | wine, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, sg-wine-mono (>= 9.4.0+sg1-1), sg-wine-gecko (>= 2.47.4-1), plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, dconf-gsettings-backend, libglib2.0-bin, polkitd,
 Recommends: sg-shell, avahi-utils,
          python3-numpy, python3-onnxruntime, pulseaudio-utils,
          python3-pymupdf, gir1.2-poppler-0.18, python3-gi, python3-gi-cairo, python3-cairo,
