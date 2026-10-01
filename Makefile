@@ -105,6 +105,9 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# The session's polkit agent and the broker monitor's answer to polkitd.
 	install -m 0755 build/sg-polkit-agent build/sg-polkit-respond $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# What sg-elevate can do, for Wine's ShellExecuteEx (wine-sg 0625: --ready).
+	install -d $(DESTDIR)$(PREFIX)/share/stained-glass
+	install -m 0644 config/sg-elevate.features $(DESTDIR)$(PREFIX)/share/stained-glass/sg-elevate.features
 	@if [ -f build/sg-procmem-probe.exe ]; then \
 	    install -m 0755 build/sg-procmem-probe.exe $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi

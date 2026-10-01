@@ -59,6 +59,23 @@ elevate "$T/log5" 'LANG=x;rm -rf /'
 elevate "$T/log6" LANG=
 [ "$(cat "$T/lang" 2>/dev/null)" = C.UTF-8 ] && pass "an empty LANG: C.UTF-8" || fail "empty LANG: $(cat "$T/lang" 2>/dev/null)"
 
+# --ready FILE (for Wine's ShellExecuteEx, wine-sg 0625): the broker's answer
+# goes into FILE as soon as it comes, while sg-elevate waits on
+elevate_ready() { # consent (yes|no)
+    rm -f "$T/sock" "$T/ready"
+    SG_BROKER_TEST=1 SG_BROKER_TEST_CONSENT="$1" SG_BROKER_FOREGROUND=1 SG_BROKER_ONCE=1 \
+        SG_BROKER_SOCK="$T/sock" SG_BROKERD_LOG="$T/brokerd.log" SG_SYSTEM_USER="$me" SG_ADMIN_GROUP="$grp" \
+        SG_SEAT_DIR="$T/noseat" "$B/sg-brokerd" "$T" >/dev/null 2>&1 </dev/null &
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$T/sock" ] && break; sleep 0.3; done
+    SG_BROKER_SOCK="$T/sock" "$B/sg-elevate" --ready "$T/ready" -- "$T/prog" 2>/dev/null
+    wait
+}
+elevate_ready yes
+[ "$(cat "$T/ready" 2>/dev/null)" = 0 ] && pass "--ready: the answer \"launched\" is written" || fail "--ready launched: '$(cat "$T/ready" 2>/dev/null)'"
+elevate_ready no
+[ "$(cat "$T/ready" 2>/dev/null)" = 1 ] && pass "--ready: and \"declined\"" || fail "--ready declined: '$(cat "$T/ready" 2>/dev/null)'"
+grep -qx ready "$HERE/config/sg-elevate.features" && pass "sg-elevate.features says ready" || fail "features file"
+
 [ "$(grep -c 'exit 0' "$T/exits")" = 6 ] && pass "every request was answered and run" || fail "exits: $(cat "$T/exits")"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

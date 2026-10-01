@@ -39,6 +39,12 @@ sg-session (0.1.0-82) unstable; urgency=medium
     the prefix), the roots at every boot. Test: test/programdata-test.sh
     (mutants: none; chmod, which took SYSTEM's write too). VM: alex is
     refused, SYSTEM writes, an elevated install (Geany) still works.
+  * sg-elevate --ready FILE: the broker's answer ("0" launched, "1"
+    declined, "2" failed) goes into FILE as soon as it comes, for wine-sg
+    0625's ShellExecuteEx, which now returns once the elevated program has
+    started (Total Commander's installer gave up on its elevated copy
+    during the consent prompt). /usr/share/stained-glass/sg-elevate.features
+    says it can. Test: test/elevate-debug-test.sh (launched, declined).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 01 Oct 2026 07:30:00 +0000
 

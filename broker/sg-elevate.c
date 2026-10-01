@@ -6,7 +6,14 @@
  * which the broker sets up; nothing of the session's display is passed. It has no privilege of its own -- every decision is the broker's,
  * on the secure surface, and the program runs as SYSTEM only after consent.
  *
- * Usage:  sg-elevate [--] PROGRAM [ARG...]
+ * Usage:  sg-elevate [--ready FILE] [--wine] [--] PROGRAM [ARG...]
+ *
+ * --ready FILE: the broker's answer goes into FILE as soon as it comes --
+ * "0" launched, "1" declined, "2" failed -- while this waits on for the
+ * program to end. Wine's ShellExecuteEx returns then, as Windows' does once
+ * the elevated program has started (an installer that then connects to its
+ * elevated copy -- Total Commander's -- gave up during the consent prompt).
+ * Supported when /usr/share/stained-glass/sg-elevate.features says "ready".
  *
  * Copyright (C) 2026 Stained Glass OS contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -79,7 +86,9 @@ int main(int argc, char **argv)
 
     if (!sockpath) sockpath = "/run/stained-glass-broker/broker.sock";
     int wine_mode = 0;
+    const char *ready = NULL;
     first = 1;
+    if (argc > first + 1 && !strcmp(argv[first], "--ready")) { ready = argv[first + 1]; first += 2; }
     if (argc > first && !strcmp(argv[first], "--wine")) { wine_mode = 1; first++; }
     if (argc > first && !strcmp(argv[first], "--")) first++;
     if (argc <= first) { fprintf(stderr, "usage: sg-elevate [--wine] [--] PROGRAM [ARG...]\n"); return 2; }
@@ -154,7 +163,17 @@ int main(int argc, char **argv)
         if (write_full(fd, blob, off)) { close(fd); return 2; }
     } else if (write_full(fd, &len, sizeof(len)) || write_full(fd, blob, off)) { close(fd); return 2; }
 
-    if (read(fd, &status, 1) != 1) { fprintf(stderr, "sg-elevate: broker closed the connection\n"); close(fd); return 2; }
+    {
+        int got = read(fd, &status, 1) == 1;
+        if (!got) status = 2;
+        if (ready) {
+            /* the answer, for the one waiting for it (ShellExecuteEx) */
+            char c = (char)('0' + (status > 2 ? 2 : status));
+            int rf = open(ready, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+            if (rf >= 0) { if (write(rf, &c, 1) != 1) { /* the waiter times out */ } close(rf); }
+        }
+        if (!got) { fprintf(stderr, "sg-elevate: broker closed the connection\n"); close(fd); return 2; }
+    }
     if (status == 0) {
         /* launched: wait for it to end, and end with its code, so the
          * caller's handle to this process behaves as one to the elevated
