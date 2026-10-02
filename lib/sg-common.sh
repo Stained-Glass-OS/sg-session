@@ -454,6 +454,39 @@ sg_c_root_users() {
     return 0
 }
 
+# Wine Mono's .NET support files in the system prefix (fusion.dll, ngen.exe
+# and the rest, in windows\Microsoft.NET\Framework*): Wine leaves them to the
+# Wine Mono package (wine.inf skips them), which installs them with its MSI
+# -- never run for the image's prefix. Without fusion.dll no .NET program
+# found anything in the Windows GAC: AmbirScan took its own private copy of
+# SQL Server Compact's provider, which then never found its native DLLs; its
+# settings were lost and it did not start minimized (David 2026-10-02).
+# Installed from Wine Mono's dotnetfakedlls.inf, 64-bit and 32-bit halves,
+# when fusion.dll is missing; nothing otherwise.
+#   sg_dotnet_support DRIVE_C [INF]
+sg_dotnet_support() {
+    _c=$1
+    _inf=${2:-}
+    if [ -z "$_inf" ]; then
+        for _i in /usr/share/wine/mono/wine-mono-*/support/dotnetfakedlls.inf; do
+            [ -f "$_i" ] && _inf=$_i
+        done
+    fi
+    [ -n "$_inf" ] && [ -f "$_inf" ] || return 0
+    _fw="$_c/windows/Microsoft.NET"
+    if [ -f "$_fw/Framework/v4.0.30319/fusion.dll" ] &&
+       { [ ! -d "$_c/windows/syswow64" ] || [ -f "$_fw/Framework64/v4.0.30319/fusion.dll" ]; }; then
+        return 0
+    fi
+    _winf="Z:$(printf '%s' "$_inf" | tr '/' '\134')"
+    wine rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 "$_winf" >/dev/null 2>&1 || :
+    if [ -d "$_c/windows/syswow64" ]; then
+        # shellcheck disable=SC1003  # a Windows path, its backslashes literal
+        wine 'C:\windows\syswow64\rundll32.exe' setupapi.dll,InstallHinfSection DefaultInstall 128 "$_winf" >/dev/null 2>&1 || :
+    fi
+    return 0
+}
+
 # Program Files is the administrators': users may read and run what is there,
 # not change it -- as on Windows, where Users have read and execute only. The
 # prefix is made by SYSTEM with the Wine group's write (umask 002), so every

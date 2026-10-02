@@ -5,6 +5,13 @@ sg-session (0.1.0-93) unstable; urgency=medium
     AmbirScan found no scanner on an installed machine (David's Latitude,
     2026-10-02; the QA VM had a hand-made rule). The upgrade reloads the
     rules for a scanner plugged in already. Test: test/device-rules-test.sh.
+  * The system prefix gets Wine Mono's .NET support files (fusion.dll and
+    the rest, in windows\Microsoft.NET\Framework*) at boot when they are
+    missing: made by the image without Wine Mono's MSI, it had none, and no
+    .NET program found anything in the Windows GAC -- AmbirScan took its own
+    copy of SQL Server Compact's provider, which never found its native
+    DLLs; its settings were lost, so it no longer started minimized (David
+    2026-10-02). Test: test/dotnet-support-test.sh; VM-checked.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 21:20:00 +0000
 
