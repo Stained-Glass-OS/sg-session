@@ -245,7 +245,7 @@ lint:
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
 	@sh test/vdagent-test.sh
-	@sh test/greeter-selectall-test.sh
+	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
 	@for f in pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py; do python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' $$f || exit 1; done
 	@/usr/bin/python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
