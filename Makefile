@@ -36,7 +36,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
-	install -m 0755 bin/sg-netctl bin/sg-sysinfo $(BINDIR)
+	install -m 0755 bin/sg-netctl bin/sg-sysinfo bin/sg-firmware-initrd $(BINDIR)
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
 	install -d $(LIBDIR)/pdf
@@ -179,6 +179,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 config/portal/stainedglass-portals.conf $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/stainedglass-portals.conf
 	install -D -m 0644 config/portal/wlr/config $(DESTDIR)/etc/xdg/xdg-desktop-portal-wlr/config
 	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
+	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
@@ -191,7 +192,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
-	    systemd/sg-print-setup.service systemd/sg-firmware-retry.service $(UNITDIR)
+	    systemd/sg-print-setup.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
 	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
@@ -241,6 +242,7 @@ lint:
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd
 	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-audit
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
@@ -255,6 +257,7 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-fetch
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
+	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/oobe-user-test.sh
 	@sh test/media-test.sh
@@ -288,6 +291,8 @@ test-deskcomp-start:
 test-firmware-retry:
 	@sh test/firmware-retry-test.sh
 	@! sh test/firmware-retry-test.sh --mutant >/dev/null
+	@sh test/firmware-initrd-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+	@! sh test/firmware-initrd-test.sh --mutant >/dev/null
 
 # Linux programs go through Xwayland (sg_linux_app_env): native Wayland ones
 # were shown full screen over the taskbar. Stand-in systemctl/D-Bus.

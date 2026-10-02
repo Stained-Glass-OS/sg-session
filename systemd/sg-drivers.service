@@ -1,11 +1,14 @@
 # Setup's "Install third-party drivers": the drivers this PC needs from
-# Debian's non-free archive (NVIDIA's, Broadcom's, firmware), installed on the
-# first boot once the network is up -- DKMS builds them for the kernel the
-# machine runs. Only while Setup's request is pending; if the archive cannot
-# be reached, it tries again later and at the next boot.
+# Debian's non-free archive (NVIDIA's, Broadcom's, firmware), installed once
+# the network is up -- DKMS builds them for the kernel the machine runs. At
+# the first boot (Setup's request, drivers.pending) and, the choice kept
+# (drivers.auto), at every boot after: new hardware, and firmware the kernel
+# asked for and did not find, get theirs. If the archive cannot be reached,
+# it tries again later and at the next boot.
 [Unit]
 Description=Install this PC's third-party drivers
-ConditionPathExists=/etc/stained-glass/drivers.pending
+ConditionPathExists=|/etc/stained-glass/drivers.pending
+ConditionPathExists=|/etc/stained-glass/drivers.auto
 Wants=network-online.target
 After=network-online.target
 

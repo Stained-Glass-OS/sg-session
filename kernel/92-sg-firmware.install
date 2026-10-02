@@ -1,0 +1,8 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): a new kernel's boot entry gets the
+# firmware initrd (sg-firmware-initrd) the other entries have.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[ "${1:-}" = add ] || exit 0
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+[ -x /usr/bin/sg-firmware-initrd ] && /usr/bin/sg-firmware-initrd update >&2
+exit 0

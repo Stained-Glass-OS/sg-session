@@ -1,0 +1,214 @@
+#!/usr/bin/python3
+# sg-firmware-initrd -- the firmware this PC's early drivers asked for, in an
+# initrd of its own.
+#
+# The image's initrd carries every kernel module but only the firmware the
+# modules name in their metadata; many drivers make the file name up as they
+# run -- Intel's sound DSP (intel/sof/sof-tgl.ri), Bluetooth
+# (intel/ibt-19-0-4.sfi), the graphics' power management
+# (i915/tgl_dmc_ver2_12.bin) -- and the regulatory database is a link the
+# initrd cannot follow. Started from the initrd, those drivers found no
+# firmware and did not ask again: no sound card, no Bluetooth, the GPU never
+# idling (Latitude 3520, David 2026-10-02). Firmware installed after the
+# image was made (sg-drivers, an apt upgrade) was never in it at all.
+#
+# So, at each boot (sg-firmware-retry.service) and for each new kernel (the
+# kernel-install plugin): the files the kernel failed to load this boot that
+# /usr/lib/firmware has now are added to the list this PC keeps
+# (/var/lib/stained-glass/firmware-initrd.list -- it only grows, as a file
+# that loaded from the initrd is not asked for again), and the list is
+# written as sg-firmware.initrd beside the other initrds of each installed
+# boot entry, which gets an initrd line for it. The next boot's early
+# drivers find their firmware.
+#
+#   sg-firmware-initrd update     (root)
+#   sg-firmware-initrd list       the files kept, one per line
+#
+# For tests: SG_ESP (the boot partition), SG_FIRMWARE_DIR (/usr/lib/firmware),
+# SG_FIRMWARE_LIST (the list), SG_KERNEL_LOG (a file read instead of this
+# boot's kernel log).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
+import os
+import re
+import subprocess
+import sys
+
+FWDIR = os.environ.get("SG_FIRMWARE_DIR", "/usr/lib/firmware")
+LIST = os.environ.get("SG_FIRMWARE_LIST", "/var/lib/stained-glass/firmware-initrd.list")
+NAME = "sg-firmware.initrd"
+MAX_BYTES = 64 << 20  # a boot partition is small; firmware for one PC is a few MB
+FAILED = [re.compile(r"firmware: failed to load (\S+)"),
+          re.compile(r"Direct firmware load for (\S+) failed"),
+          re.compile(r"Failed to load \S+ firmware (\S+\.(?:bin|ri|sfi|ucode|fw|db))")]
+
+
+def say(msg):
+    print("sg-firmware-initrd: " + msg, file=sys.stderr)
+
+
+def kernel_log():
+    path = os.environ.get("SG_KERNEL_LOG")
+    if path:
+        with open(path, errors="replace") as f:
+            return f.read()
+    for cmd in (["journalctl", "-k", "-b", "-o", "cat", "--no-pager"], ["dmesg"]):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return ""
+
+
+def safe(name):
+    # relative, inside the firmware directory
+    return bool(name) and not name.startswith("/") and ".." not in name.split("/")
+
+
+def available(name):
+    return os.path.isfile(os.path.join(FWDIR, name))  # follows links
+
+
+def read_list():
+    try:
+        with open(LIST) as f:
+            return [l.strip() for l in f if safe(l.strip())]
+    except OSError:
+        return []
+
+
+def esp():
+    if os.environ.get("SG_ESP"):
+        return os.environ["SG_ESP"]
+    for opt in ("--print-boot-path", "--print-esp-path"):
+        try:
+            out = subprocess.run(["bootctl", opt], capture_output=True, text=True, timeout=30).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if out:
+            return out
+    return ""
+
+
+def newc(entries):
+    # an uncompressed cpio "newc" archive: (path, mode, data) for directories
+    # and regular files, then the trailer
+    out = bytearray()
+    ino = 1
+    for path, mode, data in entries + [("TRAILER!!!", 0, b"")]:
+        name = path.encode() + b"\0"
+        out += b"070701" + b"".join(b"%08X" % v for v in (
+            ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(name), 0))
+        out += name + b"\0" * ((4 - (110 + len(name)) % 4) % 4)
+        out += data + b"\0" * ((4 - len(data) % 4) % 4)
+        ino += 1
+    return bytes(out)
+
+
+def archive(files):
+    dirs, entries, total = set(), [], 0
+    for name in files:
+        with open(os.path.join(FWDIR, name), "rb") as f:  # the link's target's bytes
+            data = f.read()
+        if total + len(data) > MAX_BYTES:
+            say(f"{name} left out: the initrd would be over {MAX_BYTES >> 20} MB")
+            continue
+        total += len(data)
+        parts = ("usr/lib/firmware/" + name).split("/")
+        for i in range(1, len(parts)):
+            d = "/".join(parts[:i])
+            if d not in dirs:
+                dirs.add(d)
+                entries.append((d, 0o040755, b""))
+        entries.append(("/".join(parts), 0o100644, data))
+    return newc(entries)
+
+
+def entries(boot):
+    d = os.path.join(boot, "loader", "entries")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return []
+    # a live medium's entries are read-only and not this PC's
+    return [os.path.join(d, n) for n in names if n.endswith(".conf") and not n.endswith("-live.conf")]
+
+
+def add_to_entry(path, boot):
+    with open(path) as f:
+        lines = f.read().splitlines()
+    initrds = [l.split(None, 1)[1] for l in lines if l.startswith("initrd ") and len(l.split(None, 1)) == 2]
+    if not initrds:
+        return None
+    rel = os.path.dirname(initrds[0]) + "/" + NAME
+    if rel not in initrds:
+        last = max(i for i, l in enumerate(lines) if l.startswith("initrd "))
+        lines.insert(last + 1, "initrd " + rel)
+        tmp = path + ".sg-tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, path)
+    return os.path.join(boot, rel.lstrip("/"))
+
+
+def update():
+    kept = read_list()
+    asked = []
+    log = kernel_log()
+    for rx in FAILED:
+        asked += rx.findall(log)
+    new = [n for n in dict.fromkeys(asked) if safe(n) and n not in kept and available(n)]
+    files = [n for n in kept + new if available(n)]
+    if new:
+        os.makedirs(os.path.dirname(LIST), exist_ok=True)
+        with open(LIST + ".tmp", "w") as f:
+            f.write("".join(n + "\n" for n in files))
+        os.replace(LIST + ".tmp", LIST)
+        say("firmware the early drivers asked for: " + " ".join(new))
+    if not files:
+        return 0
+    boot = esp()
+    if not boot or not os.path.isdir(boot):
+        say("no boot partition found")
+        return 0
+    data = archive(files)
+    targets = set()
+    for e in entries(boot):
+        try:
+            t = add_to_entry(e, boot)
+        except OSError as err:
+            say(f"{e}: {err}")
+            continue
+        if t:
+            targets.add(t)
+    for t in sorted(targets):
+        try:
+            with open(t, "rb") as f:
+                if f.read() == data:
+                    continue
+        except OSError:
+            pass
+        try:
+            with open(t + ".tmp", "wb") as f:
+                f.write(data)
+            os.replace(t + ".tmp", t)
+            say(f"wrote {t} ({len(files)} files)")
+        except OSError as err:
+            say(f"{t}: {err}")
+    return 0
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "update":
+        return update()
+    if cmd == "list":
+        print("\n".join(read_list()))
+        return 0
+    say("usage: sg-firmware-initrd update | list")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

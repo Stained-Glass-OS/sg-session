@@ -47,3 +47,5 @@ override_dh_installsystemd:
 	# upgrade, runs at the next boot (rebinding a sound card under a running
 	# session is not the package's business).
 	dh_installsystemd --no-start sg-firmware-retry.service
+	# The early drivers' firmware for the next boot: enabled, runs at boot.
+	dh_installsystemd --no-start sg-firmware-initrd.service

@@ -11,6 +11,23 @@ sg-session (0.1.0-90) unstable; urgency=medium
     update failed with signing errors. A timesyncd drop-in removes the stale
     file unless networkd runs. Test: test/firmware-retry-test.sh (make
     test-firmware-retry; its --mutant fails).
+  * Firmware for the early drivers: the initrd carries only the firmware
+    modules name, and many make the name up as they run (SOF sound,
+    Bluetooth, i915's power management) -- they failed from the initrd and
+    never asked again. sg-firmware-initrd (sg-firmware-initrd.service at
+    boot, a kernel-install plugin for new kernels) keeps the files the
+    kernel failed to load that /usr/lib/firmware has, and writes them as
+    sg-firmware.initrd into each installed boot entry. Test:
+    test/firmware-initrd-test.sh (a Latitude 3520's kernel log; --mutant).
+  * Third-party drivers (Setup's checkbox) are kept current: the choice
+    stays (drivers.auto) and every boot installs what the hardware asks
+    for -- by device as before, and now the firmware the kernel asked for
+    and did not find (isenkram's firmware-to-package tables). A package the
+    archive does not have is skipped instead of failing the rest (the
+    Latitude's first boot stopped there and installed nothing); after new
+    firmware the firmware initrd is made again and the devices that failed
+    (not the display) are bound again. test/drivers-test.sh covers the
+    install path (--mutant: the firmware lookup left out).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 14:30:00 +0000
 

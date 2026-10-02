@@ -74,4 +74,41 @@ if [ -z "$(SG_SECUREBOOT=0 sh "$D" --secure-boot-enroll --root "$T/root")" ] && 
     pass "with Secure Boot off, no key is made or enrolled"
 else fail "a key was made with Secure Boot off"; fi
 
+# Setup's choice, with the archive and isenkram stood in: the drivers by
+# device and the firmware the kernel asked for are installed, a package the
+# archive lacks is skipped (not fatal), and the choice is kept for later
+# boots (drivers.auto). --mutant: the firmware lookup left out.
+mkdir -p "$T/bin" "$T/etc"
+cat > "$T/bin/apt-get" <<'EOS'
+#!/bin/sh
+echo "$*" >> "$SG_T/apt.log"
+EOS
+cat > "$T/bin/apt-cache" <<'EOS'
+#!/bin/sh
+case "$2" in firmware-gone) echo "  Candidate: (none)" ;; *) echo "  Candidate: 1.0" ;; esac
+EOS
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/dpkg-query"
+printf '#!/bin/sh\n' > "$T/bin/journalctl"
+printf '#!/bin/sh\necho "info: some kernel driver requested extra firmware files" >&2\necho firmware-sof-signed firmware-gone\n' > "$T/isenkram"
+chmod +x "$T/bin/"* "$T/isenkram"
+printf '0000:00:14.3 8086 a0f0 028000\n' > "$T/pci-lat"
+: > "$T/etc/drivers.pending"
+look="$T/isenkram"; [ "${1:-}" = --mutant ] && look=/nonexistent
+SG_T="$T" PATH="$T/bin:$PATH" SG_DRIVERS_ETC="$T/etc" SG_DRIVERS_PCI="$T/pci-lat" SG_DRIVERS_FIRMWARE_LOOKUP="$look" \
+    sh "$D" --install-recommended --pending 2> "$T/inst.err"
+inst=$(grep '^-q -y install' "$T/apt.log" 2>/dev/null | head -1)
+if printf ' %s ' "$inst" | grep -q ' firmware-iwlwifi ' && printf ' %s ' "$inst" | grep -q ' firmware-sof-signed '; then
+    pass "the device's firmware and the firmware the kernel asked for are installed"
+else fail "not installed together: '$inst' ($(cat "$T/inst.err"))"; fi
+case " $inst " in *" firmware-gone "*) fail "a package the archive lacks was asked for" ;;
+    *) grep -q "firmware-gone is not in the archive" "$T/inst.err" && pass "a package the archive lacks is skipped" \
+           || fail "no word on the package the archive lacks" ;; esac
+[ -f "$T/etc/drivers.auto" ] && [ ! -f "$T/etc/drivers.pending" ] \
+    && pass "Setup's choice is kept for later boots (drivers.auto)" || fail "the choice was not kept"
+: > "$T/apt.log"
+SG_T="$T" PATH="$T/bin:$PATH" SG_DRIVERS_ETC="$T/etc" SG_DRIVERS_PCI="$T/pci-lat" SG_DRIVERS_FIRMWARE_LOOKUP="$look" \
+    sh "$D" --install-recommended --pending 2>/dev/null
+grep -q '^-q -y install' "$T/apt.log" && pass "a later boot (drivers.auto, no request) installs too" \
+    || fail "a later boot did nothing"
+
 exit "$RC"

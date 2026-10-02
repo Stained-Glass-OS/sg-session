@@ -13,11 +13,19 @@
 #       and Broadcom drivers for the kernel it runs, and a kernel upgrade
 #       needs the real boot partitions -- so Setup never does this into the
 #       system it is making; sg-drivers.service does it at the first boot.
-#       With --pending, only if /etc/stained-glass/drivers.pending exists
-#       (Setup's "install third-party drivers"), which is removed once done
-#       and kept for the next boot if the archive cannot be reached. With the
-#       NVIDIA driver, modprobe.blacklist=nouveau goes on the kernel command
-#       line; without it, nouveau stays the driver.
+#       With --pending, only if Setup's "install third-party drivers" was
+#       chosen: /etc/stained-glass/drivers.pending (the request, removed once
+#       done, kept for the next boot if the archive cannot be reached), which
+#       becomes /etc/stained-glass/drivers.auto -- the choice kept: at every
+#       boot the PC gets what its hardware asks for, new devices included.
+#       With the NVIDIA driver, modprobe.blacklist=nouveau goes on the kernel
+#       command line; without it, nouveau stays the driver.
+#       Besides the drivers chosen by device, the firmware the kernel asked
+#       for and did not find: isenkram (Debian's firmware-to-package tables
+#       and AppStream) names the packages. A package the archive does not
+#       have is skipped, not fatal. Once firmware is installed, the firmware
+#       initrd is made again (sg-firmware-initrd) and the devices that failed
+#       to load it -- not the display -- are bound again.
 #   sg-drivers --secure-boot-enroll [--root DIR]
 #       With Secure Boot on: make this machine's module signing key (MOK) for
 #       DKMS, and ask the firmware to enroll it at the next boot. Prints
@@ -34,7 +42,9 @@
 # For tests: SG_DRIVERS_PCI names a file of "slot vendor device class" lines
 # (hex, e.g. "0000:01:00.0 10de 1c82 030000") read instead of the PCI bus;
 # SG_DRIVERS_NVIDIA_DETECT names the nvidia-detect to run; SG_SECUREBOOT=1|0
-# overrides the firmware's Secure Boot state.
+# overrides the firmware's Secure Boot state; SG_DRIVERS_FIRMWARE_LOOKUP
+# names the missing-firmware lookup to run (isenkram-autoinstall-firmware
+# -l: the packages, on one line); SG_DRIVERS_ETC is /etc/stained-glass.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -eu
@@ -57,7 +67,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MODE" ] || die "usage: sg-drivers --list | --recommended | --install-recommended [--pending] | --secure-boot-enroll [--root DIR] | --status"
 [ -z "$ROOT" ] || [ -d "$ROOT/etc" ] || die "$ROOT is not a system root"
-PENDING_FILE="$ROOT/etc/stained-glass/drivers.pending"
+ETC=${SG_DRIVERS_ETC:-$ROOT/etc/stained-glass}
+PENDING_FILE="$ETC/drivers.pending"
+AUTO_FILE="$ETC/drivers.auto"
 
 # Run a command in the system being set up (chrooted when --root: reading
 # only, and making the Secure Boot key).
@@ -122,11 +134,42 @@ survey() {
     done
 }
 
+# The packages the kernel's missing firmware is in (isenkram), one per line.
+firmware_packages() {
+    look=${SG_DRIVERS_FIRMWARE_LOOKUP:-/usr/sbin/isenkram-autoinstall-firmware}
+    [ -x "$look" ] && [ -z "$ROOT" ] || return 0
+    "$look" -l 2>/dev/null | tr ' ' '\n' | grep -E '^[a-z0-9][a-z0-9.+-]+$' || :
+}
+
 # The packages still to install, one line.
 recommended() {
-    survey | cut -f4 | tr ' ' '\n' | grep -v '^-\?$' | sort -u | while read -r p; do
+    { survey | cut -f4 | tr ' ' '\n'; firmware_packages; } \
+        | grep -v '^-\?$' | sort -u | while read -r p; do
         installed "$p" || printf '%s\n' "$p"
     done | tr '\n' ' ' | sed 's/ $//'
+}
+
+# whether the archive has PKG (apt's candidate)
+has_candidate() {
+    c=$(LC_ALL=C in_root apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }')
+    [ -n "$c" ] && [ "$c" != "(none)" ]
+}
+
+# After new firmware: the devices whose drivers failed to load theirs this
+# boot, bound again (PCI and USB; never the display, which the session is on).
+rebind_failed() {
+    { journalctl -k -b -o cat --no-pager 2>/dev/null || dmesg 2>/dev/null; } \
+        | sed -n 's/^\([^ ]*\) \([^ ]*\): .*\(firmware: failed to load\|Direct firmware load for\).*/\1 \2/p' \
+        | sort -u | while read -r _drv dev; do
+        for bus in pci usb; do
+            d="/sys/bus/$bus/devices/$dev"
+            [ -e "$d/driver" ] || continue
+            case "$(cat "$d/class" 2>/dev/null)" in 0x03*) continue ;; esac
+            drv=$(readlink -f "$d/driver")
+            say "binding $dev ($_drv) again for its new firmware"
+            { echo "$dev" > "$drv/unbind" && echo "$dev" > "$drv/bind"; } 2>/dev/null || say "could not bind $dev again"
+        done
+    done
 }
 
 secure_boot_on() {
@@ -194,22 +237,37 @@ secure-boot-enroll)
     ;;
 install-recommended)
     [ -z "$ROOT" ] || die "drivers are installed on the running system, not into --root"
-    if [ "$PENDING" = 1 ] && [ ! -f "$PENDING_FILE" ]; then exit 0; fi
+    if [ "$PENDING" = 1 ] && [ ! -f "$PENDING_FILE" ] && [ ! -f "$AUTO_FILE" ]; then exit 0; fi
+    # Setup's choice is kept: from now on, at every boot
+    if [ -f "$PENDING_FILE" ] && [ ! -f "$AUTO_FILE" ]; then
+        printf 'Install the drivers and firmware this PC needs (Setup)\n' > "$AUTO_FILE"
+    fi
     export DEBIAN_FRONTEND=noninteractive
+    in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
     if survey | cut -f4 | grep -qw nvidia-detect; then
-        in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
         in_root apt-get -q -y install nvidia-detect >/dev/null || die "cannot install nvidia-detect"
     fi
-    pkgs=$(recommended)
+    want=$(recommended)
+    pkgs=""
+    for p in $want; do
+        if has_candidate "$p"; then pkgs="$pkgs $p"; else say "$p is not in the archive: skipped"; fi
+    done
+    pkgs=${pkgs# }
     if [ -z "$pkgs" ]; then
-        say "this PC needs no third-party drivers"
+        say "this PC needs no third-party drivers or firmware"
     else
         say "installing: $pkgs"
-        in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
         # shellcheck disable=SC2086  # a list of package names
-        in_root apt-get -q -y install $pkgs || die "installing $pkgs failed"
+        if ! in_root apt-get -q -y install $pkgs; then
+            # one that cannot be installed does not stop the others
+            failed=""
+            for p in $pkgs; do in_root apt-get -q -y install "$p" || failed="$failed $p"; done
+            [ -z "$failed" ] || say "could not install:$failed"
+        fi
         case " $pkgs " in *" nvidia-"*"-driver "*|*" nvidia-driver "*) keep_nouveau_away ;; esac
         say "installed: $pkgs"
+        [ ! -x /usr/bin/sg-firmware-initrd ] || /usr/bin/sg-firmware-initrd update || :
+        rebind_failed
     fi
     rm -f "$PENDING_FILE"
     ;;

@@ -1,0 +1,15 @@
+[Unit]
+Description=Stained Glass: firmware for the next boot's early drivers
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# The firmware the drivers started from the initrd failed to load this boot,
+# and /usr/lib/firmware has, goes into sg-firmware.initrd beside the other
+# initrds of each boot entry (sg-firmware-initrd).
+After=local-fs.target sg-firmware-retry.service systemd-journald.service
+ConditionPathExists=/usr/lib/firmware
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-firmware-initrd update
+
+[Install]
+WantedBy=multi-user.target
