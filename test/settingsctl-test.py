@@ -134,6 +134,32 @@ calls()
 code, lines = ctl("sound", "volume", "sink", "bluez_output.AA_BB.1", "75")
 check("sound volume: runs pactl set-sink-volume",
       code == 0 and "pactl set-sink-volume bluez_output.AA_BB.1 75%" in calls(), lines)
+# the volume keys and the chime (David 2026-10-02): 42% steps to 45 and 40,
+# the chime played (not waited for) at the new volume
+stand_in("pw-play", "exit 0")
+chime_wav = os.path.join(tmp, "chime.wav")
+subprocess.run([sys.executable, os.path.join(HERE, "..", "sounds", "make-chime.py"), chime_wav], check=True)
+import wave as _wave
+with _wave.open(chime_wav) as w:
+    secs = w.getnframes() / w.getframerate()
+check("chime: a short sound is made (0.1-0.5 s)", 0.1 < secs < 0.5, str(secs))
+CHENV = dict(ENV, SG_CHIME=chime_wav)
+calls()
+code, lines = ctl("sound", "step", "up", "--chime", env=CHENV)
+import time as _time
+_time.sleep(0.5)
+got = calls()
+check("sound step up: 42% -> 45%, chimes",
+      code == 0 and "VOLUME 45" in lines and "pactl set-sink-volume alsa_output.pci-0000_00_1f.3.analog-stereo 45%" in got
+      and any(c.startswith("pw-play") and chime_wav in c for c in got), (lines, got))
+code, lines = ctl("sound", "step", "down", env=CHENV)
+_time.sleep(0.3)
+got = calls()
+check("sound step down: 42% -> 40%, no chime unless asked",
+      code == 0 and "VOLUME 40" in lines and not any(c.startswith("pw-play") for c in got), (lines, got))
+code, lines = ctl("sound", "mute-toggle", env=CHENV)
+check("sound mute-toggle: pactl toggles the default output",
+      code == 0 and "pactl set-sink-mute alsa_output.pci-0000_00_1f.3.analog-stereo toggle" in calls(), lines)
 code, lines = ctl("sound", "default", "source", "alsa_input.pci-0000_00_1f.3.analog-stereo")
 check("sound default: runs pactl set-default-source",
       code == 0 and "pactl set-default-source alsa_input.pci-0000_00_1f.3.analog-stereo" in calls(), lines)

@@ -5,6 +5,13 @@ sg-session (0.1.0-91) unstable; urgency=medium
     0.1.0-92 turns typing spoken punctuation off by default (the model
     punctuates), and the commands went with it. An older toolbar, which
     sends no switch, keeps them tied to spoken punctuation.
+  * The volume chime (David 2026-10-02): sounds/make-chime.py makes a
+    short soft bell of our own (no recording) at build time,
+    /usr/share/sounds/stained-glass/volume-change.wav; sg-settingsctl
+    "sound chime" plays it on the default output (pw-play, not waited for),
+    "sound step up|down [--chime]" moves the default output 5 points as the
+    volume keys do, "sound mute-toggle" for the mute key. Test:
+    test/settingsctl-test.py.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 15:30:00 +0000
 

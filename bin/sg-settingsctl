@@ -16,6 +16,10 @@
 #   sg-settingsctl sound default sink|source NAME
 #   sg-settingsctl sound volume sink|source NAME PERCENT      (0-150)
 #   sg-settingsctl sound mute sink|source NAME yes|no
+#   sg-settingsctl sound chime      the volume chime, on the default output
+#   sg-settingsctl sound step up|down [--chime]   the default output 5 points
+#       up or down (up unmutes), as the volume keys do: VOLUME <percent>
+#   sg-settingsctl sound mute-toggle   the default output: MUTED yes|no
 #   sg-settingsctl bluetooth
 #       BLUETOOTH yes|no, POWERED yes|no,
 #       DEVICE <mac>\t<connected yes|no>\t<paired yes|no>\t<name>
@@ -259,9 +263,54 @@ def sound(args):
         kind = one_of(args[1], ("sink", "source"), "the device kind")
         on = one_of(args[3], ("yes", "no"), "mute")
         run(["pactl", "set-%s-mute" % kind, device_name(args[2]), "1" if on == "yes" else "0"])
+    elif verb == "chime" and len(args) == 1:
+        chime()
+    elif verb == "step" and len(args) in (2, 3):
+        up = one_of(args[1], ("up", "down"), "the direction") == "up"
+        if len(args) == 3 and args[2] != "--chime":
+            raise Fail("invalid", "usage: sound step up|down [--chime]")
+        sink = run(["pactl", "get-default-sink"]).strip()
+        try:
+            devs = json.loads(run(["pactl", "--format=json", "list", "sinks"]) or "[]")
+        except ValueError:
+            raise Fail("failed", "pactl gave an answer that is not JSON")
+        dev = next((d for d in devs if d.get("name") == sink), None)
+        if dev is None:
+            raise Fail("notfound", "no sound output")
+        now = percent_of(dev)
+        # to the next multiple of 5 up or down (37 -> 40 or 35)
+        pct = min(100, (now // STEP + 1) * STEP) if up else max(0, (now - 1) // STEP * STEP)
+        run(["pactl", "set-sink-volume", sink, "%d%%" % pct])
+        if up and dev.get("mute"):
+            run(["pactl", "set-sink-mute", sink, "0"])
+        if len(args) == 3 and (up or not dev.get("mute")):
+            chime()
+        return ["VOLUME %d" % pct]
+    elif verb == "mute-toggle" and len(args) == 1:
+        sink = run(["pactl", "get-default-sink"]).strip()
+        run(["pactl", "set-sink-mute", sink, "toggle"])
+        muted = run(["pactl", "get-sink-mute", sink], check=False).strip().endswith("yes")
+        return ["MUTED %s" % yn(muted)]
     else:
-        raise Fail("invalid", "usage: sound [default|volume|mute ...]")
+        raise Fail("invalid", "usage: sound [default|volume|mute|chime|step|mute-toggle ...]")
     return []
+
+
+STEP = 5
+CHIME = os.environ.get("SG_CHIME", "/usr/share/sounds/stained-glass/volume-change.wav")
+
+
+def chime():
+    """The volume chime, on the default output, not waited for: at the new
+    volume, so the person hears where it is (David 2026-10-02)."""
+    if not os.path.exists(CHIME):
+        return
+    for player in (["pw-play", "--media-role", "Notification"], ["paplay"], ["aplay", "-q"]):
+        exe = tool(player[0])
+        if exe:
+            subprocess.Popen([exe] + player[1:] + [CHIME], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            return
 
 
 # ---- Bluetooth (bluez, through bluetoothctl) -----------------------------------------------

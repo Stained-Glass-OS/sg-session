@@ -43,6 +43,9 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py $(LIBDIR)/pdf/
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
 	install -m 0755 bin/sg-settingsctl $(BINDIR)
+	@# the volume chime, made here (sounds/make-chime.py: our own, no recording)
+	install -d $(DESTDIR)$(PREFIX)/share/sounds/stained-glass
+	python3 sounds/make-chime.py $(DESTDIR)$(PREFIX)/share/sounds/stained-glass/volume-change.wav
 	@# Voice typing: the engine (sgspeech.py) and its command. The model is
 	@# downloaded per machine by sg-speechd, never packaged.
 	install -m 0755 speech/sg-dictate $(BINDIR)
