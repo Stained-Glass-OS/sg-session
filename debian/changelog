@@ -17,6 +17,11 @@ sg-session (0.1.0-87) unstable; urgency=medium
     them -- as SG Store offers them. A Linux build is installed with
     sg-admind's own apt install, its maker's source with it. Tests:
     test/oobe-browser-linux-test.sh, test/oobe-e2e.sh.
+  * The screen going dark locks the session (David 2026-10-01: a laptop's
+    display went black and was not locked): Settings' screen timeout runs
+    the lock, then turns the screen off; waking asks for the password, as
+    sleeping already did. Test: test/settingsctl-test.py (without the lock
+    it fails).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 04:00:00 +0000
 

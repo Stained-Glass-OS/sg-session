@@ -491,7 +491,8 @@ def lock_command():
 
 def apply_power(c):
     """swayidle runs for the whole session when it can: the screen and sleep
-    timeouts Settings chose, and -- whatever they are -- the lock before any
+    timeouts Settings chose (the screen going off locks first), and --
+    whatever they are -- the lock before any
     sleep (lid, Start's Sleep, the timer), since Windows asks for the password
     when the PC wakes. -w makes logind wait for the lock before sleeping."""
     screen, sleep = power_state(c)
@@ -499,11 +500,17 @@ def apply_power(c):
         stop("sg-idle")
         return
     argv = ["swayidle", "-w"]
+    lock = lock_command()
     if screen and tool("wlopm"):
-        argv += ["timeout", str(screen * 60), "wlopm --off '*'", "resume", "wlopm --on '*'"]
+        # the screen going dark locks the session first, so that waking it
+        # asks for the password (David 2026-10-01: a laptop's display went
+        # black and was not locked)
+        off = "wlopm --off '*'"
+        if lock:
+            off = "%s; %s" % (lock, off)
+        argv += ["timeout", str(screen * 60), off, "resume", "wlopm --on '*'"]
     if sleep:
         argv += ["timeout", str(sleep * 60), "systemctl suspend"]
-    lock = lock_command()
     if lock:
         argv += ["before-sleep", lock]
         if tool("wlopm"):

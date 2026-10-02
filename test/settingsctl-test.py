@@ -7,6 +7,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -266,8 +267,9 @@ check("power never/never in a session: swayidle still locks before sleep",
 code, lines = ctl("power", "--screen", "10", env=LENV)
 time.sleep(0.3)
 c = calls()
-check("power: screen timeout and the lock together",
-      any(x.startswith("swayidle -w timeout 600 wlopm --off '*' resume wlopm --on '*' before-sleep ") for x in c), c)
+check("power: the screen going off locks first, then turns it off; the lock before sleep too",
+      any(re.match(r"swayidle -w timeout 600 \S*sg-lockctl LOCK; wlopm --off '\*' resume wlopm --on '\*' before-sleep ", x)
+          for x in c), c)
 code, lines = ctl("sleep-caps", env=LENV)
 check("sleep-caps: logind's CanSuspend/CanHibernate",
       code == 0 and lines[:2] == ["CAN suspend yes", "CAN hibernate challenge"], lines)
