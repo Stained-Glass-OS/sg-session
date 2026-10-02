@@ -8,6 +8,13 @@ sg-session (0.1.0-92) unstable; urgency=medium
     ends a sign-in begun. Only a person's account (uid >= 1000) is offered.
     Tests: test/greeter-lastuser-test.sh (mutant NO_LAST_USER),
     test/greeter-lastuser-ui-test.sh (mutant IGNORE_LAST_USER).
+  * A Windows program, installer or shortcut opened from a Linux program --
+    Linux Firefox's downloaded .exe -- runs in the session's Wine
+    (sg-open-windows-file, sg-windows-file.desktop, the default for those
+    types in /usr/share/applications/mimeapps.list; desktop-file-utils for
+    the MIME cache GIO reads). Firefox was "not sure how to handle" them
+    (David 2026-10-02). VM-checked: `gio open x.exe` ran it.
+    Test: test/windows-file-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 18:30:00 +0000
 

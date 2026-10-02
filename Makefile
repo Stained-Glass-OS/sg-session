@@ -16,7 +16,7 @@ UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
 BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
-               bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry \
+               bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
@@ -163,6 +163,9 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 lib/sg-fetch $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
+	@# Windows programs opened from Linux programs (Firefox's downloads): sg-open-windows-file
+	install -D -m 0644 config/applications/sg-windows-file.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-windows-file.desktop
+	install -D -m 0644 config/applications/sg-mimeapps.list $(DESTDIR)$(PREFIX)/share/applications/mimeapps.list
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
 	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol
 	install -m 0644 systemd/sg-shared-home.service $(DESTDIR)$(PREFIX)/lib/systemd/system/
@@ -252,6 +255,7 @@ lint:
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
 	@sh test/vdagent-test.sh
+	@sh test/windows-file-test.sh
 	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
 	@sh test/greeter-lastuser-test.sh || [ $$? -eq 77 ]
 	@sh test/greeter-lastuser-ui-test.sh || [ $$? -eq 77 ]

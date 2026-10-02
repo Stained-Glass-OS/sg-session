@@ -1,0 +1,21 @@
+#!/bin/sh
+# sg-open-windows-file FILE -- a Windows program, installer or shortcut opened
+# from a Linux program (Linux Firefox's downloads, a Linux file manager): it
+# runs in the session's Wine, as a double-click in File Explorer would (David
+# 2026-10-02: Linux Firefox "is not sure how to handle" an .exe). The handler
+# for those types (sg-windows-file.desktop).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+[ $# -ge 1 ] || { echo "usage: sg-open-windows-file FILE" >&2; exit 2; }
+# shellcheck source=lib/sg-common.sh
+. /usr/lib/stained-glass/sg-common.sh
+env_file=$(sg_session_env)
+# this session's display and the rest, as the desktop's own programs have them
+# shellcheck disable=SC1090  # the session's env file, written at sign-in
+if [ -r "$env_file" ]; then set -a; . "$env_file"; set +a; fi
+sg_wine_env
+case "$1" in
+    file://*) f=$(printf '%s' "${1#file://}" | sed 's/%20/ /g') ;;
+    *) f=$1 ;;
+esac
+exec wine start /unix "$f"

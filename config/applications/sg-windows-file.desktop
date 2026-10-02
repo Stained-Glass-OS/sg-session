@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Run with Stained Glass
+Comment=Runs .exe and .msi files and their shortcuts on Stained Glass OS
+Exec=sg-open-windows-file %f
+Icon=application-x-ms-dos-executable
+NoDisplay=true
+Terminal=false
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-msi;application/x-ms-shortcut;application/x-ms-ne-executable;
