@@ -20,6 +20,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <pwd.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -31,6 +32,44 @@
 #include <unistd.h>
 
 static int greetd_fd = -1;
+
+/* The last account signed in here, which the login screen offers first, as
+ * Windows' does (David 2026-10-02): a person who always signs in does not
+ * type their name each time. Kept by the greeter's own user (tmpfiles:
+ * /var/lib/sg-greeter); SG_GREETER_LAST_USER: another file (the tests). */
+static char session_user[256];
+
+static const char *last_user_file( void )
+{
+    const char *f = getenv( "SG_GREETER_LAST_USER" );
+    return f && *f ? f : "/var/lib/sg-greeter/last-user";
+}
+
+static void remember_user( const char *user )
+{
+    char tmp[4096];
+    FILE *f;
+    snprintf( tmp, sizeof(tmp), "%s.tmp", last_user_file() );
+    if (!user[0] || !(f = fopen( tmp, "w" ))) return;
+    fprintf( f, "%s\n", user );
+    if (fclose( f ) == 0) rename( tmp, last_user_file() );
+}
+
+/* the last account, if it is still a person's (a uid of 1000 or more), else "" */
+static void last_user( char *out, size_t len )
+{
+    FILE *f = fopen( last_user_file(), "r" );
+    struct passwd *pw;
+    char *nl;
+    out[0] = 0;
+    if (!f) return;
+    if (!fgets( out, len, f )) out[0] = 0;
+    fclose( f );
+    if ((nl = strchr( out, '\n' ))) *nl = 0;
+    /* a domain account (DOMAIN\name) is only known to the directory */
+    if (strchr( out, '\\' )) return;
+    if (!(pw = getpwnam( out )) || pw->pw_uid < 1000) out[0] = 0;
+}
 static int to_greeter = -1;    /* we write, greeter reads  */
 static int from_greeter = -1;  /* greeter writes, we read  */
 
@@ -262,6 +301,9 @@ static int handle_greetd_reply( const char *cmd_for_session )
             if (msg && json_string( msg, "type", type, sizeof(type) ) && !strcmp( type, "success" ))
             {
                 to_ui( "SUCCESS" );
+#ifndef SG_MUTANT_NO_LAST_USER
+                remember_user( session_user );
+#endif
                 done = 1;
             }
             else
@@ -362,16 +404,26 @@ int main( int argc, char **argv )
             /* The greeter says HELLO once its window exists: the moment it can
              * take input. Logged so anything waiting to sign in -- the boot
              * gate, an RMM tool -- has a real readiness signal, not a sleep. */
+            char last[256];
             logmsg( "greeter ready" );
             to_ui( "READY" );
+            last_user( last, sizeof(last) );
+            if (last[0]) to_ui( "LASTUSER %s", last );
         }
         else if (!strncmp( line, "USER ", 5 ))
         {
             char buf[1024], esc[512];
             json_escape( line + 5, esc, sizeof(esc) );
+            snprintf( session_user, sizeof(session_user), "%s", line + 5 );
             snprintf( buf, sizeof(buf), "{\"type\":\"create_session\",\"username\":\"%s\"}", esc );
             if (greetd_send( buf ) < 0) { to_ui( "ERROR The login service is unavailable." ); break; }
             if (handle_greetd_reply( session_cmd ) > 0) break;
+        }
+        else if (!strncmp( line, "CANCEL", 6 ))
+        {
+            /* "Other user" while the last one's password was asked for */
+            greetd_send( "{\"type\":\"cancel_session\"}" );
+            free( greetd_recv() );
         }
         else if (!strncmp( line, "REPLY ", 6 ))
         {

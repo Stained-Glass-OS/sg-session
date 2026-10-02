@@ -112,6 +112,7 @@ int main( int argc, char **argv )
         }
         else if (strstr( m, "\"cancel_session\"" ))
         {
+            fprintf( stderr, "stub: cancel_session\n" );
             sendmsg_json( fd, "{\"type\":\"success\"}" );
         }
         free( m );

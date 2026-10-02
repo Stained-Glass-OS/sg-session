@@ -12,6 +12,14 @@ sg-session (0.1.0-91) unstable; urgency=medium
     "sound step up|down [--chime]" moves the default output 5 points as the
     volume keys do, "sound mute-toggle" for the mute key. Test:
     test/settingsctl-test.py.
+  * The login screen offers the last account first, as Windows' does: its
+    name, and the password box at once; "Other user" (bottom left) for
+    anyone else; a wrong password asks again for the same account (David
+    2026-10-02). sg-greet-bridge keeps the account of each sign-in
+    (/var/lib/sg-greeter, tmpfiles) and tells the greeter LASTUSER; CANCEL
+    ends a sign-in begun. Only a person's account (uid >= 1000) is offered.
+    Tests: test/greeter-lastuser-test.sh (mutant NO_LAST_USER),
+    test/greeter-lastuser-ui-test.sh (mutant IGNORE_LAST_USER).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 15:30:00 +0000
 

@@ -20,6 +20,10 @@
  *   <- INFO <text> | ERROR <text> show this to the user
  *   <- SUCCESS                    authenticated; the session is starting
  *   <- FAILURE <text>             rejected; start again
+ *   <- LASTUSER <name>            the last account signed in here: offered
+ *                                 first, its password asked at once (Windows'
+ *                                 login screen); "Other user" for anyone else
+ *   -> CANCEL                     end the sign-in begun (Other user)
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
@@ -37,6 +41,7 @@
 #define ID_STATUS 104
 #define ID_PROMPT 105
 #define ID_POWER  106
+#define ID_OTHER  107
 #define ID_SAS_LOCK    110
 #define ID_SAS_SIGNOUT 111
 #define ID_SAS_TASKMGR 112
@@ -49,6 +54,11 @@ static HWND g_user, g_secret, g_submit, g_status, g_prompt, g_power;
 static HFONT g_font_big, g_font, g_font_small;
 static HBRUSH g_bg;
 static HWND g_title;
+/* The last account (LASTUSER): shown by name, its password asked at once;
+ * g_user_label and the name box come back with "Other user" (g_other). */
+static char g_last[256];
+static BOOL g_last_mode;
+static HWND g_user_label, g_other;
 static BOOL g_awaiting_secret = FALSE;
 static BOOL g_done = FALSE;
 /* Lock mode ("/lock <user>"): the session's user is fixed -- the lock service
@@ -289,6 +299,9 @@ static void show_form( HWND hwnd, BOOL show )
     {
         /* The password box appears only once the service asks for it. */
         if (c == g_secret && !g_awaiting_secret) continue;
+        /* the name box or the last account's "Other user", by the mode */
+        if (show && (c == g_user || c == g_user_label) && g_last_mode) continue;
+        if (show && c == g_other && !g_last_mode) continue;
         ShowWindow( c, show ? SW_SHOWNA : SW_HIDE );
     }
 }
@@ -357,7 +370,7 @@ static void submit( void )
     char buf[512];
 
     if (g_done) return;
-    if (!g_awaiting_secret && g_lock_user) return;   /* waiting for the prompt */
+    if (!g_awaiting_secret && (g_lock_user || g_last_mode)) return;   /* waiting for the prompt */
     if (!g_awaiting_secret)
     {
         GetWindowTextA( g_user, buf, sizeof(buf) );
@@ -376,6 +389,28 @@ static void submit( void )
         SetWindowTextA( g_secret, "" );
         SecureZeroMemory( buf, sizeof(buf) );
     }
+}
+
+/* The last account, offered by name (on), or the name box again ("Other
+ * user"): the sign-in begun for it is ended first. */
+static void last_user_mode( BOOL on )
+{
+    if (!on && g_last_mode) send_line( "CANCEL" );
+    g_last_mode = on;
+    g_awaiting_secret = FALSE;
+    SetWindowTextA( g_secret, "" );
+    SetWindowTextA( g_prompt, "" );
+    ShowWindow( g_secret, SW_HIDE );
+    SetWindowTextA( g_user, on ? g_last : "" );
+    /* behind the curtain nothing is shown: lifting it shows by the mode */
+    ShowWindow( g_user, on || g_curtain ? SW_HIDE : SW_SHOW );
+    ShowWindow( g_user_label, on || g_curtain ? SW_HIDE : SW_SHOW );
+    ShowWindow( g_other, on && !g_curtain ? SW_SHOW : SW_HIDE );
+    SetWindowTextA( g_title, on ? g_last : "Stained Glass OS" );
+    set_status( "", FALSE );
+    EnableWindow( g_submit, TRUE );
+    if (on) send_line( "USER %s", g_last );   /* its password, asked at once */
+    else want_focus( g_user );
 }
 
 /* One line from the bridge, on the UI thread. */
@@ -412,6 +447,15 @@ static void handle_bridge_line( HWND hwnd, char *line )
          * at the login screen, start over from the user name. */
         g_awaiting_secret = FALSE;
         SetWindowTextA( g_secret, "" );
+        if (g_last_mode)
+        {
+            /* the same account again: its password is asked once more */
+            EnableWindow( g_submit, TRUE );
+            set_status( strcmp( line + 8, "The user name or password is incorrect. Try again." ) ? line + 8
+                        : "The password is incorrect. Try again.", TRUE );
+            send_line( "USER %s", g_last );
+            return;
+        }
         if (!g_lock_user)
         {
             SetWindowTextA( g_prompt, "" );
@@ -428,6 +472,13 @@ static void handle_bridge_line( HWND hwnd, char *line )
     {
         EnableWindow( g_submit, TRUE );
         set_status( line + 6, TRUE );
+    }
+    else if (!strncmp( line, "LASTUSER ", 9 ) && !g_lock_user && !g_sas && !g_done)
+    {
+#ifndef SG_MUTANT_IGNORE_LAST_USER
+        lstrcpynA( g_last, line + 9, sizeof(g_last) );
+        last_user_mode( TRUE );
+#endif
     }
     else if (!strncmp( line, "INFO ", 5 ))
     {
@@ -553,7 +604,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     {
     case WM_DRAWITEM:
         if (wp == ID_POWER) { draw_power( (const DRAWITEMSTRUCT *)lp ); return TRUE; }
-        if (wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) { draw_link( hwnd, (const DRAWITEMSTRUCT *)lp ); return TRUE; }
+        if ((wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) || wp == ID_OTHER) { draw_link( hwnd, (const DRAWITEMSTRUCT *)lp ); return TRUE; }
         break;
     case WM_CTLCOLORSTATIC:
     {
@@ -597,6 +648,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_COMMAND:
         if (LOWORD(wp) == ID_SUBMIT) submit();
         else if (LOWORD(wp) == ID_POWER) power_menu( hwnd );
+        else if (LOWORD(wp) == ID_OTHER) last_user_mode( FALSE );
         else if (LOWORD(wp) == ID_SAS_LOCK) sas_choose( hwnd, "lock" );
         else if (LOWORD(wp) == ID_SAS_SIGNOUT) sas_choose( hwnd, "signout" );
         else if (LOWORD(wp) == ID_SAS_TASKMGR) sas_choose( hwnd, "taskmgr" );
@@ -719,7 +771,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
                      WS_CHILD | WS_VISIBLE | SS_CENTER,
                      cx - 300, cy - 130, 600, 52, hwnd, NULL, inst, NULL );
 
-    CreateWindowExA( 0, "STATIC", "User name", WS_CHILD | WS_VISIBLE,
+    g_user_label = CreateWindowExA( 0, "STATIC", "User name", WS_CHILD | WS_VISIBLE,
                      cx - 150, cy - 40, 300, 22, hwnd, NULL, inst, NULL );
     g_user = CreateWindowExA( WS_EX_CLIENTEDGE, "EDIT", "",
                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -740,6 +792,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 
     g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                      sw - 72, sh - 72, 48, 48, hwnd, (HMENU)ID_POWER, inst, NULL );
+    /* "Other user", bottom left as on Windows: shown with the last account */
+    g_other = CreateWindowExA( 0, "BUTTON", "Other user", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+                     24, sh - 76, 220, 52, hwnd, (HMENU)ID_OTHER, inst, NULL );
 
     /* Set once, at creation. Sweeping every child afterwards is how the title
      * ended up with two fonts painted on top of each other. */
