@@ -4,6 +4,12 @@ sg-session (0.1.0-94) unstable; urgency=medium
     :root variables are GTK 4's, and GTK 3 warned "Invalid name of
     pseudo-class" in every Linux program it started (Firefox's terminal
     output, 2026-10-02). Test: test/settingsctl-test.py.
+  * ProgramData's folders are the users' to make things in at every boot:
+    one a SYSTEM service or an installer made with its own security
+    descriptor was 0755 (ACL mask r-x), and the Ambir scanner could not save
+    its calibration in ProgramData\AmbirTechnology ("a read write error",
+    David 2026-10-02). Folders only; files stay their maker's. wine-sg 0769
+    stops new ones being made so. Test: test/programdata-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 23:05:00 +0000
 

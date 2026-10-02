@@ -24,6 +24,18 @@ has "$T/ProgramData/Epic" "group:$grp:rwx" && echo "PASS  a folder already there
 ( umask 022; mkdir "$T/ProgramData/NewApp" )
 has "$T/ProgramData/NewApp" "group:$grp:rwx" && echo "PASS  a folder made later (umask 022): the group may write in it" || { echo "FAIL  new folder: $(getfacl -p "$T/ProgramData/NewApp" 2>/dev/null | tr '\n' ' ')"; RC=1; }
 [ -e "$T/state/programdata-shared-1" ] && echo "PASS  the existing tree is done once (stamp)" || { echo "FAIL  no stamp"; RC=1; }
+# a folder a SYSTEM service made with its own descriptor (0755: mask r-x) is
+# mended at the next boot, its files left as they are
+mkdir -p "$T/pd2/AmbirTechnology/Sub" "$T/st4"
+( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_programdata_shared "$T/pd2" "$grp" "$T/st4" )
+: > "$T/pd2/AmbirTechnology/AmbirScan.log"; chmod 644 "$T/pd2/AmbirTechnology/AmbirScan.log"
+setfacl -m m::r-- "$T/pd2/AmbirTechnology/AmbirScan.log"
+setfacl -m m::r-x "$T/pd2/AmbirTechnology"; chmod 755 "$T/pd2/AmbirTechnology"
+before=$(getfacl -p "$T/pd2/AmbirTechnology/AmbirScan.log" 2>/dev/null)
+( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_programdata_shared "$T/pd2" "$grp" "$T/st4" )
+getfacl -p "$T/pd2/AmbirTechnology" 2>/dev/null | grep -qx "mask::rwx" && [ "$(getfacl -p "$T/pd2/AmbirTechnology/AmbirScan.log" 2>/dev/null)" = "$before" ] \
+    && echo "PASS  a folder narrowed to r-x (a SYSTEM service's) is mended at boot; its files stay their maker's" \
+    || { echo "FAIL  narrowed folder: $(getfacl -p "$T/pd2/AmbirTechnology" 2>/dev/null | tr '\n' ' ')"; RC=1; }
 # sg_system_access
 me=$(id -un)
 canw() { getfacl -p "$1" 2>/dev/null | grep -qE "^user:$me:rw"; }   # an entry for the account, with write

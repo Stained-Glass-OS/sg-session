@@ -341,6 +341,13 @@ sg_programdata_shared() {
     else
         setfacl -P -m "g:$_grp:rwX" -m "d:g:$_grp:rwX" "$_pd" 2>/dev/null || :
     fi
+    # and its folders at every boot: one a SYSTEM service or an installer made
+    # with its own security descriptor got 0755 and an ACL mask of r-x, so the
+    # users could make nothing in it -- the Ambir scanner's calibration
+    # folder in ProgramData\AmbirTechnology, "a read write error" (David
+    # 2026-10-02; wine-sg 0769 keeps it from happening, this mends what was).
+    # Folders only: what is in them stays its maker's, as on Windows.
+    find "$_pd" -xdev -type d ! -type l -exec setfacl -m "g:$_grp:rwx" -m "d:g:$_grp:rwx" {} + 2>/dev/null || :
     return 0
 }
 
