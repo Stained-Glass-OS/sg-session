@@ -452,7 +452,9 @@ check("look dark: GTK 3 and 4 prefer dark, the file's other settings kept",
 check("look dark: libadwaita's accent in GTK 4's gtk.css (the portal says none), lighter for text, the user's own CSS kept",
       "--accent-bg-color: #7b2fbe;" in css("gtk-4.0") and "@define-color accent_bg_color #7b2fbe;" in css("gtk-4.0")
       and "--accent-color: #a977d4;" in css("gtk-4.0") and "window { padding: 1px; }" in css("gtk-4.0")
-      and "--accent-bg-color: #7b2fbe;" in css("gtk-3.0"), css("gtk-4.0"))
+      and "@define-color accent_bg_color #7b2fbe;" in css("gtk-3.0"), css("gtk-4.0"))
+check("look dark: GTK 3's gtk.css has the named colours, not GTK 4's :root variables (GTK 3 warned in every program)",
+      ":root" not in css("gtk-3.0") and ":root" in css("gtk-4.0"), css("gtk-3.0"))
 got = calls()
 check("look dark: the desktop's color-scheme and the nearest accent (purple)",
       "gsettings set org.gnome.desktop.interface color-scheme prefer-dark" in got

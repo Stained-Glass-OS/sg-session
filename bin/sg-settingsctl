@@ -873,6 +873,10 @@ WINDOW_CSS = "\n".join([
 
 def look_css(accent, dark, gtk):
     block = accent_css(accent, dark)
+    if gtk != "gtk-4.0":
+        # :root and its variables are GTK 4's: GTK 3 stopped at them ("Invalid
+        # name of pseudo-class") and warned in every program it started
+        block = "\n".join(l for l in block.split("\n") if not l.startswith(":root"))
     if gtk == "gtk-4.0":
         block = block.replace("\n" + CSS_END, "\n" + WINDOW_CSS + "\n" + CSS_END)
     return block
