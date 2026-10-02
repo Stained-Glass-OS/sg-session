@@ -1,3 +1,14 @@
+sg-session (0.1.0-88) unstable; urgency=medium
+
+  * Copy and paste with the host in a virtual machine (David 2026-10-01: he
+    could not paste into the VM): with SPICE's port (virt-manager, GNOME
+    Boxes, QEMU's spice-vdagent channel) the session starts SPICE's guest
+    agent (spice-vdagent) for its display; sg-session depends on it, so
+    machines get it with apt -- on real hardware its daemon does not start.
+    Test: test/vdagent-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 07:00:00 +0000
+
 sg-session (0.1.0-87) unstable; urgency=medium
 
   * A copy to a USB drive or SD card shows its real progress and is done

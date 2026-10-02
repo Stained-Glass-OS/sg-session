@@ -562,6 +562,19 @@ sg_start_deskcomp() {
     "$_dc" </dev/null &
 }
 
+# Copy and paste with the computer a virtual machine runs on (David
+# 2026-10-01: he could not paste into the VM): SPICE's guest agent, for this
+# session's X display, when the machine has SPICE's port (virt-manager,
+# GNOME Boxes, QEMU with a spice-vdagent channel). The system half
+# (spice-vdagentd) starts on its own when the port is there. Not supervised:
+# without it, only copy and paste across the VM's edge are missing.
+sg_start_vdagent() {
+    _port="${SG_VDAGENT_PORT:-/dev/virtio-ports/com.redhat.spice.0}"
+    [ -e "$_port" ] && command -v spice-vdagent >/dev/null 2>&1 || return 0
+    sg_log "starting the virtual machine's clipboard agent (spice-vdagent)"
+    spice-vdagent -x </dev/null >/dev/null 2>&1 &
+}
+
 # These are inherited by the compositor's child, so they must be exported: the
 # session crosses a process boundary between sg-session-start and sg-run-explorer.
 export SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_USER

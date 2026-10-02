@@ -204,6 +204,8 @@ if [ -d "$_profile" ]; then cd "$_profile"; else sg_log "no profile directory at
 #     turned hold-to-talk on (Control Panel > Speech Recognition).
 #   - the desktop's compositor (sg-deskcomp, sg_start_deskcomp): window
 #     shadows, real alpha and the window effects, if sg-compositor has it.
+#   - in a virtual machine with SPICE, its clipboard agent (spice-vdagent,
+#     sg_start_vdagent): copy and paste with the host.
 #   - the Start menu, if sg-shell is installed: a persistent listener that
 #     explorer's Start button toggles (wine-sg patch 0012). Best-effort: a
 #     session without it still has Wine's built-in Start menu. Its output
@@ -223,6 +225,7 @@ _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
         sleep 0.5; _w=$((_w + 1))
     done
     sg_start_deskcomp
+    sg_start_vdagent
     if [ -f "$_sgstart" ]; then
         sg_log "starting the Start menu (sg-start)"
         wine "$_sgstart" &
