@@ -247,9 +247,9 @@ if grep -q 'microphone\]' "$T/hklm.reg" 2>/dev/null && grep -A1 'microphone\]' "
         && grep -A1 'location\]' "$T/hklm.reg" | grep -q '"Value"="Allow"' && grep -q '"AllowTelemetry"=dword:00000000' "$T/hklm.reg"; then
     pass "HKLM gets the device's microphone and location switches and AllowTelemetry 0"
 else fail "HKLM: $(cat "$T/hklm.reg" 2>/dev/null)"; fi
-if [ "$(get BROWSER)" = Mozilla.Firefox ] && [ "$(cat "$T/oobe-browser" 2>/dev/null)" = Mozilla.Firefox ] \
+if [ "$(get BROWSER)" = linux:firefox ] && [ "$(cat "$T/oobe-browser" 2>/dev/null)" = linux:firefox ] \
         && grep -qx 'start --no-block sg-oobe-browser.service' "$T/systemctl.log" 2>/dev/null; then
-    pass "Firefox, chosen, is handed to the browser installation service"
+    pass "Firefox's Linux build, the suggestion, is handed to the browser installation service"
 else fail "browser: conf '$(get BROWSER)' request '$(cat "$T/oobe-browser" 2>/dev/null)' systemctl '$(cat "$T/systemctl.log" 2>/dev/null)'"; fi
 if [ ! -e "$T/etc/stained-glass/oobe.pending" ] && [ "$(cat "$T/closed-first" 2>/dev/null)" = closed ]; then
     pass "done: the pending marker is gone and the first-run setup closed itself"

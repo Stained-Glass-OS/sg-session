@@ -101,12 +101,19 @@ static const struct { const char *code, *name; } g_layouts[] = {
 };
 #define NLAYOUTS ((int)(sizeof(g_layouts) / sizeof(g_layouts[0])))
 
+/* Each browser's Linux build or its Windows program (David 2026-10-01): Firefox
+ * is best as the Linux build (it saves where the Windows side looks, through
+ * the shared home folders); Chrome and Edge suggest the Windows program, which
+ * signs in with a workplace's Windows accounts -- as SG Store suggests them. */
 static const struct { const char *id, *name, *note; } g_browsers[] = {
-    { "Mozilla.Firefox", "Mozilla Firefox", "Free and open source, from Mozilla" },
-    { "Google.Chrome", "Google Chrome", "The most used browser, from Google" },
-    { "Microsoft.Edge", "Microsoft Edge", "Microsoft's browser, downloaded from Microsoft" },
-    { "Mozilla.Firefox.ESR", "Mozilla Firefox ESR", "Firefox's extended support release: fewer changes" },
-    { "none", "Don't install a browser now", "You can install one later with winget or from its website" },
+    { "linux:firefox", "Mozilla Firefox", "Free and open source, from Mozilla: its Linux build (recommended)" },
+    { "Mozilla.Firefox", "Mozilla Firefox (Windows)", "Firefox as the Windows program" },
+    { "Google.Chrome", "Google Chrome", "From Google, the Windows program: signs in with your work's accounts" },
+    { "linux:google-chrome-stable", "Google Chrome (Linux)", "Chrome's Linux build, from Google" },
+    { "Microsoft.Edge", "Microsoft Edge", "From Microsoft, the Windows program: signs in with your work's accounts" },
+    { "linux:microsoft-edge-stable", "Microsoft Edge (Linux)", "Edge's Linux build, from Microsoft" },
+    { "Mozilla.Firefox.ESR", "Mozilla Firefox ESR (Windows)", "Firefox's extended support release: fewer changes" },
+    { "none", "Don't install a browser now", "You can install one later from SG Store" },
 };
 #define NBROWSERS ((int)(sizeof(g_browsers) / sizeof(g_browsers[0])))
 

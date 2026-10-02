@@ -2,3 +2,4 @@
 *	^Windows Registry Editor( Version 5\.00)?	the .reg file format's own header line, which regedit requires; never shown to a person
 *	Windows programs	describes what the system runs (compatibility), not a name for our product
 setup/sg-setup.c	can't upgrade Windows|beside Windows or another system	Setup refers to Microsoft's operating system already on the disk (nominative)
+setup/sg-oobe.c	the Windows program|\(Windows\)	first-run setup's choice of a browser's build: its Windows program (run with Wine) or its Linux build -- what the system runs, not a name for our product

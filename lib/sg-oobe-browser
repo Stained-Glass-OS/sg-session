@@ -15,6 +15,23 @@ SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 REQ="${SG_OOBE_BROWSER_REQ:-/var/lib/stained-glass/oobe-browser}"
 [ -r "$REQ" ] || exit 0
 id=$(head -1 "$REQ")
+# A Linux build: apt, with its maker's source -- sg-admind's own install
+# (SG Store's Linux apps go the same way), as root here.
+case "$id" in
+    linux:firefox|linux:google-chrome-stable|linux:microsoft-edge-stable)
+        pkg=${id#linux:}
+        admind="${SG_ADMIND:-/usr/libexec/stained-glass/sg-admind}"
+        [ -r "$admind" ] || { sg_log "oobe-browser: no sg-admind (sg-shell) for $pkg; trying again at the next boot"; exit 1; }
+        sg_log "oobe-browser: installing $pkg (Linux)"
+        if python3 -c 'import runpy, sys
+g = runpy.run_path(sys.argv[1], run_name="sg_oobe_browser")
+print("\n".join(g["op_apt_install"]([sys.argv[2]])))' "$admind" "$pkg" 2>&1 | sed 's/^/oobe-browser: /' >&2 \
+           && dpkg-query -W -f '${db:Status-Status}' "$pkg" 2>/dev/null | grep -qx installed; then
+            sg_log "oobe-browser: $pkg is installed"; rm -f "$REQ"; exit 0
+        fi
+        sg_log "oobe-browser: $pkg was not installed; trying again at the next boot"
+        exit 1 ;;
+esac
 case "$id" in
     Mozilla.Firefox)     url='https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
     Mozilla.Firefox.ESR) url='https://download.mozilla.org/?product=firefox-esr-latest-ssl&os=win64&lang=en-US'; exe='Mozilla Firefox/firefox.exe' ;;
