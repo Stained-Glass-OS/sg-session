@@ -22,6 +22,10 @@ sg-session (0.1.0-87) unstable; urgency=medium
     the lock, then turns the screen off; waking asks for the password, as
     sleeping already did. Test: test/settingsctl-test.py (without the lock
     it fails).
+  * Depends on sg-gtk-theme (sg-image): Linux programs' GTK look in Stained
+    Glass purple, light and dark, the system's GTK theme (David
+    2026-10-01: GTK looked "quite a bit less pretty" than the Windows
+    side).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 04:00:00 +0000
 
