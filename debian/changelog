@@ -1,3 +1,19 @@
+sg-session (0.1.0-90) unstable; urgency=medium
+
+  * Sound on laptops with Intel's SOF audio DSP: the initrd started the
+    driver before /usr/lib/firmware was mounted, the firmware failed to load
+    and the machine had only "Dummy Output" (Latitude 3520). The new
+    sg-firmware-retry.service binds such a device (no sound card) again once
+    the root file system is up. rtkit for PipeWire's realtime priority.
+  * The clock is set from the network: the initrd's systemd-networkd left
+    /run/systemd/netif/state saying "off", so timesyncd never synced, a clock
+    hours behind made every apt signature "not live until" later and apt
+    update failed with signing errors. A timesyncd drop-in removes the stale
+    file unless networkd runs. Test: test/firmware-retry-test.sh (make
+    test-firmware-retry; its --mutant fails).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 14:30:00 +0000
+
 sg-session (0.1.0-89) unstable; urgency=medium
 
   * The lock and sign-in screen's text boxes take Ctrl+A, selecting what was

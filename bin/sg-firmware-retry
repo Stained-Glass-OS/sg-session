@@ -1,0 +1,43 @@
+#!/bin/sh
+# Stained Glass: give the sound drivers that started too early their firmware.
+#
+# The initrd loads the graphics driver, and with it Intel's SOF audio driver
+# (sof-audio-pci-intel-*, bound to i915's audio component), before the root
+# file system with /usr/lib/firmware is there: the DSP firmware fails to load
+# (-ENOENT), the driver does not try again, and the machine has no sound
+# card -- PipeWire offers "Dummy Output" and no microphone (Latitude 3520,
+# David 2026-10-02). Once the root file system is up, a SOF device bound
+# without a sound card is unbound and bound again: the driver then finds its
+# firmware.
+#
+# A driver still loading its firmware has no card yet either: each device
+# is given WAIT seconds (default 15) to show one before it is bound again.
+#
+#   sg-firmware-retry [SYSFS]     (SYSFS: /sys, or a fake tree for the test)
+set -u
+SYS="${1:-/sys}"
+WAIT="${SG_FIRMWARE_WAIT:-15}"
+rc=0
+has_card() {
+    [ -n "$(find -L "$1/" -maxdepth 4 -path '*/sound/card*' -name 'card*' 2>/dev/null | head -1)" ]
+}
+for drv in "$SYS"/bus/pci/drivers/sof-audio-pci-*; do
+    [ -d "$drv" ] || continue
+    for dev in "$drv"/0000:*; do
+        [ -e "$dev" ] || continue
+        # a card made by the driver's machine driver (a platform child) or
+        # by the device itself
+        waited=0
+        while ! has_card "$dev" && [ "$waited" -lt "$WAIT" ]; do
+            sleep 1; waited=$((waited + 1))
+        done
+        has_card "$dev" && continue
+        name=${dev##*/}
+        echo "sg-firmware-retry: $name (${drv##*/}) has no sound card: binding it again"
+        if ! { echo "$name" > "$drv/unbind" && echo "$name" > "$drv/bind"; } 2>/dev/null; then
+            echo "sg-firmware-retry: could not bind $name again" >&2
+            rc=1
+        fi
+    done
+done
+exit "$rc"

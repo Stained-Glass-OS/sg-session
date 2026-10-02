@@ -16,14 +16,14 @@ UDEVDIR      = $(DESTDIR)$(PREFIX)/lib/udev/rules.d
 
 BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-provision domain/sg-domain-join domain/sg-gpupdate bin/sg-prefix-init bin/sg-session-start bin/sg-session-check \
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
-               bin/sg-install-d3d bin/sg-d3d-check \
+               bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser
 
-.PHONY: all install lint test test-session test-multiuser deb clean
+.PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
 
 all:
 	@echo "nothing to build; this package is scripts. try 'make test' or 'make deb'."
@@ -191,7 +191,9 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
-	    systemd/sg-print-setup.service $(UNITDIR)
+	    systemd/sg-print-setup.service systemd/sg-firmware-retry.service $(UNITDIR)
+	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
+	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf tmpfiles/sg-audit.conf $(TMPFILESDIR)
@@ -266,7 +268,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-session
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -280,6 +282,12 @@ test-polkit: procagent polkitagent
 test-deskcomp-start:
 	@sh test/deskcomp-start-test.sh
 	@! sh test/deskcomp-start-test.sh --mutant >/dev/null
+
+# The sound firmware the initrd could not load, and the clock timesyncd could
+# not set (fake sysfs; the test fails without the rebind, its --mutant).
+test-firmware-retry:
+	@sh test/firmware-retry-test.sh
+	@! sh test/firmware-retry-test.sh --mutant >/dev/null
 
 # Linux programs go through Xwayland (sg_linux_app_env): native Wayland ones
 # were shown full screen over the taskbar. Stand-in systemctl/D-Bus.

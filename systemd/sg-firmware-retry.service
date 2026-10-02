@@ -1,0 +1,17 @@
+[Unit]
+Description=Stained Glass: load the sound firmware the initrd could not
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# A SOF audio driver started from the initrd found no firmware there and has
+# no sound card; bound again once /usr/lib/firmware is mounted, it has one
+# (sg-firmware-retry). Before sign-in, so PipeWire sees the card.
+DefaultDependencies=no
+After=local-fs.target systemd-udev-trigger.service systemd-modules-load.service
+Before=sysinit.target display-manager.service greetd.service
+ConditionPathExistsGlob=/sys/bus/pci/drivers/sof-audio-pci-*
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-firmware-retry
+
+[Install]
+WantedBy=sysinit.target
