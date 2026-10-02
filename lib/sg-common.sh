@@ -390,6 +390,25 @@ sg_linux_app_env() {
     fi
 }
 
+# SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
+# Images before 2026-10-02 carried a lab-only setup in /etc, outside any
+# package: sshd started only when root had keys (the gates'), and passwords
+# were refused -- "start condition unmet" for David. Those files go, only
+# where they are still exactly what the image put there (an administrator's
+# own edits stay).
+#   sg_ssh_migrate ROOT     (/ on a machine)
+sg_ssh_migrate() {
+    _r=${1%/}
+    for _f in "$_r/etc/systemd/system/ssh.service.d/10-stained-glass-lab.conf" \
+              "$_r/etc/systemd/system/ssh.socket.d/10-stained-glass-lab.conf"; do
+        [ -f "$_f" ] && [ "$(md5sum < "$_f" | cut -d' ' -f1)" = c7e7281344a9d9bdca5cc286e22acbf8 ] && rm -f "$_f"
+        rmdir "${_f%/*}" 2>/dev/null || :
+    done
+    _f="$_r/etc/ssh/sshd_config.d/10-stained-glass.conf"
+    [ -f "$_f" ] && [ "$(md5sum < "$_f" | cut -d' ' -f1)" = f1b19281bb64b15e61e39f27e1d999bc ] && rm -f "$_f"
+    return 0
+}
+
 # The SYSTEM account's temporary folder, %SystemRoot%\SystemTemp, as Windows
 # has it: only SYSTEM may enter (wine-sg 0638 gives it to SYSTEM processes
 # from GetTempPath2; elevated installers unpack there). Made at every boot.

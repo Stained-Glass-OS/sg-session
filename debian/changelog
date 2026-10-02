@@ -1,3 +1,17 @@
+sg-session (0.1.0-86) unstable; urgency=medium
+
+  * SSH is on, with passwords (David 2026-10-01: "SSH should also be a
+    default package and it should come enabled"). Depends on
+    openssh-server; /etc/ssh/sshd_config.d/05-stained-glass.conf lets people
+    sign in with their account's password, root with keys only. Images until
+    now carried a lab-only setup outside any package -- sshd started only
+    when root had keys, and passwords were refused ("start condition
+    unmet"); sg_ssh_migrate removes those files where they are unchanged,
+    and the server is enabled once when this version arrives. Test:
+    test/ssh-migrate-test.sh (mutant: migration skipped, 2 fail).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 02:30:00 +0000
+
 sg-session (0.1.0-85) unstable; urgency=medium
 
   * Depends on sg-wine-gecko: Wine Gecko, the HTML engine in Windows

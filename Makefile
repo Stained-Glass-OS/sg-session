@@ -206,6 +206,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0644 config/polkit/50-stained-glass-updates.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-media.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -D -m 0644 config/sysctl/60-stained-glass-ping.conf $(DESTDIR)$(PREFIX)/lib/sysctl.d/60-stained-glass-ping.conf
+	install -D -m 0644 config/ssh/05-stained-glass.conf $(DESTDIR)/etc/ssh/sshd_config.d/05-stained-glass.conf
 	install -d $(DESTDIR)/etc/udisks2
 	install -m 0644 config/udisks2/mount_options.conf $(DESTDIR)/etc/udisks2/mount_options.conf
 
@@ -227,6 +228,7 @@ lint:
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
 	@sh test/systemroot-temp-test.sh
+	@sh test/ssh-migrate-test.sh
 	@sh test/workarea-test.sh || [ $$? -eq 77 ]
 	@sh test/programdata-test.sh || [ $$? -eq 77 ]
 	@sh test/polimport-test.sh

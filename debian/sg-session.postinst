@@ -43,6 +43,22 @@ case "$1" in
             done
         ) || true
         fi
+        # SSH on, with passwords for people's accounts (David 2026-10-01):
+        # the image's lab-only leftovers go, and the server is enabled once,
+        # when this version first arrives (an administrator may turn it off).
+        if [ -r /usr/lib/stained-glass/sg-common.sh ]; then (
+            . /usr/lib/stained-glass/sg-common.sh >/dev/null 2>&1 && sg_ssh_migrate /
+        ) || true
+        fi
+        if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.1.0-86; then
+            if [ -d /run/systemd/system ]; then
+                systemctl daemon-reload >/dev/null 2>&1 || true
+                systemctl enable --now ssh.service >/dev/null 2>&1 || true
+            else
+                systemctl enable ssh.service >/dev/null 2>&1 || true
+            fi
+        fi
+
         # The session user owns the system prefix. Phase 0 has exactly one.
         # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
         #
