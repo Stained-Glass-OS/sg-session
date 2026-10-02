@@ -16,6 +16,13 @@ sg-session (0.1.0-92) unstable; urgency=medium
     (David 2026-10-02). VM-checked: `gio open x.exe` ran it.
     Test: test/windows-file-test.sh.
 
+  * C:\ passes the users' write on, as Windows' C:\ does (Authenticated
+    Users' inheritable Modify): a folder an administrator or an elevated
+    installer made there (C:\test), and all below it, the computer's users
+    may add to and change; a standard user could not make C:\test\test
+    (David). A default ACL on C:\ at every boot; the folders there already,
+    not Windows' own trees, once (sg_c_root_users, programdata-test).
+
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 18:30:00 +0000
 
 sg-session (0.1.0-91) unstable; urgency=medium

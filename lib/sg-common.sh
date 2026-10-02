@@ -426,6 +426,34 @@ sg_systemroot_temp() {
     return 0
 }
 
+# C:\ as Windows has it: what anyone makes there -- a folder an administrator
+# or an elevated installer made, C:\test -- the users may change and add to
+# (Authenticated Users' inheritable Modify, (OI)(CI)(IO)(M), on Windows' C:\).
+# The folder an elevated program made was SYSTEM's, umask 022: a user could
+# not make C:\test\test (David 2026-10-02). A default ACL on C:\ gives what is
+# made in it the users' group's write, and passes itself on below. The roots
+# of Windows' own trees (windows, Program Files, ProgramData, users) are not
+# touched; the other folders already there get it once (STATE stamp).
+#   sg_c_root_users DRIVE_C GROUP STATEDIR
+sg_c_root_users() {
+    _c=$1 _grp=$2 _st=$3
+    command -v setfacl >/dev/null 2>&1 || return 0
+    [ -d "$_c" ] || return 0
+    setfacl -m d:u::rwx -m d:g::rwx -m d:o::r-x "$_c" 2>/dev/null || :
+    [ -e "$_st/c-root-users-1" ] && return 0
+    for _d in "$_c"/* "$_c"/.[!.]*; do
+        if [ ! -d "$_d" ] || [ -L "$_d" ]; then continue; fi
+        case "${_d##*/}" in
+            windows|"Program Files"|"Program Files (x86)"|ProgramData|users) continue ;;
+        esac
+        chgrp -R -P "$_grp" "$_d" 2>/dev/null || :
+        setfacl -R -P -m g::rwX -m d:g::rwX -m m::rwX "$_d" 2>/dev/null || :
+        find "$_d" -type d -exec chmod g+s {} + 2>/dev/null || :
+    done
+    : > "$_st/c-root-users-1" 2>/dev/null || :
+    return 0
+}
+
 # Program Files is the administrators': users may read and run what is there,
 # not change it -- as on Windows, where Users have read and execute only. The
 # prefix is made by SYSTEM with the Wine group's write (umask 002), so every

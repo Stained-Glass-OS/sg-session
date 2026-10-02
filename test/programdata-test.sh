@@ -63,4 +63,22 @@ sed '/^sg_systemroot_temp() {/,/^}/c\sg_systemroot_temp() { :; }' "$HERE/lib/sg-
 mkdir -p "$T/m/windows"
 ( . "$T/mut.sh" >/dev/null 2>&1; sg_systemroot_temp "$T/m" "$me" )
 [ ! -d "$T/m/windows/SystemTemp" ] && echo "PASS  MUTANT NOSYSTEMTEMP leaves no folder (test catches it)" || { echo "FAIL  mutant not detected"; RC=1; }
+# sg_c_root_users: what an administrator made in C:\ (umask 022) the users may
+# add to and change, as Windows' C:\ grants; Windows' own trees untouched
+c_root() {   # LIB DIR -> 0 when it holds
+    croot=$2/c
+    mkdir -p "$croot/walk/inner" "$croot/windows" "$croot/Program Files" "$2/st"
+    chmod 2775 "$croot"; chmod 755 "$croot/walk" "$croot/walk/inner" "$croot/windows" "$croot/Program Files"
+    ( . "$1" >/dev/null 2>&1; sg_c_root_users "$croot" "$grp" "$2/st" )
+    ( umask 022; mkdir "$croot/test" && mkdir "$croot/test/deeper" && : > "$croot/test/deeper/f.txt" )
+    gw "$croot/test" && gw "$croot/test/deeper" && gw "$croot/test/deeper/f.txt" && gw "$croot/walk" && gw "$croot/walk/inner" \
+        && ! gw "$croot/windows" && ! gw "$croot/Program Files"
+}
+if c_root "$HERE/lib/sg-common.sh" "$T/cr"; then
+    printf '%s\n' "PASS  C:\\test an administrator made (umask 022), and what is below it: the users may write; a folder there already too; windows, Program Files not"
+else
+    echo "FAIL  C:\\ root: test $(getfacl -p "$T/cr/c/test" 2>/dev/null | tr '\n' ' ') walk $(getfacl -p "$T/cr/c/walk" 2>/dev/null | tr '\n' ' ')"; RC=1
+fi
+sed '/^sg_c_root_users() {/,/^}/c\sg_c_root_users() { :; }' "$HERE/lib/sg-common.sh" > "$T/mut2.sh"
+c_root "$T/mut2.sh" "$T/crm" && { echo "FAIL  MUTANT NO_C_ROOT_USERS passes"; RC=1; } || echo "PASS  MUTANT NO_C_ROOT_USERS fails the check (test catches it)"
 exit $RC
