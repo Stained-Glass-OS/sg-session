@@ -200,6 +200,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    $(UNITDIR)/user-runtime-dir@.service.d/
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 	install -m 0644 udev/71-stained-glass-media.rules $(UDEVDIR)
+	install -m 0644 udev/72-stained-glass-usb-writes.rules $(UDEVDIR)
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
 	install -m 0644 config/polkit/50-stained-glass-network.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-power.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/

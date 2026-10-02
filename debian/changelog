@@ -1,3 +1,17 @@
+sg-session (0.1.0-87) unstable; urgency=medium
+
+  * A copy to a USB drive or SD card shows its real progress and is done
+    when it says so, as on Windows' quick removal (David 2026-10-01: the
+    percentage raced to the end, then a long wait to eject). Such a disk
+    could hold a gigabyte of writes not yet on it -- an exFAT stick took
+    0.03 s to "copy" 30 MB and 15 s to sync; now at most 16 MB, at the
+    drive's pace (udev/72-stained-glass-usb-writes.rules, the kernel's
+    per-device strict_limit and max_bytes). VM, a 2 MB/s exFAT stick: the
+    copy 16.5 s, then 0.2 s to sync. Not the machine's own disk (eMMC).
+    Test: test/media-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 04:00:00 +0000
+
 sg-session (0.1.0-86) unstable; urgency=medium
 
   * SSH is on, with passwords (David 2026-10-01: "SSH should also be a

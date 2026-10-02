@@ -22,5 +22,18 @@ grep -q 'action.lookup("drive.removable") != "true"' "$P" && pass "polkit grants
 if command -v node >/dev/null; then
     node -e "global.polkit={addRule:function(f){},Result:{}}; require('$P')" 2>/dev/null && pass "the polkit rule parses" || fail "polkit rule syntax"
 fi
+# a copy to a USB drive shows real progress, no long wait at eject (72-...):
+# a USB disk or SD card holds at most 16 MB of writes not yet on it -- and
+# not the machine's own disk (eMMC is type MMC, not SD)
+W="$HERE/udev/72-stained-glass-usb-writes.rules"
+if command -v udevadm >/dev/null && udevadm verify --help >/dev/null 2>&1; then
+    udevadm verify --no-summary "$W" >/dev/null 2>&1 && pass "the write-back rule is well-formed" || fail "udevadm verify: $(udevadm verify "$W" 2>&1 | head -2)"
+fi
+grep -q '^ATTR{bdi/strict_limit}="1"' "$W" && grep -q '^ATTR{bdi/max_bytes}="16777216"' "$W" \
+    && pass "USB disks and SD cards: at most 16 MB of unwritten data, at the drive's pace" || fail "write-back limits"
+grep -q 'ENV{ID_BUS}=="usb", GOTO="sg_usb_writes"' "$W" && grep -q 'ATTRS{type}=="SD", GOTO="sg_usb_writes"' "$W" \
+    && ! grep -q '^SUBSYSTEMS=="mmc"' "$W" && pass "USB and SD only, not the machine's eMMC" || fail "scope of the write-back rule"
+grep -q 'udev/72-stained-glass-usb-writes.rules' "$HERE/Makefile" && pass "installed" || fail "not installed"
+
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

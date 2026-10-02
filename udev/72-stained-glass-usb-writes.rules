@@ -1,0 +1,20 @@
+# Stained Glass OS: a copy to a USB drive or an SD card shows its real
+# progress and is done when it says so, as on Windows ("quick removal"), not
+# finished at once and then a long wait when the drive is ejected (David
+# 2026-10-01). The kernel let such a disk hold up to a gigabyte of writes not
+# yet on it (exFAT, NTFS: a 30 MB copy took 0.03 s, then 15 s to eject); here
+# at most 16 MB, held to the drive's own pace (strict_limit). FAT drives were
+# already so (udisks mounts them with "flush").
+ACTION=="remove", GOTO="sg_usb_writes_end"
+SUBSYSTEM!="block", GOTO="sg_usb_writes_end"
+ENV{DEVTYPE}!="disk", GOTO="sg_usb_writes_end"
+ENV{ID_BUS}=="usb", GOTO="sg_usb_writes"
+# an SD card (type SD), not a laptop's own eMMC disk (type MMC)
+KERNEL=="mmcblk[0-9]*", ATTRS{type}=="SD", GOTO="sg_usb_writes"
+GOTO="sg_usb_writes_end"
+
+LABEL="sg_usb_writes"
+ATTR{bdi/strict_limit}="1"
+ATTR{bdi/max_bytes}="16777216"
+
+LABEL="sg_usb_writes_end"
