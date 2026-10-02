@@ -809,6 +809,26 @@ def accent_css(accent, dark):
                       CSS_END])
 
 
+# libadwaita's window buttons and corners as every other window's (Wine's:
+# square 30 px buttons, Close red under the pointer, square corners) -- it
+# ignores themes, not the user's gtk.css (GTK 4 only: GTK 3 has the theme)
+WINDOW_CSS = "\n".join([
+    "windowcontrols > button { border-radius: 0; min-width: 30px; min-height: 30px; margin: 0; padding: 0;"
+    " background: none; box-shadow: none; }",
+    "windowcontrols > button > image { background: none; border-radius: 0; padding: 0; box-shadow: none; }",
+    "windowcontrols > button:hover { background-color: alpha(currentColor, 0.08); }",
+    "windowcontrols > button.close:hover { background-color: #e81123; color: white; }",
+    "window.csd, window.csd > .titlebar, window.csd headerbar { border-radius: 0; }",
+    ":root { --window-radius: 0px; }"])
+
+
+def look_css(accent, dark, gtk):
+    block = accent_css(accent, dark)
+    if gtk == "gtk-4.0":
+        block = block.replace("\n" + CSS_END, "\n" + WINDOW_CSS + "\n" + CSS_END)
+    return block
+
+
 def set_css_block(path, block):
     """our block in the user's gtk.css, the rest of it kept (none: removed)"""
     try:
@@ -841,15 +861,15 @@ def apply_look(c):
         # colour), the rest left as it is
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
         for gtk in ("gtk-3.0", "gtk-4.0"):
-            set_css_block(os.path.join(base, gtk, "gtk.css"), accent_css(DEFAULT_ACCENT, False))
+            set_css_block(os.path.join(base, gtk, "gtk.css"), look_css(DEFAULT_ACCENT, False, gtk))
         return
     dark = look["mode"] == "dark"
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     accent = look.get("accent", "")
-    block = accent_css(accent.lower(), dark) if re.fullmatch(r"[0-9a-fA-F]{6}", accent) else ""
+    valid = re.fullmatch(r"[0-9a-fA-F]{6}", accent)
     for gtk in ("gtk-3.0", "gtk-4.0"):
         set_ini(os.path.join(base, gtk, "settings.ini"), "gtk-application-prefer-dark-theme", "true" if dark else "false")
-        set_css_block(os.path.join(base, gtk, "gtk.css"), block)
+        set_css_block(os.path.join(base, gtk, "gtk.css"), look_css(accent.lower(), dark, gtk) if valid else "")
     try:
         run(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" if dark else "default"])
         accent = look.get("accent", "")

@@ -410,6 +410,9 @@ def css(ver):
 
 
 code, lines = ctl("session-start")
+check("session-start: libadwaita's window buttons square, as every other window's (GTK 4 only)",
+      "windowcontrols > button { border-radius: 0" in css("gtk-4.0") and "windowcontrols" not in css("gtk-3.0"),
+      css("gtk-4.0"))
 check("session-start with no look chosen: libadwaita's accent the theme's purple, the user's CSS kept",
       "--accent-bg-color: #7030c0;" in css("gtk-4.0") and "window { padding: 1px; }" in css("gtk-4.0")
       and "prefer-dark" not in ini("gtk-4.0"), css("gtk-4.0") + "|" + ini("gtk-4.0"))
