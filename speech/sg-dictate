@@ -464,7 +464,11 @@ class Dictation:
         took = time.monotonic() - t
         if os.environ.get("SG_DICTATE_TIMING"):
             log("recognised %.2fs of audio in %.2fs" % (len(audio) / sgspeech.SAMPLE_RATE, took))
-        what = sgspeech.command(raw, opts.get("language", "en-US")) if opts.get("spoken", True) else None
+        # "commands": the toolbar's own switch (always on since sg-shell
+        # 0.1.0-92, where spoken punctuation is off by default); an older
+        # toolbar tied them to spoken punctuation
+        commands = opts.get("commands", opts.get("spoken", True))
+        what = sgspeech.command(raw, opts.get("language", "en-US")) if commands else None
         if what:
             # "Delete that", "Das löschen", "Efface ça", "Borra eso"...: a
             # command, never text. The toolbar does delete/undo; stop is ours.

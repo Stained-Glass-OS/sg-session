@@ -1,3 +1,13 @@
+sg-session (0.1.0-91) unstable; urgency=medium
+
+  * Voice typing: the spoken commands ("delete that", "undo that", "stop
+    listening") follow the toolbar's own "commands" switch -- sg-shell
+    0.1.0-92 turns typing spoken punctuation off by default (the model
+    punctuates), and the commands went with it. An older toolbar, which
+    sends no switch, keeps them tied to spoken punctuation.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 15:30:00 +0000
+
 sg-session (0.1.0-90) unstable; urgency=medium
 
   * Sound on laptops with Intel's SOF audio DSP: the initrd started the

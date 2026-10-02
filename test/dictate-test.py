@@ -360,6 +360,13 @@ check("engine: partials grow towards the final",
       texts[0].startswith(partials[0].rstrip(".")), repr((partials, texts)))
 check("engine: listening ends after the utterance (not continuous)", kinds[-1:] == ["STATE"], repr(kinds))
 
+# Spoken punctuation off (the toolbar's default since sg-shell 0.1.0-92): the
+# commands follow the toolbar's own "commands" switch, still a command
+lines, _ = engine_run([("speech", 1.0), ("silence", 1.5)],
+                      {"continuous": False, "spoken": False, "commands": True, "language": "en-US"},
+                      lambda audio: "Delete that.")
+check("engine: \"delete that\" is a command with spoken punctuation off",
+      "CMD delete" in lines and not any(ln.startswith("TEXT ") for ln in lines), repr(lines))
 lines, _ = engine_run([("speech", 2.0), ("silence", 1.5)],
                       {"continuous": False, "partials": False}, None)
 check("engine: no partials when the toolbar does not want them",
