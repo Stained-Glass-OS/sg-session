@@ -96,6 +96,7 @@ if [ -x "$SG_LIBEXEC/sg-polkit-agent" ]; then
     sg_log "started sg-polkit-agent (pid $!) for $(id -un)"
 fi
 
+sg_session_backdrop
 sg_log "starting session: display path=$SG_DISPLAY_PATH geometry=$GEOM"
 
 case "$SG_DISPLAY_PATH" in

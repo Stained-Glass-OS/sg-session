@@ -244,6 +244,7 @@ lint:
 	@sh test/programdata-test.sh || [ $$? -eq 77 ]
 	@sh test/device-rules-test.sh || [ $$? -eq 77 ]
 	@sh test/dotnet-support-test.sh || [ $$? -eq 77 ]
+	@sh test/backdrop-first-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl

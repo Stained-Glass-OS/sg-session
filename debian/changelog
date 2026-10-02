@@ -10,6 +10,10 @@ sg-session (0.1.0-94) unstable; urgency=medium
     its calibration in ProgramData\AmbirTechnology ("a read write error",
     David 2026-10-02). Folders only; files stay their maker's. wine-sg 0769
     stops new ones being made so. Test: test/programdata-test.sh.
+  * "Getting things ready, this might take a minute" only at a person's
+    first sign-in; every other sign-in shows "Welcome" (sg-shell's two
+    backdrops), as Windows does (David 2026-10-02). Test:
+    test/backdrop-first-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 23:05:00 +0000
 

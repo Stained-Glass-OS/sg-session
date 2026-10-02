@@ -433,6 +433,26 @@ sg_systemroot_temp() {
     return 0
 }
 
+# The words while a session starts (sg-compositor's backdrop, sg-shell's
+# gen-backdrop.py): "Getting things ready" at a person's first sign-in, when
+# the profile is being made, "Welcome" after (the default file) -- as Windows
+# says them. The first-sign-in words showed at every sign-in (David
+# 2026-10-02). A person who signed in before this came (their settings are
+# there) is not at their first. Sets SG_BACKDROP for the compositor.
+#   sg_session_backdrop
+sg_session_backdrop() {
+    _st="${XDG_STATE_HOME:-$HOME/.local/state}/stained-glass"
+    _first="${SG_BACKDROP_FIRST:-/usr/share/stained-glass/backdrop-first.sgbd}"
+    [ -e "$_st/signed-in" ] && return 0
+    if mkdir -p "$_st" 2>/dev/null; then : > "$_st/signed-in" 2>/dev/null || :; fi
+    [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/stained-glass/settings.json" ] && return 0
+    if [ -f "$_first" ]; then
+        SG_BACKDROP=$_first
+        export SG_BACKDROP
+    fi
+    return 0
+}
+
 # C:\ as Windows has it: what anyone makes there -- a folder an administrator
 # or an elevated installer made, C:\test -- the users may change and add to
 # (Authenticated Users' inheritable Modify, (OI)(CI)(IO)(M), on Windows' C:\).
