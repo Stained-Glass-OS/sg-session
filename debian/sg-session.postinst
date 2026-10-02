@@ -105,6 +105,12 @@ case "$1" in
             getent group "$grp" >/dev/null && \
                 adduser "$SG_SYSTEM_USER" "$grp" >/dev/null 2>&1 || true
         done
+        # ...and a device plugged in already takes the rules now, not at
+        # its next plugging in (an Ambir scanner on the desk, 1dcc)
+        if [ -d /run/udev ]; then
+            udevadm control --reload >/dev/null 2>&1 || true
+            udevadm trigger --subsystem-match=usb --attr-match=idVendor=1dcc >/dev/null 2>&1 || true
+        fi
 
         if ! getent passwd "$SG_USER" >/dev/null; then
             adduser --system --group --no-create-home --home "$SG_ROOT" \

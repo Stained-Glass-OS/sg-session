@@ -44,3 +44,10 @@ SUBSYSTEM=="tty", ENV{ID_BUS}=="usb", MODE="0660", GROUP="sgwine"
 #
 #   SUBSYSTEM=="usb", ATTRS{idVendor}=="1234", ATTRS{idProduct}=="5678", \
 #       MODE="0660", GROUP="sgwine"
+
+# Ambir Technology's scanners (USB vendor 1dcc): ImageScan Pro 490i
+# (1dcc:482e) and the rest are driven by Ambir's Windows driver through
+# usbscan.sys (wine-sg 0642); SANE does not know the 490i, so the class rules
+# above never matched it and AmbirScan found no scanner (David's Latitude,
+# 2026-10-02).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1dcc", MODE="0660", GROUP="sgwine"

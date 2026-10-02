@@ -1,3 +1,13 @@
+sg-session (0.1.0-93) unstable; urgency=medium
+
+  * Ambir's scanners (USB vendor 1dcc) are the Windows side's to use: SANE
+    does not know the ImageScan Pro 490i, so no class rule matched it and
+    AmbirScan found no scanner on an installed machine (David's Latitude,
+    2026-10-02; the QA VM had a hand-made rule). The upgrade reloads the
+    rules for a scanner plugged in already. Test: test/device-rules-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 21:20:00 +0000
+
 sg-session (0.1.0-92) unstable; urgency=medium
 
   * The login screen offers the last account first, as Windows' does: its
