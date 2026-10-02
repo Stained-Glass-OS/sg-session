@@ -1,3 +1,12 @@
+sg-session (0.1.0-89) unstable; urgency=medium
+
+  * The lock and sign-in screen's text boxes take Ctrl+A, selecting what was
+    typed so typing replaces it -- a wrong password could only be cleared a
+    character at a time (QA 2026-10-02). Test:
+    test/greeter-selectall-test.sh (mutant NO_SELECT_ALL fails it).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 09:30:00 +0000
+
 sg-session (0.1.0-88) unstable; urgency=medium
 
   * Copy and paste with the host in a virtual machine (David 2026-10-01: he

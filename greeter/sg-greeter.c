@@ -807,6 +807,17 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
             msg.hwnd = GetFocus();
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN) { submit(); continue; }
+#ifndef SG_MUTANT_NO_SELECT_ALL
+        /* Ctrl+A selects what was typed, to type over it (the classic edit
+         * control has no Ctrl+A of its own; QA 2026-10-02: a wrong password
+         * could only be cleared a character at a time) */
+        if (msg.message == WM_KEYDOWN && msg.wParam == 'A' && (GetKeyState( VK_CONTROL ) & 0x8000) &&
+            (msg.hwnd == g_user || msg.hwnd == g_secret))
+        {
+            SendMessageA( msg.hwnd, EM_SETSEL, 0, -1 );
+            continue;
+        }
+#endif
         if (!IsDialogMessageA( hwnd, &msg ))
         {
             TranslateMessage( &msg );
