@@ -396,6 +396,23 @@ def ini(ver):
         return ""
 
 
+os.makedirs(os.path.join(cfg, "gtk-4.0"), exist_ok=True)
+with open(os.path.join(cfg, "gtk-4.0", "gtk.css"), "w") as f:
+    f.write("window { padding: 1px; }\n")
+
+
+def css(ver):
+    try:
+        with open(os.path.join(cfg, ver, "gtk.css")) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+code, lines = ctl("session-start")
+check("session-start with no look chosen: libadwaita's accent the theme's purple, the user's CSS kept",
+      "--accent-bg-color: #7030c0;" in css("gtk-4.0") and "window { padding: 1px; }" in css("gtk-4.0")
+      and "prefer-dark" not in ini("gtk-4.0"), css("gtk-4.0") + "|" + ini("gtk-4.0"))
 open(LOG, "w").close()
 code, lines = ctl("look", "dark", "7B2FBE")
 check("look dark: answers the look", code == 0 and "LOOK dark\t7b2fbe" in lines, lines)
@@ -403,6 +420,10 @@ check("look dark: GTK 3 and 4 prefer dark, the file's other settings kept",
       "gtk-application-prefer-dark-theme=true" in ini("gtk-3.0") and "gtk-font-name=Inter 10" in ini("gtk-3.0")
       and ini("gtk-3.0").count("prefer-dark-theme") == 1 and "gtk-application-prefer-dark-theme=true" in ini("gtk-4.0"),
       ini("gtk-3.0") + "|" + ini("gtk-4.0"))
+check("look dark: libadwaita's accent in GTK 4's gtk.css (the portal says none), lighter for text, the user's own CSS kept",
+      "--accent-bg-color: #7b2fbe;" in css("gtk-4.0") and "@define-color accent_bg_color #7b2fbe;" in css("gtk-4.0")
+      and "--accent-color: #a977d4;" in css("gtk-4.0") and "window { padding: 1px; }" in css("gtk-4.0")
+      and "--accent-bg-color: #7b2fbe;" in css("gtk-3.0"), css("gtk-4.0"))
 got = calls()
 check("look dark: the desktop's color-scheme and the nearest accent (purple)",
       "gsettings set org.gnome.desktop.interface color-scheme prefer-dark" in got
@@ -414,6 +435,9 @@ check("look light: GTK light, color-scheme default, accent blue",
       "gtk-application-prefer-dark-theme=false" in ini("gtk-3.0") and "gtk-application-prefer-dark-theme=false" in ini("gtk-4.0")
       and "gsettings set org.gnome.desktop.interface color-scheme default" in got
       and "gsettings set org.gnome.desktop.interface accent-color blue" in got, got)
+check("look light: the accent changed in gtk.css, one block, the user's CSS still there",
+      css("gtk-4.0").count("Stained Glass: the accent colour") == 1 and "--accent-bg-color: #0078d4; --accent-color: #0078d4;" in css("gtk-4.0")
+      and "7b2fbe" not in css("gtk-4.0") and "window { padding: 1px; }" in css("gtk-4.0"), css("gtk-4.0"))
 code, lines = ctl("look", "dim", "123456")
 check("look: a mode that is not dark or light is refused", code == 2, lines)
 code, lines = ctl("look", "dark", "12345z")

@@ -27,6 +27,13 @@ sg-session (0.1.0-87) unstable; urgency=medium
     2026-10-01: GTK looked "quite a bit less pretty" than the Windows
     side).
 
+  * GTK 4 programs built on libadwaita (GNOME's) take the accent colour
+    too, not their own blue: the desktop portal here reports no accent, so
+    sg-settingsctl writes libadwaita's accent into the user's gtk.css (a
+    marked block, the rest of the file kept), the chosen accent or, never
+    chosen, Stained Glass purple; on dark, text in the accent lighter. Found
+    by the review of Linux programs' look beside Windows ones (David
+    2026-10-01). Test: test/settingsctl-test.py.
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 02 Oct 2026 04:00:00 +0000
 
 sg-session (0.1.0-86) unstable; urgency=medium

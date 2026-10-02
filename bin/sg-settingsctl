@@ -46,7 +46,8 @@
 #   sg-settingsctl session-start      apply night light and the idle timers
 #                                     (swayidle also locks before any sleep)
 #   sg-settingsctl look [dark|light RRGGBB]   Linux programs follow the user's mode
-#       LOOK <dark|light>\t<RRGGBB>          and accent: GTK 3/4's settings.ini, the
+#       LOOK <dark|light>\t<RRGGBB>          and accent: GTK 3/4's settings.ini and
+#                                     gtk.css (libadwaita's accent), the
 #                                     desktop's color-scheme and accent-color
 #                                     (gsettings; the portal tells GTK 4, Qt 6
 #                                     and browsers); kept, and applied again
@@ -790,14 +791,65 @@ def set_ini(path, key, value):
     os.replace(tmp, path)
 
 
+CSS_BEGIN = "/* Stained Glass: the accent colour (sg-settingsctl look) -- kept up to date, edit outside this block */"
+CSS_END = "/* Stained Glass: end of the accent colour */"
+
+
+def accent_css(accent, dark):
+    """libadwaita's accent (GTK 4 apps such as GNOME's): the desktop portal
+    here reports no accent, so libadwaita stayed blue whatever the user chose
+    -- its variables (1.6) and named colours (older) say it instead. On dark,
+    text in the accent is lightened, as libadwaita does."""
+    r, g, b = int(accent[0:2], 16), int(accent[2:4], 16), int(accent[4:6], 16)
+    fg = "#%02x%02x%02x" % tuple(int(v + (255 - v) * 0.35) for v in (r, g, b)) if dark else "#" + accent
+    return "\n".join([CSS_BEGIN,
+                      ":root { --accent-bg-color: #%s; --accent-color: %s; }" % (accent, fg),
+                      "@define-color accent_bg_color #%s;" % accent,
+                      "@define-color accent_color %s;" % fg,
+                      CSS_END])
+
+
+def set_css_block(path, block):
+    """our block in the user's gtk.css, the rest of it kept (none: removed)"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    m = re.search(re.escape(CSS_BEGIN) + r".*?" + re.escape(CSS_END) + r"\n?", text, re.S)
+    rest = (text[:m.start()] + text[m.end():]) if m else text
+    if not block:
+        if not m:
+            return
+        out = rest
+    else:
+        out = block + "\n" + rest
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(out)
+    os.replace(tmp, path)
+
+
+DEFAULT_ACCENT = "7030c0"   # Stained Glass purple, as sg-gtk-theme's
+
+
 def apply_look(c):
     look = c.get("look")
     if not isinstance(look, dict) or look.get("mode") not in ("dark", "light"):
+        # never chosen: libadwaita's accent our purple too (the theme's own
+        # colour), the rest left as it is
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        for gtk in ("gtk-3.0", "gtk-4.0"):
+            set_css_block(os.path.join(base, gtk, "gtk.css"), accent_css(DEFAULT_ACCENT, False))
         return
     dark = look["mode"] == "dark"
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    accent = look.get("accent", "")
+    block = accent_css(accent.lower(), dark) if re.fullmatch(r"[0-9a-fA-F]{6}", accent) else ""
     for gtk in ("gtk-3.0", "gtk-4.0"):
         set_ini(os.path.join(base, gtk, "settings.ini"), "gtk-application-prefer-dark-theme", "true" if dark else "false")
+        set_css_block(os.path.join(base, gtk, "gtk.css"), block)
     try:
         run(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark" if dark else "default"])
         accent = look.get("accent", "")
