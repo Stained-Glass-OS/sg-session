@@ -6,6 +6,8 @@ sg-session (0.1.0-96) unstable; urgency=medium
     the desktop window's _NET_WM_PID, its id can be the same. The keeper
     loop survives a failing check (set +e) and waits while the machine's
     wineserver restarts (a program started then blocked it).
+  * sg-lockctl carries XKILL <window> (sg-compositor 0.2.0+sg28): Task
+    Manager's End task on a Linux program that did not close (a hung one).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 02:05:00 +0000
 
