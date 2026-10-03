@@ -8,7 +8,7 @@ HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 R="$HERE/udev/70-stained-glass-devices.rules"
 RC=0
 if command -v udevadm >/dev/null && udevadm verify --help >/dev/null 2>&1; then
-    udevadm verify --no-style "$R" >/dev/null 2>&1 && echo "PASS  the rules are valid (udevadm verify)" || { echo "FAIL  udevadm verify: $(udevadm verify --no-style "$R" 2>&1 | head -3)"; RC=1; }
+    udevadm verify --no-style --resolve-names=never "$R" >/dev/null 2>&1 && echo "PASS  the rules are valid (udevadm verify)" || { echo "FAIL  udevadm verify: $(udevadm verify --no-style --resolve-names=never "$R" 2>&1 | head -3)"; RC=1; }
 else
     echo "      (no udevadm verify here)"
 fi

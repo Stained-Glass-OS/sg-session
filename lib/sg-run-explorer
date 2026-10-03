@@ -219,34 +219,58 @@ _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
 _sgbattery="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-battery64.exe"
 _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
+# The shell's helpers, kept running while the desktop is there (sg_keep_running):
+# started now, and again within seconds of one dying or the shell's restart --
+# at most SG_HELPER_RESTARTS times each, so one that cannot run is let be.
+sg_helper() {   # NAME COUNTVAR CMD...
+    _hn=$1 _hv=$2
+    shift 2
+    _hc=0
+    eval "_hc=\${$_hv:-0}"
+    [ "$_hc" -le "${SG_HELPER_RESTARTS:-10}" ] || return 0
+    if ! sg_keep_running "$_hn" "$@"; then
+        eval "$_hv=$((_hc + 1))"
+        [ "$_hc" -gt 0 ] && sg_log "$_hn was not running: started again"
+    fi
+    return 0
+}
+sg_shell_helpers() {
+    (
+        # the whole session (this script's), through the shell's restarts:
+        # acting while the desktop is there
+        while kill -0 "$$" 2>/dev/null; do
+            if ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; then
+                sleep 1
+                continue
+            fi
+            if [ "${SG_DESKCOMP:-1}" != 0 ] && [ -x "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-deskcomp" ]; then
+                sg_helper sg-deskcomp _n_dc "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-deskcomp"
+            fi
+            [ -f "$_sgstart" ] && sg_helper sg-start64.exe _n_start wine "$_sgstart"
+            # the network icon re-launches itself through sg-netctl's bridge
+            if [ -f "$_sgnet" ] && command -v sg-netctl >/dev/null 2>&1; then
+                sg_helper sg-netflyout64.exe _n_net wine "$_sgnet"
+            fi
+            if [ -f "$_sgbattery" ] && grep -qx Battery /sys/class/power_supply/*/type 2>/dev/null; then
+                sg_helper sg-battery64.exe _n_bat wine "$_sgbattery"
+            fi
+            if [ -f "$_sgvolume" ] && command -v sg-settingsctl >/dev/null 2>&1; then
+                sg_helper sg-volume64.exe _n_vol wine "$_sgvolume"
+            fi
+            if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
+                sg_helper sg-dictate64.exe _n_dic wine "$_sgdictate" /background
+            fi
+            sleep "${SG_HELPER_INTERVAL:-5}"
+        done
+    ) &
+}
 (
     _w=0
     while [ "$_w" -lt 120 ] && ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; do
         sleep 0.5; _w=$((_w + 1))
     done
-    sg_start_deskcomp
     sg_start_vdagent
-    if [ -f "$_sgstart" ]; then
-        sg_log "starting the Start menu (sg-start)"
-        wine "$_sgstart" &
-    fi
-    # The taskbar's network icon (sg-shell's sg-netflyout): it re-launches
-    # itself through sg-netctl's bridge to reach the network settings service.
-    if [ -f "$_sgnet" ] && command -v sg-netctl >/dev/null 2>&1; then
-        sg_log "starting the network icon (sg-netflyout)"
-        wine "$_sgnet" &
-    fi
-    if [ -f "$_sgbattery" ] && grep -qx Battery /sys/class/power_supply/*/type 2>/dev/null; then
-        sg_log "starting the battery icon (sg-battery)"
-        wine "$_sgbattery" &
-    fi
-    if [ -f "$_sgvolume" ] && command -v sg-settingsctl >/dev/null 2>&1; then
-        sg_log "starting the volume icon (sg-volume)"
-        wine "$_sgvolume" &
-    fi
-    if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
-        wine "$_sgdictate" /background &
-    fi
+    sg_shell_helpers
     # Settings' night light and screen/sleep timers (sg-settingsctl): the
     # user's choices, applied again for this session.
     if command -v sg-settingsctl >/dev/null 2>&1; then

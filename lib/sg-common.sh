@@ -650,6 +650,21 @@ sg_start_deskcomp() {
     "$_dc" </dev/null &
 }
 
+# sg_keep_running NAME CMD... -- start CMD in the background unless one of
+# this user's processes is named NAME (its first 15 characters, as the kernel
+# keeps it); 0: it runs, 1: it was (re)started. The shell's helpers -- Start,
+# the taskbar's icons, the desktop's compositor -- come back after a crash or
+# the shell's restart: one xkill'ed Linux window took explorer with it, the
+# shell came back with Wine's own Start menu, ours never again (David
+# 2026-10-02).
+sg_keep_running() {
+    _kname=$(printf '%.15s' "$1")
+    shift
+    pgrep -u "$(id -u)" -x "$_kname" >/dev/null 2>&1 && return 0
+    "$@" </dev/null &
+    return 1
+}
+
 # Copy and paste with the computer a virtual machine runs on (David
 # 2026-10-01: he could not paste into the VM): SPICE's guest agent, for this
 # session's X display, when the machine has SPICE's port (virt-manager,
