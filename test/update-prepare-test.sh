@@ -39,4 +39,59 @@ END=$(cat "$T/state/progress"); ENDSTATE=$(cat "$T/state/state")
 if [ "$ENDSTATE" = ready ] && printf '%s\n' "$END" | grep -qx 'beta_2%3a1.0_all.deb 5000 5000'; then
     echo "PASS  when done: every file whole, ready for a restart"
 else echo "FAIL  when done: state '$ENDSTATE', progress '$END'"; RC=1; fi
+
+# A cut-short installation (dpkg "interrupted"): the stuck packages are
+# replaced by newer versions, the rest configured, before PackageKit runs.
+R="$T/repair"; mkdir -p "$R"
+cat > "$T/bin/dpkg-query" <<'W'
+#!/bin/sh
+case "$*" in
+*Status-Abbrev*) if [ -e "$R/fixed" ]; then printf 'ii  sg-session\nii  sg-shell\n'
+                 else printf 'iF  sg-session\niU  sg-shell\nii  bash\n'; fi ;;
+*sg-session*) printf '0.1.0-95' ;;
+*sg-shell*) printf '0.1.0-99' ;;
+esac
+W
+cat > "$T/bin/apt-get" <<'W'
+#!/bin/sh
+case "$*" in
+*download*) for p in "$@"; do case $p in -*|download) ;; *) echo "$p" > "${p}_new.deb" ;; esac; done ;;
+*print-uris*) ;;
+esac
+exit 0
+W
+cat > "$T/bin/dpkg-deb" <<'W'
+#!/bin/sh
+p=$(cat "$2"); case "$3" in Package) echo "$p" ;; Version) [ "$p" = sg-session ] && echo 0.1.0-98 || echo 0.1.0-99 ;; esac
+W
+cat > "$T/bin/dpkg" <<'W'
+#!/bin/sh
+case "$*" in
+--compare-versions*) [ "$2" != "$4" ]; exit ;;   # the stand-in's versions only ever go up
+*" -i "*) for a in "$@"; do case $a in *.deb) cat "$a" >> "$R/installed" ;; esac; done ;;
+*--configure*) [ "${SG_MUTANT:-}" = NO_CONFIGURE ] || touch "$R/fixed"; echo configure >> "$R/order" ;;
+esac
+exit 0
+W
+cat > "$T/bin/pkcon" <<'W'
+#!/bin/sh
+[ -e "$R/fixed" ] || { echo "E: dpkg was interrupted"; exit 7; }
+echo pkcon >> "$R/order"; exit 5
+W
+chmod +x "$T"/bin/*
+for mutant in "" NO_CONFIGURE; do
+    rm -f "$R"/*
+    out=$(R="$R" SG_MUTANT="$mutant" sh "$HERE/bin/sg-update-prepare" 2>&1); rc=$?
+    ok=0
+    [ $rc = 0 ] && [ "$(cat "$R/installed" 2>/dev/null)" = sg-session ] && [ "$(head -1 "$R/order")" = configure ] &&
+        grep -q "sg-session 0.1.0-95 is superseded by 0.1.0-98" <<OUT && ok=1
+$out
+OUT
+    if [ -z "$mutant" ]; then
+        [ $ok = 1 ] && echo "PASS  an interrupted installation: the superseded package replaced, the rest configured, then updates" \
+            || { echo "FAIL  interrupted dpkg not repaired (rc $rc): $out"; RC=1; }
+    else
+        [ $ok = 0 ] && echo "PASS  MUTANT $mutant is caught" || { echo "FAIL  MUTANT $mutant survives"; RC=1; }
+    fi
+done
 exit $RC

@@ -19,6 +19,7 @@ override_dh_installsystemd:
 	# postinst restarts it only when the installed Wine cannot talk to it
 	dh_installsystemd --no-restart-after-upgrade --no-stop-on-upgrade --name=sg-wineserver
 	dh_installsystemd --name=sg-lockd
+	dh_installsystemd --name=sg-defender
 	# Setup's installer: the socket is enabled everywhere and exists only on
 	# a live boot (ConditionKernelCommandLine); the service is per connection.
 	dh_installsystemd sg-installd.socket

@@ -1,3 +1,22 @@
+sg-session (0.1.0-99) unstable; urgency=medium
+
+  * sg-update-prepare: an installation cut short (power lost, an update
+    ended from Task Manager) left dpkg "interrupted", and every later
+    update was refused while Settings showed them pending (David's laptop,
+    2026-10-03). The updater now finishes it itself: the packages left
+    half-done are replaced by their newest versions first (what stopped
+    them may be what a newer one fixes), then dpkg --configure -a, then
+    the usual download of the newest updates.
+  * sg-defender: SG Defender (David 2026-10-03). Programs, installers,
+    scripts and archives that arrive in anyone's Downloads or Desktop are
+    scanned by ClamAV (clamd, its definitions kept loaded, freshclam
+    keeping them current); a detection is moved to a root-only quarantine
+    and the person is told. On by default; /etc/stained-glass/defender.conf
+    enabled=0 (Settings > Virus & threat protection) turns it off.
+    Depends on clamav-daemon, clamav-freshclam and clamdscan.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 15:45:00 +0000
+
 sg-session (0.1.0-98) unstable; urgency=medium
 
   * powershell: from bash, PowerShell on this account's Windows side -- its

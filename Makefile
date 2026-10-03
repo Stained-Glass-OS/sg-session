@@ -40,6 +40,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
 	install -m 0755 bin/powershell $(BINDIR)
+	install -m 0755 bin/sg-defender $(BINDIR)
 	install -d $(LIBDIR)/pdf
 	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py $(LIBDIR)/pdf/
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
@@ -189,7 +190,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
-	    systemd/sg-lockd.service systemd/sg-update-prepare.service \
+	    systemd/sg-lockd.service systemd/sg-update-prepare.service systemd/sg-defender.service \
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
@@ -251,12 +252,14 @@ lint:
 	@sh test/wineserver-wait-test.sh
 	@sh test/powershell-cmd-test.sh
 	@sh test/wine-reload-test.sh
+	@sh test/defender-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd
 	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-audit

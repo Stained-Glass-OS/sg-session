@@ -1,0 +1,19 @@
+[Unit]
+Description=SG Defender: downloaded programs scanned (ClamAV)
+Documentation=https://freesoft.page/docs/guide/06-viruses.html
+# clamd keeps the definitions loaded; freshclam keeps them current
+Wants=clamav-daemon.service clamav-freshclam.service
+After=clamav-daemon.service local-fs.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/sg-defender
+Restart=on-failure
+RestartSec=10s
+# a background job: the person's programs first
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

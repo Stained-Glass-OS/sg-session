@@ -28,7 +28,7 @@ STATE=${SG_UPDATE_STATE:-/run/sg-update}
 ARCHIVES=${SG_APT_ARCHIVES:-/var/cache/apt/archives}
 
 publish() {     # $1: file, then its content on stdin; readers never see half of it
-    cat > "$STATE/$1.tmp" && mv -f "$STATE/$1.tmp" "$STATE/$1"
+    _t=$(mktemp "$STATE/.$1.XXXXXX") && cat > "$_t" && chmod 644 "$_t" && mv -f "$_t" "$STATE/$1"
 }
 
 write_progress() {
@@ -56,7 +56,7 @@ mkdir -p "$STATE"
 chmod 755 "$STATE"
 WATCH=
 finish() {
-    [ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null
+    if [ -n "$WATCH" ]; then kill "$WATCH" 2>/dev/null; wait "$WATCH" 2>/dev/null || true; fi
     write_progress
     if [ -e "${SG_SYSTEM_UPDATE:-/system-update}" ]; then echo ready; else echo idle; fi | publish state
 }
@@ -75,6 +75,45 @@ pk() {
         *)   log "pkcon $* failed ($_rc)"; return "$_rc" ;;
     esac
 }
+
+# An installation cut short -- a power cut, an update ended from Task Manager
+# (David's laptop 2026-10-03: sg-session -95's own hang) -- leaves dpkg
+# "interrupted", and PackageKit then refuses every update until someone runs
+# dpkg --configure -a: the updates sat "pending" for good. Finish it here.
+# The packages left half-done are first replaced by their newest versions:
+# what stopped them may be the very fault a newer one fixes, and their
+# superseded versions are not worth finishing.
+unfinished() {  # packages unpacked, half-configured, half-installed or awaiting triggers
+    dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 2>/dev/null | awk 'substr($1, 2, 1) ~ /[UFHWt]/ {print $2}'
+}
+repair_dpkg() {
+    _pkgs=$(unfinished)
+    [ -n "$_pkgs" ] || return 0
+    log "an earlier installation was cut short: $(printf '%s' "$_pkgs" | tr '\n' ' ')"
+    apt-get update -qq -o DPkg::Lock::Timeout=120 >/dev/null 2>&1 || log "apt-get update failed; finishing with what is here"
+    _dl=$(mktemp -d)
+    # shellcheck disable=SC2086  # one word per package
+    (cd "$_dl" && apt-get download -qq $_pkgs >/dev/null 2>&1) || true
+    _newer=""
+    for _deb in "$_dl"/*.deb; do
+        [ -f "$_deb" ] || continue
+        _p=$(dpkg-deb -f "$_deb" Package) _v=$(dpkg-deb -f "$_deb" Version)
+        _have=$(dpkg-query -W -f '${Version}' "$_p" 2>/dev/null)
+        if dpkg --compare-versions "$_v" gt "$_have"; then
+            _newer="$_newer $_deb"; log "$_p $_have is superseded by $_v"
+        fi
+    done
+    # shellcheck disable=SC2086
+    [ -z "$_newer" ] || DEBIAN_FRONTEND=noninteractive timeout 1800 dpkg --force-confdef --force-confold -i $_newer ||
+        log "installing the newer versions failed"
+    DEBIAN_FRONTEND=noninteractive timeout 1800 dpkg --force-confdef --force-confold --configure -a ||
+        log "dpkg --configure -a failed"
+    rm -rf "$_dl"
+    _left=$(unfinished)
+    if [ -z "$_left" ]; then log "the cut-short installation is finished"
+    else log "still unfinished: $(printf '%s' "$_left" | tr '\n' ' ')"; fi
+}
+repair_dpkg
 
 log "refreshing package lists"
 pk refresh

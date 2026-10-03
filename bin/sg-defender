@@ -1,0 +1,303 @@
+#!/usr/bin/python3
+# sg-defender -- SG Defender: what is downloaded is scanned before it runs.
+#
+# David 2026-10-03: the SG Store installs known-good software (each Windows
+# installer is the maker's file, checked against its SHA-256; Linux apps come
+# from signed apt repositories), and everything else that comes in -- a
+# browser's download, a mail attachment saved, a file copied from a stick --
+# is checked by ClamAV (open source, Debian's clamav-daemon), on by default,
+# off in Settings for whoever needs the memory back (its definitions stay
+# loaded: about a gigabyte, worth it).
+#
+# Runs as root. Watches every account's Downloads and Desktop (inotify): a
+# file written there, or moved in, that could run -- a Windows or Linux
+# program, an installer, a script, an archive that may hold one, an Office
+# document that may hold macros -- is scanned by clamd (clamdscan --fdpass:
+# root opens it, clamd reads it). A detection is moved, whole, into
+# /var/lib/stained-glass/defender/quarantine (root only), and the person is
+# told: a notice in /var/lib/stained-glass/defender/notices/<uid>/ that their session
+# shows. Other files are not looked at: scanning everything a program opens
+# would cost the speed it was not worth.
+#
+#   /etc/stained-glass/defender.conf   enabled=1|0 (sg-admind's defender on|off)
+#   /var/lib/stained-glass/defender/status.json   for Settings (no file names)
+#
+# SG_DEFENDER_* environment variables point all of this elsewhere for the
+# test (test/defender-test.sh).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import ctypes
+import ctypes.util
+import datetime
+import errno
+import hashlib
+import json
+import os
+import pwd
+import secrets
+import select
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+CONF = os.environ.get("SG_DEFENDER_CONF", "/etc/stained-glass/defender.conf")
+STATE = os.environ.get("SG_DEFENDER_STATE", "/var/lib/stained-glass/defender")
+NOTICES = os.environ.get("SG_DEFENDER_NOTICES", "/var/lib/stained-glass/defender/notices")
+HOMES = os.environ.get("SG_DEFENDER_HOMES")          # test: watch these homes only (":"-separated)
+SCAN = os.environ.get("SG_DEFENDER_SCAN", "clamdscan --fdpass --no-summary --infected").split()
+WATCHED = ("Downloads", "Desktop")
+
+# what could run, by name
+RUNNABLE = {
+    ".exe", ".msi", ".msix", ".msp", ".com", ".scr", ".pif", ".cpl", ".dll", ".sys", ".ocx",
+    ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".lnk",
+    ".jar", ".appx", ".appxbundle", ".reg", ".inf",
+    ".sh", ".run", ".bin", ".appimage", ".deb", ".rpm", ".py", ".pl",
+    ".zip", ".7z", ".rar", ".cab", ".tar", ".gz", ".tgz", ".xz", ".bz2", ".iso", ".img",
+    ".doc", ".docm", ".xls", ".xlsm", ".ppt", ".pptm", ".rtf", ".pdf",
+}
+# ... or by its first bytes: a PE (MZ), ELF, a script, an archive, an OLE file (MSI, old Office)
+MAGIC = (b"MZ", b"\x7fELF", b"#!", b"PK\x03\x04", b"MSCF", b"\xd0\xcf\x11\xe0", b"Rar!", b"7z\xbc\xaf",
+         b"%PDF")
+# a browser's download in progress: scanned once it is renamed to its own name
+PARTIAL = (".part", ".crdownload", ".download", ".partial", ".tmp", ".opdownload")
+
+IN_CLOSE_WRITE, IN_MOVED_TO, IN_CREATE, IN_DELETE_SELF, IN_ISDIR = 0x8, 0x80, 0x100, 0x400, 0x40000000
+
+
+def log(msg):
+    sys.stderr.write("sg-defender: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def enabled():
+    try:
+        with open(CONF) as f:
+            for line in f:
+                if line.strip().replace(" ", "") == "enabled=0":
+                    return False
+    except OSError:
+        pass
+    return True
+
+
+def runnable(path):
+    name = os.path.basename(path).lower()
+    if name.endswith(PARTIAL):
+        return False
+    if os.path.splitext(name)[1] in RUNNABLE:
+        return True
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return False
+    return any(head.startswith(m) for m in MAGIC)
+
+
+class Inotify:
+    def __init__(self):
+        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        self._add = libc.inotify_add_watch
+        self._add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        self.fd = libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), "inotify_init1")
+        self.wd = {}            # wd -> directory
+
+    def watch(self, path):
+        wd = self._add(self.fd, path.encode(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE_SELF)
+        if wd >= 0:
+            self.wd[wd] = path
+        return wd >= 0
+
+    def events(self, timeout):
+        r, _, _ = select.select([self.fd], [], [], timeout)
+        if not r:
+            return []
+        try:
+            data = os.read(self.fd, 65536)
+        except BlockingIOError:
+            return []
+        out, i = [], 0
+        while i + 16 <= len(data):
+            wd, mask, _, size = struct.unpack_from("iIII", data, i)
+            name = data[i + 16:i + 16 + size].split(b"\0", 1)[0].decode(errors="surrogateescape")
+            i += 16 + size
+            d = self.wd.get(wd)
+            if mask & IN_DELETE_SELF:
+                self.wd.pop(wd, None)
+            elif d and name:
+                out.append((mask, os.path.join(d, name)))
+        return out
+
+
+def homes():
+    if HOMES:
+        return [(h, os.stat(h).st_uid) for h in HOMES.split(":") if os.path.isdir(h)]
+    out = []
+    for p in pwd.getpwall():
+        if p.pw_uid >= 1000 and p.pw_uid < 60000 and p.pw_dir.startswith("/home/") and os.path.isdir(p.pw_dir):
+            out.append((p.pw_dir, p.pw_uid))
+    return out
+
+
+def owner_of(path, fallback):
+    try:
+        return os.stat(path).st_uid
+    except OSError:
+        return fallback
+
+
+def status_write(st):
+    os.makedirs(STATE, mode=0o755, exist_ok=True)
+    tmp = os.path.join(STATE, "status.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(st, f, indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, os.path.join(STATE, "status.json"))
+
+
+def engine_version():
+    """ClamAV's engine and definitions: "ClamAV 1.4.3/27780/Fri Oct  3 08:24:01 2026" """
+    try:
+        r = subprocess.run(SCAN[:1] + ["--version"], capture_output=True, text=True, timeout=20)
+        return r.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def chown_quiet(path, gid):
+    """root's, readable by the person's group (the test, not root, keeps its own)"""
+    try:
+        os.chown(path, 0, gid)
+    except PermissionError:
+        pass
+
+
+def quarantine(path, uid, signature):
+    qdir = os.path.join(STATE, "quarantine")
+    os.makedirs(qdir, mode=0o700, exist_ok=True)
+    os.chmod(qdir, 0o700)
+    qid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    dst = os.path.join(qdir, qid + ".bin")
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        size = os.path.getsize(path)
+        try:
+            os.rename(path, dst)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(path, dst)
+            os.unlink(path)
+        os.chmod(dst, 0o600)
+    except OSError as e:
+        log("could not quarantine %s: %s" % (path, e))
+        return None
+    meta = {"id": qid, "path": path, "uid": uid, "signature": signature, "size": size,
+            "sha256": h.hexdigest(), "time": datetime.datetime.now().isoformat(timespec="seconds")}
+    with open(os.path.join(qdir, qid + ".json"), "w") as f:
+        json.dump(meta, f, indent=1)
+    os.chmod(os.path.join(qdir, qid + ".json"), 0o600)
+    # the person's notice: their session shows it, Settings lists it
+    try:
+        user = pwd.getpwuid(uid)
+        ndir = os.path.join(NOTICES, str(uid))
+        os.makedirs(NOTICES, mode=0o755, exist_ok=True)
+        os.makedirs(ndir, mode=0o750, exist_ok=True)
+        chown_quiet(ndir, user.pw_gid)
+        os.chmod(ndir, 0o750)
+        tmp = os.path.join(ndir, qid + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump({"id": qid, "name": os.path.basename(path), "folder": os.path.dirname(path),
+                       "signature": signature, "time": meta["time"]}, f)
+        chown_quiet(tmp, user.pw_gid)
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, os.path.join(ndir, qid + ".json"))
+    except (KeyError, OSError) as e:
+        log("could not tell uid %d: %s" % (uid, e))
+    return qid
+
+
+def scan(path, uid, st):
+    """clamd's verdict: (True, signature) found, (False, None) clean, None not known"""
+    try:
+        r = subprocess.run(SCAN + [path], capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("scanning %s failed: %s" % (path, e))
+        return None
+    if r.returncode == 0:
+        return (False, None)
+    if r.returncode == 1:
+        sig = "unknown"
+        for line in r.stdout.splitlines():
+            if line.endswith(" FOUND"):
+                sig = line.rsplit(": ", 1)[-1][:-6]
+        return (True, sig)
+    log("scanning %s: %s" % (path, (r.stderr or r.stdout).strip()[:200]))
+    return None
+
+
+def main():
+    os.umask(0o022)
+    ino = Inotify()
+    st = {"enabled": enabled(), "engine": engine_version(), "scanned": 0, "found": 0,
+          "since": datetime.datetime.now().isoformat(timespec="seconds")}
+    status_write(st)
+    pending = {}        # path -> (uid, tries, due)
+    last_homes = 0
+    log("watching Downloads and Desktop%s" % ("" if st["enabled"] else " (turned off)"))
+    while True:
+        now = time.monotonic()
+        if now - last_homes > 30:
+            watched = set(ino.wd.values())
+            for home, _ in homes():
+                for sub in WATCHED:
+                    d = os.path.join(home, sub)
+                    if d not in watched and os.path.isdir(d):
+                        ino.watch(d)
+            last_homes = now
+            on = enabled()
+            if on != st["enabled"]:
+                st["enabled"] = on
+                log("turned %s" % ("on" if on else "off"))
+            st["engine"] = engine_version() or st["engine"]
+            status_write(st)
+        for mask, path in ino.events(1.0):
+            if mask & IN_ISDIR:
+                if mask & (IN_CREATE | IN_MOVED_TO):
+                    ino.watch(path)
+                continue
+            if mask & (IN_CLOSE_WRITE | IN_MOVED_TO):
+                # settle a moment: a program may write it in more than one go
+                pending[path] = (owner_of(path, 0), 0, time.monotonic() + 0.5)
+        for path, (uid, tries, due) in list(pending.items()):
+            if time.monotonic() < due:
+                continue
+            del pending[path]
+            if not st["enabled"] or not os.path.isfile(path) or os.path.islink(path) or not runnable(path):
+                continue
+            verdict = scan(path, uid, st)
+            if verdict is None:
+                if tries < 20:          # clamd still loading its definitions: again shortly
+                    pending[path] = (uid, tries + 1, time.monotonic() + 15)
+                continue
+            st["scanned"] += 1
+            if verdict[0]:
+                qid = quarantine(path, uid, verdict[1])
+                if qid:
+                    st["found"] += 1
+                    st["last_found"] = datetime.datetime.now().isoformat(timespec="seconds")
+                    log("%s: %s found, quarantined (%s)" % (path, verdict[1], qid))
+            status_write(st)
+
+
+if __name__ == "__main__":
+    main()
