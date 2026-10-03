@@ -236,13 +236,42 @@ sg_helper() {   # NAME COUNTVAR CMD...
 }
 sg_shell_helpers() {
     (
+        # a loop for the whole session: a check that fails (pkill finding
+        # nothing, a test) must not end it, as set -e would
+        set +e
         # the whole session (this script's), through the shell's restarts:
         # acting while the desktop is there
+        _shell=""
         while kill -0 "$$" 2>/dev/null; do
-            if ! xwininfo -root -tree 2>/dev/null | grep -q '"shell - Wine Desktop"'; then
+            _desk=$(xwininfo -root -tree 2>/dev/null | awk '/"shell - Wine Desktop"/ { print $1; exit }')
+            if [ -z "$_desk" ]; then
                 sleep 1
                 continue
             fi
+            # not while the machine's wineserver is away (restarting): a
+            # program started then gets a wineserver of the user's own, and
+            # the machine's could not start again beside it
+            if id "${SG_SYSTEM_USER:-sgsystem}" >/dev/null 2>&1 &&
+               ! pgrep -u "${SG_SYSTEM_USER:-sgsystem}" -x wineserver >/dev/null 2>&1; then
+                sleep 1
+                continue
+            fi
+            # the shell is the desktop window's process (_NET_WM_PID): its
+            # window id can be the same after a restart, the X server giving
+            # the dead one's ids again
+            _now=$(xprop -id "$_desk" _NET_WM_PID 2>/dev/null | sed -n 's/.* = //p')
+            if [ -n "$_shell" ] && [ -n "$_now" ] && [ "$_now" != "$_shell" ]; then
+                # the shell came back: what was running still talks to the
+                # dead one (Start opened from its old taskbar, the icons sat
+                # in the old tray, sg-deskcomp drew into the old desktop) --
+                # all started again, for the new shell
+                sg_log "the shell came back: its helpers started again for it"
+                for _h in sg-deskcomp sg-start64.exe sg-netflyout64.exe sg-battery64.exe sg-volume64.exe sg-dictate64.exe; do
+                    pkill -u "$(id -u)" -x "$(printf '%.15s' "$_h")" 2>/dev/null
+                done
+                sleep 1
+            fi
+            [ -n "$_now" ] && _shell=$_now
             if [ "${SG_DESKCOMP:-1}" != 0 ] && [ -x "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-deskcomp" ]; then
                 sg_helper sg-deskcomp _n_dc "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-deskcomp"
             fi

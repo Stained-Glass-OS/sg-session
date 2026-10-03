@@ -1,3 +1,14 @@
+sg-session (0.1.0-96) unstable; urgency=medium
+
+  * sg-run-explorer: the shell's helpers (Start, the tray's icons,
+    sg-deskcomp) start again when the shell comes back after a crash --
+    Start opened Wine's own menu until a reboot (David 2026-10-02); told by
+    the desktop window's _NET_WM_PID, its id can be the same. The keeper
+    loop survives a failing check (set +e) and waits while the machine's
+    wineserver restarts (a program started then blocked it).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 02:05:00 +0000
+
 sg-session (0.1.0-95) unstable; urgency=medium
 
   * The shell's helpers -- Start, the taskbar's network, battery and volume
