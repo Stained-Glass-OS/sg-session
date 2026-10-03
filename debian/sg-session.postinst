@@ -170,7 +170,31 @@ case "$1" in
         # entries, on machines installed before they came (sg-boot-splash).
         /usr/bin/sg-boot-splash apply || true
         ;;
+    triggered)
+        ;;
 esac
+
+# The units as this package has them, before debhelper restarts sg-prefix-init
+# below: with the old sg-wineserver unit still loaded (Requires=), that
+# restart stopped the machine's wineserver
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+    systemctl --system daemon-reload >/dev/null 2>&1 || true
+fi
+
+# The machine's wineserver after an update (configure) or a wine-sg update
+# (the trigger on its wineserver): restarted only when the installed Wine
+# can no longer talk to it -- otherwise every Windows program in every
+# session would end for nothing
+if [ "$1" = configure ] || [ "$1" = triggered ]; then
+    if [ -r /usr/lib/stained-glass/sg-common.sh ]; then
+        # shellcheck source=lib/sg-common.sh
+        . /usr/lib/stained-glass/sg-common.sh
+        if sg_wineserver_stale; then
+            echo "sg-session: the Windows system's server is restarted for the new Wine"
+            systemctl restart sg-wineserver.service || true
+        fi
+    fi
+fi
 
 #DEBHELPER#
 exit 0

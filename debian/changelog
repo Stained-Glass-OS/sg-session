@@ -1,3 +1,26 @@
+sg-session (0.1.0-97) unstable; urgency=medium
+
+  * An update no longer hangs, nor ends every Windows program (David
+    2026-10-03, "I think your build is hung"): sg-wineserver wants
+    sg-prefix-init rather than requiring it, so the update's run of
+    sg-prefix-init (new defaults) no longer stopped the machine's wineserver
+    -- every Windows program in every session ended, and the prefix tools
+    waited for a temporary wineserver the Windows services kept up, until
+    systemd's 10 minutes. The waits (sg_wineserver_wait) skip the machine's
+    persistent wineserver and are bounded otherwise. The update restarts
+    sg-wineserver only when the installed Wine cannot talk to it
+    (sg_wineserver_stale), also after a wine-sg update (a dpkg trigger on
+    its wineserver). The units are reloaded before the update's restarts (an
+    older sg-wineserver unit still loaded stopped the server). A wineserver
+    another account started for the machine's prefix while it was down is
+    ended before the machine's starts -- it could never start beside it
+    ("status 2" for good, the session on a server without the services).
+    And sg-prefix-init's exit no longer stops the machine's wineserver (its
+    "stop the transient server" stopped the running one at every update).
+    Test: test/wineserver-wait-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 14:00:00 +0000
+
 sg-session (0.1.0-96) unstable; urgency=medium
 
   * sg-run-explorer: the shell's helpers (Start, the tray's icons,

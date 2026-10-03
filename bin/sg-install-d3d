@@ -65,7 +65,7 @@ for name in $overrides; do
     wine reg add 'HKLM\Software\Wine\DllOverrides' /v "$name" /t REG_SZ /d native /f >/dev/null 2>&1 \
         || sg_log "WARNING: could not set override for $name"
 done
-wineserver -w
+sg_wineserver_wait 120
 
 sg_log "D3D overrides set to native:$overrides"
 printf '%s\n' "$VERSION" > "$STAMP"

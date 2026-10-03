@@ -663,6 +663,65 @@ sg_start_deskcomp() {
 # the shell's restart: one xkill'ed Linux window took explorer with it, the
 # shell came back with Wine's own Start menu, ours never again (David
 # 2026-10-02).
+# Is the machine's own wineserver (sg-wineserver.service) running? Then the
+# prefix's server is that one, for good: never waited for, never stopped by a
+# prefix tool (sg-prefix-init's exit stopped it -- every Windows program in
+# every session ended at each update)
+sg_machine_wineserver_up() {
+    command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sg-wineserver.service 2>/dev/null
+}
+
+# Wait for the prefix's wineserver to be done -- unless it is the machine's
+# own, sg-wineserver.service, which runs for good: what it was given is live
+# in it already, and waiting for it to exit hung every update that brought
+# new defaults (sg-prefix-init, run again by a package, waited the 10 minutes
+# systemd gives it -- David 2026-10-03, "I think your build is hung"). Its
+# own: bounded (a service that never ends keeps any other one up too).
+#   sg_wineserver_wait [SECONDS]
+sg_wineserver_wait() {
+    sg_machine_wineserver_up && return 0
+    timeout "${1:-120}" wineserver -w 2>/dev/null || true
+}
+
+# Can the installed Wine still talk to the running machine wineserver? Not
+# after an update that changed the server's protocol: every Windows program
+# started then fails ("version mismatch") until the server is restarted. Only
+# then must an update restart it -- restarting it ends every Windows program
+# in every session. 0: it must be restarted; 1: it is fine (or none runs).
+#   sg_wineserver_stale
+sg_wineserver_stale() {
+    sg_machine_wineserver_up || return 1
+    _out=$(timeout 60 runuser -u "${SG_SYSTEM_USER:-sgsystem}" -- sh -c \
+        '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; WINEDEBUG=-all wine cmd /c exit' 2>&1)
+    case "$_out" in *"version mismatch"*) return 0 ;; esac
+    return 1
+}
+
+# A wineserver another account started for the shared prefix while the
+# machine's was down (an update stopped it; a running program reconnected in
+# that moment) holds the prefix's server directory: the machine's could not
+# start beside it -- "status 2" for good -- and that session was left on a
+# server without the Windows system's services. Ended here (as root, before
+# the machine's starts): its programs were on it alone.
+#   sg_wineserver_clear_strays
+sg_wineserver_clear_strays() {
+    _px=${SG_PREFIX:-/var/lib/stained-glass/prefix}
+    [ -d "$_px" ] || return 0
+    _dir="/tmp/.wine-sg-$(stat -c %D "$_px")-$(printf %x "$(stat -c %i "$_px")")"
+    for _sig in TERM KILL; do
+        _found=0
+        for _p in $(pgrep -x wineserver); do
+            [ "$(stat -c %U "/proc/$_p" 2>/dev/null)" = "${SG_SYSTEM_USER:-sgsystem}" ] && continue
+            case "$(readlink "/proc/$_p/cwd" 2>/dev/null)" in
+                "$_dir"/*) kill "-$_sig" "$_p" 2>/dev/null && _found=1
+                           sg_log "ended a stray wineserver of $(stat -c %U "/proc/$_p" 2>/dev/null) on the machine's prefix ($_p)" ;;
+            esac
+        done
+        [ "$_found" = 1 ] || return 0
+        sleep 2
+    done
+}
+
 sg_keep_running() {
     _kname=$(printf '%.15s' "$1")
     shift

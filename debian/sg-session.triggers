@@ -1,0 +1,3 @@
+# wine-sg updated: sg-session.postinst restarts the machine's wineserver if
+# the new Wine cannot talk to the running one
+interest-noawait /opt/wine-sg/bin/wineserver

@@ -5,7 +5,11 @@ Documentation=https://github.com/Stained-Glass-OS/stained-glass
 # and outlive every logout -- a wineserver started by a session cannot host a
 # service that runs from boot. See debt item D5.
 After=sg-prefix-init.service systemd-tmpfiles-setup.service
-Requires=sg-prefix-init.service
+# Wants, not Requires: an update runs sg-prefix-init again (new defaults), and
+# with Requires that stopped this server -- every Windows program in every
+# session ended, and the update hung on a wineserver that never exits
+# (David 2026-10-03, "I think your build is hung")
+Wants=sg-prefix-init.service
 Before=greetd.service
 ConditionPathExists=/var/lib/stained-glass/prefix/.sg-initialized
 
@@ -25,6 +29,9 @@ Group=sgwine
 Environment=HOME=/var/lib/stained-glass
 Environment=XDG_RUNTIME_DIR=/run/stained-glass
 RuntimeDirectory=stained-glass
+# a wineserver another account started for the prefix while this one was down
+# holds its directory: ended first (as root), or this could never start again
+ExecStartPre=+/bin/sh -c '. /usr/lib/stained-glass/sg-common.sh; sg_wineserver_clear_strays'
 ExecStart=/usr/bin/sg-wineserver
 # SYSTEM may change the permissions of a file another account owns, as on
 # Windows (an elevated installer moving a download from the user's Temp into

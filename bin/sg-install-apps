@@ -119,6 +119,6 @@ if [ -n "$path_dirs" ]; then
     fi
 fi
 
-wineserver -w
+sg_wineserver_wait 120
 printf '%s\n' "$VERSION" > "$STAMP"
 sg_log "bundled applications installed ($VERSION)"
