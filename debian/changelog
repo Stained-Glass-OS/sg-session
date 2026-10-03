@@ -8,6 +8,11 @@ sg-session (0.1.0-95) unstable; urgency=medium
     2026-10-02). At most ten times each. Test: test/keep-running-test.sh.
   * device-rules-test checks the rules' syntax without the machine's groups
     (udevadm verify --resolve-names=never): CI has no sgwine group.
+  * The title bars are sized to the screen at sign-in (sg-settings --set
+    metrics, a few seconds after the shell starts) and when the output
+    changes size (--set desktop sizes them too): each look's caption and
+    frame grow with the screen past 800 px (David 2026-10-02: "kinda small
+    on a 1080p screen"). Test: test/desktop-follow-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 00:05:00 +0000
 

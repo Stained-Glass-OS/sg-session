@@ -39,11 +39,17 @@ SG_ADMIN_GROUP="${SG_ADMIN_GROUP:-sg-admins}"
 # tool, the compositor -- left the desktop at the old size and the taskbar off
 # the screen (David 2026-09-29: the shell did not fill the space after a display
 # resize). The X root is the output: when its size changes, Wine's desktop
-# takes it (sg-settings --set desktop WxH). Runs until the session (PID $2)
-# ends. $1 is the size the desktop was started at.
+# takes it (sg-settings --set desktop WxH, which sizes the title bars to it
+# too). Runs until the session (PID $2) ends. $1 is the size the desktop was
+# started at. First the title bars are sized to the screen (--set metrics).
 sg_desktop_follow() {
     _df_last=$1 _df_session=$2
     _df_settings="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-settings64.exe"
+    # the title bars take their share of this screen (Settings > Colors > Size
+    # title bars to the screen; David 2026-10-02: "kinda small on a 1080p
+    # screen"), once the shell is up; a resize below rescales them too
+    sleep "${SG_METRICS_DELAY:-4}"
+    [ -f "$_df_settings" ] && wine "$_df_settings" --set metrics >/dev/null 2>&1
     while sleep "${SG_DESKTOP_WATCH_SECONDS:-2}" && kill -0 "$_df_session" 2>/dev/null; do
         _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
         if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi
