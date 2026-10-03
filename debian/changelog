@@ -1,3 +1,13 @@
+sg-session (0.1.0-98) unstable; urgency=medium
+
+  * powershell: from bash, PowerShell on this account's Windows side -- its
+    registry hive, files and programs (David 2026-10-03). For remote help:
+    ssh in, su - USER, powershell. As root: the machine's, as SYSTEM.
+    From PowerShell, bash goes the other way (wine-sg 0776's bash.exe).
+    Test: test/powershell-cmd-test.sh; VM-verified.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 15:20:00 +0000
+
 sg-session (0.1.0-97) unstable; urgency=medium
 
   * An update no longer hangs, nor ends every Windows program (David

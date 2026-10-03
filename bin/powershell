@@ -1,0 +1,21 @@
+#!/bin/sh
+# powershell [ARGS]: PowerShell on this account's Windows side, from bash --
+# its registry hive, its files and programs (David 2026-10-03). For remote
+# help: ssh in, `su - USER`, then `powershell`: that person's Windows side
+# (Windows itself has no su). As root (who has no Windows account): the
+# machine's, as SYSTEM, as psexec -s would. `exit` comes back to bash; from
+# PowerShell, `bash` is the way back the other way (wine-sg's bash.exe).
+set -eu
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+PWSH='C:\Program Files\PowerShell\7\pwsh.exe'
+if [ "${SG_TEST_UID:-$(id -u)}" = 0 ]; then
+    exec runuser -u "${SG_SYSTEM_USER:-sgsystem}" -- "$0" "$@"
+fi
+sg_wine_env
+if [ ! -e "$SG_PREFIX/drive_c/Program Files/PowerShell/7/pwsh.exe" ] && [ -z "${SG_TEST_UID:-}" ]; then
+    echo "powershell: PowerShell 7 is not installed (sg-install-apps installs it)" >&2
+    exit 1
+fi
+exec wine "$PWSH" "$@"

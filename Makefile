@@ -39,6 +39,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo bin/sg-firmware-initrd $(BINDIR)
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
+	install -m 0755 bin/powershell $(BINDIR)
 	install -d $(LIBDIR)/pdf
 	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py $(LIBDIR)/pdf/
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
@@ -247,6 +248,7 @@ lint:
 	@sh test/backdrop-first-test.sh
 	@sh test/keep-running-test.sh
 	@sh test/wineserver-wait-test.sh
+	@sh test/powershell-cmd-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
