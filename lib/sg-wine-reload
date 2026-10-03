@@ -1,0 +1,19 @@
+#!/bin/sh
+# Ctrl+Alt+Backspace (sg-compositor's SG_RELOAD_COMMAND): this account's
+# Windows side started again (David 2026-10-03, "to reload the wine
+# software"). Every Windows program of this account ends -- not the machine's
+# wineserver, which serves every account and the services -- and the
+# session's keeper (sg-run-explorer) brings the shell back, its helpers with
+# it.
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+_wine="${SG_WINE_DIR:-/opt/wine-sg}"
+_n=0
+for _p in $(pgrep -u "$(id -u)"); do
+    case "$(readlink "/proc/$_p/exe" 2>/dev/null)" in
+        "$_wine"/*) kill -KILL "$_p" 2>/dev/null && _n=$((_n + 1)) ;;
+    esac
+done
+sg_log "Ctrl+Alt+Backspace: $_n of this account's Wine processes ended; the shell comes back"

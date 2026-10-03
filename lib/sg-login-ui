@@ -93,5 +93,6 @@ fi
 # Through systemd-cat so the compositor's and bridge's output -- including the
 # compositor's audit lines -- reaches the journal (tag sg-login); greetd does
 # not forward a greeter's output anywhere.
-exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
+# -s: Ctrl+Alt+F1-F9 reach the text consoles from the sign-in screen too
+exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -s -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
     "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-greeter64.exe"

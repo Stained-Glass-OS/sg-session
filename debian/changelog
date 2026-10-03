@@ -5,6 +5,11 @@ sg-session (0.1.0-98) unstable; urgency=medium
     ssh in, su - USER, powershell. As root: the machine's, as SYSTEM.
     From PowerShell, bash goes the other way (wine-sg 0776's bash.exe).
     Test: test/powershell-cmd-test.sh; VM-verified.
+  * Ctrl+Alt+F1-F9 reach text consoles, from the session and the sign-in
+    screen (the compositor's -s; logind starts nine), and Ctrl+Alt+Backspace
+    restarts this account's Windows side (sg-wine-reload: its Windows
+    programs end, the keeper brings the shell back; sg-compositor 0.2.0+sg31
+    runs it) (David 2026-10-03). Test: test/wine-reload-test.sh.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 15:20:00 +0000
 

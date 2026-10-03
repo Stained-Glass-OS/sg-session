@@ -119,7 +119,12 @@ case "$SG_DISPLAY_PATH" in
                 SG_LOCK_CONTROL="$_dir/control.sock"
                 export SG_LOCK_PRIV SG_LOCK_CONTROL
                 _uid=$(id -u "$SG_SYSTEM_USER" 2>/dev/null || true)
-                set -- -L "$SG_LOCK_PRIV" -C "$SG_LOCK_CONTROL"
+                # -s: Ctrl+Alt+F1-F9 switch to the text consoles; the
+                # reload key (Ctrl+Alt+Backspace) restarts this account's
+                # Windows side (David 2026-10-03)
+                SG_RELOAD_COMMAND="$SG_LIB/sg-wine-reload"
+                export SG_RELOAD_COMMAND
+                set -- -s -L "$SG_LOCK_PRIV" -C "$SG_LOCK_CONTROL"
                 [ -n "$_uid" ] && set -- "$@" -U "$_uid"
             else
                 sg_log "WARNING: no writable $SG_SEAT_DIR: this session cannot be locked"
