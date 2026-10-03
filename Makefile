@@ -20,7 +20,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
@@ -253,6 +253,7 @@ lint:
 	@sh test/powershell-cmd-test.sh
 	@sh test/wine-reload-test.sh
 	@sh test/defender-test.sh
+	@sh test/defender-notify-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl

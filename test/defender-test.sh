@@ -55,6 +55,16 @@ ls "$T"/notices/*/*.json >/dev/null 2>&1 && grep -q '"name": "setup.exe"' "$T"/n
 [ ! -e "$T/home/Downloads/later.exe" ] && echo "PASS  ...and scanned once renamed (caught)" || { echo "FAIL  the renamed download was missed"; RC=1; }
 [ ! -e "$T/home/Downloads/sub/deep.exe" ] && [ ! -e "$T/home/Desktop/run.sh" ] && echo "PASS  in a new folder under Downloads, and on the Desktop" || { echo "FAIL  deep/desktop: $(ls "$T/home/Downloads/sub" "$T/home/Desktop")"; RC=1; }
 grep -q '"found": 4' "$T/state/status.json" && echo "PASS  Settings' status counts them (4 found)" || { echo "FAIL  status: $(cat "$T/state/status.json")"; RC=1; }
+# restored by an administrator: that exact file is let be, another still caught
+printf 'MZ%s trusted' "$EICAR" > "$T/ok.bin"; sha256sum "$T/ok.bin" | cut -d' ' -f1 > "$T/state/allowed"
+cp "$T/ok.bin" "$T/home/Downloads/trusted.exe"; printf 'MZ%s other' "$EICAR" > "$T/home/Downloads/other.exe"; sleep 3
+[ -e "$T/home/Downloads/trusted.exe" ] && [ ! -e "$T/home/Downloads/other.exe" ] \
+    && echo "PASS  a file an administrator restored is not quarantined again; others still are" || { echo "FAIL  allowed: $(ls "$T/home/Downloads")"; RC=1; }
+grep -q '"mode": ' "$T"/state/quarantine/*.json && echo "PASS  quarantine keeps the file's mode, for a restore" || { echo "FAIL  no mode kept"; RC=1; }
+kill $DP; sleep 0.5; rm -f "$T/home/Downloads/trusted.exe"
+sed 's/if verdict\[0\] and allowed(path):/if False:/' "$HERE/bin/sg-defender" > "$T/mut.py"; start "$T/mut.py"
+cp "$T/ok.bin" "$T/home/Downloads/trusted.exe"; sleep 3
+[ ! -e "$T/home/Downloads/trusted.exe" ] && echo "PASS  MUTANT IGNORE_ALLOWED caught" || { echo "FAIL  MUTANT IGNORE_ALLOWED not caught"; RC=1; }
 kill $DP; sleep 0.5
 echo "enabled=0" > "$T/defender.conf"; start "$HERE/bin/sg-defender"
 printf 'MZ%s' "$EICAR" > "$T/home/Downloads/off.exe"; sleep 3

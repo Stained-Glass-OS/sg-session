@@ -21,6 +21,8 @@
 #
 #   /etc/stained-glass/defender.conf   enabled=1|0 (sg-admind's defender on|off)
 #   /var/lib/stained-glass/defender/status.json   for Settings (no file names)
+#   /var/lib/stained-glass/defender/allowed   SHA-256s an administrator restored
+#       (Settings' Restore, sg-admind defender-restore): not quarantined again
 #
 # SG_DEFENDER_* environment variables point all of this elsewhere for the
 # test (test/defender-test.sh).
@@ -190,6 +192,7 @@ def quarantine(path, uid, signature):
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         size = os.path.getsize(path)
+        mode = os.stat(path).st_mode & 0o777
         try:
             os.rename(path, dst)
         except OSError as e:
@@ -208,7 +211,7 @@ def quarantine(path, uid, signature):
         log("could not quarantine %s: %s" % (path, e))
         return None
     meta = {"id": qid, "path": path, "uid": uid, "signature": signature, "size": size,
-            "sha256": h.hexdigest(), "time": datetime.datetime.now().isoformat(timespec="seconds")}
+            "sha256": h.hexdigest(), "mode": mode, "time": datetime.datetime.now().isoformat(timespec="seconds")}
     with open(os.path.join(qdir, qid + ".json"), "w") as f:
         json.dump(meta, f, indent=1)
     os.chmod(os.path.join(qdir, qid + ".json"), 0o600)
@@ -242,6 +245,25 @@ def start_clamd():
         return
     log("starting clamd")
     subprocess.run(["systemctl", "start", "--no-block", "clamav-daemon.service"], capture_output=True, check=False)
+
+
+def allowed(path):
+    """restored by an administrator: this exact file is let be"""
+    try:
+        with open(os.path.join(STATE, "allowed")) as f:
+            sums = {line.split()[0] for line in f if line.strip()}
+    except OSError:
+        return False
+    if not sums:
+        return False
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return False
+    return h.hexdigest() in sums
 
 
 def scan(path, uid, st):
@@ -311,7 +333,9 @@ def main():
                     pending[path] = (uid, tries + 1, time.monotonic() + 15)
                 continue
             st["scanned"] += 1
-            if verdict[0]:
+            if verdict[0] and allowed(path):
+                log("%s: %s found, but an administrator restored this file: let be" % (path, verdict[1]))
+            elif verdict[0]:
                 qid = quarantine(path, uid, verdict[1])
                 if qid:
                     st["found"] += 1

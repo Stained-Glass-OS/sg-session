@@ -1,3 +1,16 @@
+sg-session (0.1.0-100) unstable; urgency=medium
+
+  * SG Defender's notices reach the person (David 2026-10-03): the session's
+    helper loop runs sg-defender-notify, which shows each new notice once
+    (sg-shell's sg-defender-notice popup), remembering what it showed in
+    ~/.local/state/stained-glass/defender-seen; notices older than a week
+    are left to Settings. Test test/defender-notify-test.sh.
+  * sg-defender: keeps a quarantined file's mode (for a restore) and lets be
+    a file an administrator restored (/var/lib/stained-glass/defender/allowed,
+    SHA-256s written by sg-admind's defender-restore).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 17:30:00 +0000
+
 sg-session (0.1.0-99) unstable; urgency=medium
 
   * sg-update-prepare: an installation cut short (power lost, an update

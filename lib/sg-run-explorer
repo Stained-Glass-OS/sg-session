@@ -219,6 +219,7 @@ _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
 _sgbattery="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-battery64.exe"
 _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
+_sgshelldir="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}"
 # The shell's helpers, kept running while the desktop is there (sg_keep_running):
 # started now, and again within seconds of one dying or the shell's restart --
 # at most SG_HELPER_RESTARTS times each, so one that cannot run is let be.
@@ -289,6 +290,8 @@ sg_shell_helpers() {
             if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
                 sg_helper sg-dictate64.exe _n_dic wine "$_sgdictate" /background
             fi
+            # what SG Defender quarantined from this person's files: shown once
+            [ -f "$_sgshelldir/sg-defender-notice64.exe" ] && sh "$SG_LIB/sg-defender-notify"
             sleep "${SG_HELPER_INTERVAL:-5}"
         done
     ) &

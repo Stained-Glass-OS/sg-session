@@ -1,0 +1,32 @@
+#!/bin/sh
+# sg-defender-notify -- tell this person what SG Defender quarantined.
+#
+# sg-defender (root) leaves a notice for each detection in
+# /var/lib/stained-glass/defender/notices/<uid>/<id>.json. The session's
+# helper loop (sg-run-explorer) runs this every few seconds: each notice not
+# shown yet is shown once (sg-defender-notice64.exe, a popup above the tray
+# whose button opens Settings > Virus & threat protection, where it can be
+# restored or deleted), and remembered as shown. Notices older than a week
+# are not brought up at sign-in; Settings still lists them.
+#
+#   SG_DEFENDER_NOTICES  SG_DEFENDER_SEEN  SG_DEFENDER_NOTICE_CMD   for the test
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+DIR="${SG_DEFENDER_NOTICES:-/var/lib/stained-glass/defender/notices}/$(id -u)"
+SEEN="${SG_DEFENDER_SEEN:-${XDG_STATE_HOME:-$HOME/.local/state}/stained-glass/defender-seen}"
+[ -d "$DIR" ] || exit 0
+mkdir -p "$(dirname "$SEEN")" 2>/dev/null
+touch "$SEEN" 2>/dev/null || exit 0
+find "$DIR" -maxdepth 1 -name '*.json' -mtime -7 2>/dev/null | sort | while read -r f; do
+    id=$(basename "$f" .json)
+    case $id in *[!0-9a-f-]*) continue ;; esac
+    grep -qx "$id" "$SEEN" && continue
+    printf '%s\n' "$id" >> "$SEEN"
+    if [ -n "${SG_DEFENDER_NOTICE_CMD:-}" ]; then
+        $SG_DEFENDER_NOTICE_CMD "$id" &
+    else
+        wine "${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-defender-notice64.exe" "$id" >/dev/null 2>&1 &
+    fi
+done
+exit 0
