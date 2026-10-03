@@ -13,7 +13,10 @@ sg-session (0.1.0-99) unstable; urgency=medium
     keeping them current); a detection is moved to a root-only quarantine
     and the person is told. On by default; /etc/stained-glass/defender.conf
     enabled=0 (Settings > Virus & threat protection) turns it off.
-    Depends on clamav-daemon, clamav-freshclam and clamdscan.
+    Depends on clamav-daemon, clamav-freshclam and clamdscan. Starts clamd
+    itself when it is not running (the package skips it at install, before
+    freshclam has the first definitions). QA VM: a real ClamAV quarantined
+    EICAR from Downloads and Desktop, left clean files alone.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 15:45:00 +0000
 

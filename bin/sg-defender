@@ -198,6 +198,12 @@ def quarantine(path, uid, signature):
             shutil.copyfile(path, dst)
             os.unlink(path)
         os.chmod(dst, 0o600)
+        # root's alone: not the person's any more, nor shared by the folder's ACL
+        chown_quiet(dst, 0)
+        try:
+            os.removexattr(dst, "system.posix_acl_access")
+        except OSError:
+            pass
     except OSError as e:
         log("could not quarantine %s: %s" % (path, e))
         return None
@@ -226,6 +232,18 @@ def quarantine(path, uid, signature):
     return qid
 
 
+def start_clamd():
+    """clamav-daemon is skipped at install, before freshclam has fetched its
+    first definitions (ConditionPathExistsGlob), and nothing starts it once
+    they are here (QA VM 2026-10-03): start it when it is not answering."""
+    if "SG_DEFENDER_SCAN" in os.environ:
+        return
+    if subprocess.run(["systemctl", "is-active", "-q", "clamav-daemon.service"], check=False).returncode == 0:
+        return
+    log("starting clamd")
+    subprocess.run(["systemctl", "start", "--no-block", "clamav-daemon.service"], capture_output=True, check=False)
+
+
 def scan(path, uid, st):
     """clamd's verdict: (True, signature) found, (False, None) clean, None not known"""
     try:
@@ -242,6 +260,7 @@ def scan(path, uid, st):
                 sig = line.rsplit(": ", 1)[-1][:-6]
         return (True, sig)
     log("scanning %s: %s" % (path, (r.stderr or r.stdout).strip()[:200]))
+    start_clamd()
     return None
 
 
@@ -268,6 +287,8 @@ def main():
             if on != st["enabled"]:
                 st["enabled"] = on
                 log("turned %s" % ("on" if on else "off"))
+            if on:
+                start_clamd()
             st["engine"] = engine_version() or st["engine"]
             status_write(st)
         for mask, path in ino.events(1.0):
