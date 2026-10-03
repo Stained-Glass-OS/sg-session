@@ -1,3 +1,12 @@
+sg-session (0.1.0-101) unstable; urgency=medium
+
+  * sg_keep_running: a helper that died but is not yet reaped (a zombie) is
+    not running -- it was taken for running, so the helper was not started
+    again (CI's containers reap late: keep-running-test's restart check
+    failed there). Build-Depends: procps (the tests' pgrep/pkill).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 17:55:00 +0000
+
 sg-session (0.1.0-100) unstable; urgency=medium
 
   * SG Defender's notices reach the person (David 2026-10-03): the session's

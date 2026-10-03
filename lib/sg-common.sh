@@ -725,7 +725,8 @@ sg_wineserver_clear_strays() {
 sg_keep_running() {
     _kname=$(printf '%.15s' "$1")
     shift
-    pgrep -u "$(id -u)" -x "$_kname" >/dev/null 2>&1 && return 0
+    # a zombie (dead, not yet reaped) is not running: CI's containers reap late
+    pgrep -r R,S,D,T,t,I,P,W -u "$(id -u)" -x "$_kname" >/dev/null 2>&1 && return 0
     "$@" </dev/null &
     return 1
 }

@@ -13,7 +13,7 @@ k() {   # the started one must not hold the caller's output open
     ( . "$1" >/dev/null 2>&1; sg_keep_running sg-gatehelper-long-name "$T/sg-gatehelper-long-name" 300 >/dev/null 2>&1; echo $? > "$T/rc" )
     cat "$T/rc"
 }
-n() { pgrep -u "$(id -u)" -x sg-gatehelper-l | wc -l; }
+n() { pgrep -r R,S,D,T,t,I,P,W -u "$(id -u)" -x sg-gatehelper-l | wc -l; }   # zombies are not running
 a=$(k "$HERE/lib/sg-common.sh"); sleep 0.5; c1=$(n)
 b=$(k "$HERE/lib/sg-common.sh"); sleep 0.5; c2=$(n)
 pkill -u "$(id -u)" -x sg-gatehelper-l; sleep 0.5
