@@ -80,4 +80,10 @@ mutant() {   # name sed-expression check-description
 mutant NO_QUARANTINE 's/qid = quarantine(path, uid, verdict\[1\])/qid = None/' '[ -e "$T/home/Downloads/m.exe" ]'
 mutant SCAN_EVERYTHING 's/or not runnable(path):/:/' '[ "$(scanned m.txt)" != 0 ]'
 mutant NO_PARTIAL_WAIT 's/    if name.endswith(PARTIAL):/    if False:/' '[ "$(scanned m2.exe.part)" != 0 ]'
+# ClamAV runs as background work (its drop-ins): not ahead of the first-run setup
+for u in clamav-daemon clamav-freshclam; do
+    f="$HERE/systemd/$u.service.d/50-sg-background.conf"
+    grep -qx 'Nice=15' "$f" 2>/dev/null && grep -qx 'IOSchedulingClass=idle' "$f" && grep -q "$u.service.d/50-sg-background.conf" "$HERE/Makefile" \
+        && echo "PASS  $u runs at background priority" || { echo "FAIL  $u has no background-priority drop-in installed"; RC=1; }
+done
 exit $RC

@@ -1,3 +1,12 @@
+sg-session (0.1.0-102) unstable; urgency=medium
+
+  * SG Defender's ClamAV is background work: clamav-daemon and
+    clamav-freshclam drop-ins (Nice=15, CPUWeight=20, IOSchedulingClass=
+    idle). A fresh install's first boot downloads and loads the definitions;
+    the install test's first-run setup came up late beside it once.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 03 Oct 2026 19:10:00 +0000
+
 sg-session (0.1.0-101) unstable; urgency=medium
 
   * sg_keep_running: a helper that died but is not yet reaped (a zombie) is

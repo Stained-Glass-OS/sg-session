@@ -203,6 +203,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-print-setup.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
 	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
+	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
+	install -D -m 0644 systemd/clamav-freshclam.service.d/50-sg-background.conf $(UNITDIR)/clamav-freshclam.service.d/50-sg-background.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf tmpfiles/sg-audit.conf $(TMPFILESDIR)
