@@ -1,3 +1,15 @@
+sg-session (0.1.0-105) unstable; urgency=medium
+
+  * Intel laptops' panels: i915.enable_psr=1 (PSR1 at most) on the kernel
+    command line, the boot entries and their recovery twins, and in the
+    running kernel through debugfs (sg-boot-splash, postinst). PSR2's
+    selective update flickered what stood still: on David's X1 (TigerLake)
+    an open Start menu over Firefox went lighter and darker at 1-2 Hz while
+    every frame the compositor sent was the same; forced to PSR1 it
+    stopped. An i915.enable_psr someone set already is kept.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 04 Oct 2026 23:48:27 +0000
+
 sg-session (0.1.0-104) unstable; urgency=medium
 
   * Voice typing's recognizer spins between runs again, as onnxruntime does

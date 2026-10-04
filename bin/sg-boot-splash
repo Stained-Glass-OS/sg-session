@@ -15,14 +15,23 @@
 # read-only medium) are left alone. Never fatal: a failure leaves a machine
 # that boots as it did.
 #
-# SG_ESP, SG_KERNEL_CMDLINE, SG_PLYMOUTHD_CONF, SG_THEME_DIR: other places,
-# for the gate. SG_NO_INITRD=1: do not make initrds again.
+# Intel laptops' panels: i915.enable_psr=1 on the same command lines (and in
+# the recovery twins). PSR2's selective update -- the panel refreshing only
+# the part of the screen that changed -- flickered what was still: David's
+# X1 (TigerLake, 2026-10-04) showed an open Start menu over Firefox going
+# lighter and darker at 1-2 Hz while every frame the compositor sent was the
+# same; with PSR1 (the whole panel refreshes itself) it stopped. PSR1 keeps
+# most of the power saved. The running kernel gets it too, through debugfs.
+#
+# SG_ESP, SG_KERNEL_CMDLINE, SG_PLYMOUTHD_CONF, SG_THEME_DIR, SG_DRI_DEBUG:
+# other places, for the gate. SG_NO_INITRD=1: do not make initrds again.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
 set -u
 
 QUIET="quiet splash plymouth.ignore-serial-consoles loglevel=3 rd.udev.log_level=3 udev.log_level=3 systemd.show_status=auto vt.global_cursor_default=0"
+PANEL="i915.enable_psr=1"
 CMDLINE=${SG_KERNEL_CMDLINE:-/etc/kernel/cmdline}
 CONF=${SG_PLYMOUTHD_CONF:-/etc/plymouth/plymouthd.conf}
 THEME_DIR=${SG_THEME_DIR:-/usr/share/plymouth/themes/stained-glass}
@@ -33,9 +42,14 @@ esp() {
     bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
 }
 
-# the quiet arguments added to a command line, the loud ones it had dropped
+# the quiet (and panel) arguments added to a command line, the loud ones it
+# had dropped
 quiet_line() {
     line=" $* "
+    # a panel argument someone set already (enable_psr=0) is theirs
+    for a in $PANEL; do
+        case "$line" in *" ${a%%=*}="*) ;; *) line="$line $a " ;; esac
+    done
     for a in $QUIET; do
         k=${a%%=*}
         # an older value of the same argument goes (loglevel=7, show_status=yes)
@@ -87,6 +101,13 @@ apply() {
         new=$(quiet_line "$(cat "$CMDLINE")")
         [ "$new" = "$(cat "$CMDLINE")" ] || printf '%s\n' "$new" > "$CMDLINE"
     fi
+
+    # --- the running kernel: PSR1 at most, as the command line says ----------
+    # (3 = I915_PSR_DEBUG_FORCE_PSR1; 0 = the driver's default, anything else
+    # someone chose and is kept)
+    for d in "${SG_DRI_DEBUG:-/sys/kernel/debug/dri}"/*/i915_edp_psr_debug; do
+        [ -f "$d" ] && [ "$(cat "$d" 2>/dev/null)" = 0 ] && { echo 0x3 > "$d"; } 2>/dev/null
+    done
 
     # --- the boot entries: quiet, each with its recovery twin -------------------
     if E=$(esp) && [ -d "$E/loader/entries" ]; then
