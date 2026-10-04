@@ -1,3 +1,13 @@
+sg-session (0.1.0-104) unstable; urgency=medium
+
+  * Voice typing's recognizer spins between runs again, as onnxruntime does
+    by default (-103 had it idle): David 2026-10-04 would rather it be as it
+    was -- the CPU it takes while he speaks does not matter -- than risk it
+    in how phrases end. (The mixed-up letters he saw were sg-shell's typing
+    into Linux programs, fixed in sg-shell 0.1.0-108.)
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 04 Oct 2026 17:20:00 +0000
+
 sg-session (0.1.0-103) unstable; urgency=medium
 
   * Voice typing uses 40% less CPU while it listens: onnxruntime's threads
