@@ -110,6 +110,10 @@ def _session(ort, path, threads):
     # Pre-packed weights are a second copy of the int8 encoder: a quarter of
     # a gigabyte more, for no speed this model shows.
     opts.add_session_config_entry("session.disable_prepacking", "1")
+    # Its threads idle instead of spinning between runs: the partial results
+    # come every half second or so, and the spinning between them kept three
+    # cores busy (David's X1, 2026-10-03: the fan; 40% less CPU, the same speed).
+    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
     with _Quiet():
         return ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
 

@@ -1,3 +1,13 @@
+sg-session (0.1.0-103) unstable; urgency=medium
+
+  * Voice typing uses 40% less CPU while it listens: onnxruntime's threads
+    no longer spin between the recognitions the partial results ask for
+    every half second (session.intra_op.allow_spinning = 0). David's X1
+    ran its fan with voice typing on (2026-10-03); measured 3.3 -> 2.0 cores
+    for the same speed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 04 Oct 2026 05:40:00 +0000
+
 sg-session (0.1.0-102) unstable; urgency=medium
 
   * SG Defender's ClamAV is background work: clamav-daemon and

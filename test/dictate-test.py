@@ -382,5 +382,17 @@ got = [ln for ln in lines if ln.startswith(("TEXT", "CMD", "STATE idle"))]
 check("engine: German marks, then \"Das löschen\" is a command, \"Diktat beenden\" stops",
       got == ['TEXT "Hallo Welt, das ist gut."', "CMD delete", "STATE idle stopped"], repr(got))
 
+# onnxruntime's threads idle between runs (spinning kept cores busy between
+# the partial results; David's X1 fan, 2026-10-03). With a model to load only
+# (SG_SPEECH_MODEL): its small VAD network is enough to ask the session.
+_mdir = os.environ.get("SG_SPEECH_MODEL", "")
+if _mdir and os.path.exists(os.path.join(_mdir, "silero_vad.onnx")):
+    import sgspeech
+    _s = sgspeech._session(sgspeech._import_onnxruntime(), os.path.join(_mdir, "silero_vad.onnx"), 2)
+    _v = _s.get_session_options().get_session_config_entry("session.intra_op.allow_spinning")
+    check("onnxruntime sessions do not spin between runs", _v == "0", repr(_v))
+else:
+    print("SKIP  spinning (no SG_SPEECH_MODEL)")
+
 print("dictate-test: %s" % ("OK" if not FAILS else "%d FAILED" % FAILS))
 sys.exit(1 if FAILS else 0)
