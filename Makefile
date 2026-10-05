@@ -295,7 +295,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -333,6 +333,10 @@ test-dictate:
 # inside it, and let sg-session-check decide. Exits non-zero on failure.
 test-session:
 	@test/run-session-test.sh
+
+# the notification centre's icon among the shell's helpers
+test-notify-helper:
+	@sh test/notify-helper-test.sh
 
 # The S2 gate. Expected to fail until S2 lands -- see bin/sg-multiuser-check.
 # Deliberately not part of 'make test': a known-red gate wired into CI would

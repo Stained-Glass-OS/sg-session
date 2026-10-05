@@ -199,6 +199,8 @@ if [ -d "$_profile" ]; then cd "$_profile"; else sg_log "no profile directory at
 #   - the battery icon (sg-battery), on a computer with a battery.
 #   - the volume icon (sg-volume), if sg-settingsctl can reach the sound
 #     server for it.
+#   - the notification centre's icon (sg-notify): the toasts and balloons
+#     wine-sg keeps, listed in its panel (its icon, Win+A).
 #   - voice typing's hold-to-talk listener (sg-dictate /background), if
 #     sg-shell and sg-dictate are installed; it exits at once unless the user
 #     turned hold-to-talk on (Control Panel > Speech Recognition).
@@ -219,6 +221,7 @@ _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
 _sgbattery="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-battery64.exe"
 _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
+_sgnotify="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-notify64.exe"
 _sgshelldir="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}"
 # The shell's helpers, kept running while the desktop is there (sg_keep_running):
 # started now, and again within seconds of one dying or the shell's restart --
@@ -267,7 +270,7 @@ sg_shell_helpers() {
                 # in the old tray, sg-deskcomp drew into the old desktop) --
                 # all started again, for the new shell
                 sg_log "the shell came back: its helpers started again for it"
-                for _h in sg-deskcomp sg-start64.exe sg-netflyout64.exe sg-battery64.exe sg-volume64.exe sg-dictate64.exe; do
+                for _h in sg-deskcomp sg-start64.exe sg-netflyout64.exe sg-battery64.exe sg-volume64.exe sg-notify64.exe sg-dictate64.exe; do
                     pkill -u "$(id -u)" -x "$(printf '%.15s' "$_h")" 2>/dev/null
                 done
                 sleep 1
@@ -287,6 +290,7 @@ sg_shell_helpers() {
             if [ -f "$_sgvolume" ] && command -v sg-settingsctl >/dev/null 2>&1; then
                 sg_helper sg-volume64.exe _n_vol wine "$_sgvolume"
             fi
+            [ -f "$_sgnotify" ] && sg_helper sg-notify64.exe _n_ntf wine "$_sgnotify"
             if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1 && sg_dictate_wanted; then
                 sg_helper sg-dictate64.exe _n_dic wine "$_sgdictate" /background
             fi

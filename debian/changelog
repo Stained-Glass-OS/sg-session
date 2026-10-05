@@ -1,3 +1,12 @@
+sg-session (0.1.0-108) unstable; urgency=medium
+
+  * The shell's helpers include the notification centre's icon (sg-shell's
+    sg-notify, 0.1.0-115): started with the desktop when sg-shell has it,
+    kept running, started again for a shell that came back.
+    test/notify-helper-test.sh (make test-notify-helper).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 13:53:42 +0000
+
 sg-session (0.1.0-107) unstable; urgency=medium
 
   * The helper keeper leaves voice typing's listener alone while it marked
