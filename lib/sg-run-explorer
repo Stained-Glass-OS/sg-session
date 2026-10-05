@@ -287,7 +287,7 @@ sg_shell_helpers() {
             if [ -f "$_sgvolume" ] && command -v sg-settingsctl >/dev/null 2>&1; then
                 sg_helper sg-volume64.exe _n_vol wine "$_sgvolume"
             fi
-            if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1; then
+            if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1 && sg_dictate_wanted; then
                 sg_helper sg-dictate64.exe _n_dic wine "$_sgdictate" /background
             fi
             # what SG Defender quarantined from this person's files: shown once

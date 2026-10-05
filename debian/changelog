@@ -1,3 +1,13 @@
+sg-session (0.1.0-107) unstable; urgency=medium
+
+  * The helper keeper leaves voice typing's listener alone while it marked
+    itself idle ($XDG_RUNTIME_DIR/sg-dictate-idle, sg-shell 0.1.0-113:
+    hold-to-talk off) -- it was started again ten times at every sign-in,
+    as if it had crashed. lib/sg-common.sh sg_dictate_wanted; test
+    test/dictate-idle-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 03:16:34 +0000
+
 sg-session (0.1.0-106) unstable; urgency=medium
 
   * -105's i915.enable_psr=1 taken back: the X1's flickering Start menu was

@@ -826,3 +826,14 @@ sg_x_cookie() {
       printf "\\377\\377\\000\\000\\000\\000\\000\\022MIT-MAGIC-COOKIE-1\\000\\020$_esc" > "$1" )
     [ "$(wc -c < "$1")" -eq 44 ]
 }
+
+# Voice typing's hold-to-talk listener is wanted unless it marked itself idle:
+# with hold-to-talk off "sg-dictate64.exe /background" ends at once and leaves
+# $XDG_RUNTIME_DIR/sg-dictate-idle (sg-shell 0.1.0-113) -- the helper keeper
+# started it again ten times at every sign-in, as if it had crashed. The
+# listener deletes the mark when it runs (Speech Recognition starts it when
+# hold-to-talk is turned on).
+sg_dictate_wanted() {
+    [ ! -e "${XDG_RUNTIME_DIR:-/nonexistent}/sg-dictate-idle" ]
+}
+
