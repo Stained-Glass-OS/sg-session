@@ -1,3 +1,14 @@
+sg-session (0.1.0-114) unstable; urgency=medium
+
+  * Depends on sg-office and sg-mail: SG Office and SG Mail, which new
+    images have, reach machines installed before them with the next update
+    (PackageKit installs new dependencies; Recommends it leaves out), as
+    every Stained Glass change must (David 2026-10-05). sg-image stages an
+    empty placeholder of each for images built without them (SG_NO_OFFICE,
+    SG_NO_MAIL: CI). Test: sg-image test/image-deps-test.sh.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Mon, 05 Oct 2026 13:01:11 -0700
+
 sg-session (0.1.0-113) unstable; urgency=medium
 
   * A user's network connections made with a name and password (net use
