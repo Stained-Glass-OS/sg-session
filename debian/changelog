@@ -1,3 +1,16 @@
+sg-session (0.1.0-113) unstable; urgency=medium
+
+  * A user's network connections made with a name and password (net use
+    /user:, "Enter network credentials": sg-netmountd LOGON) end with their
+    last session, as their drive letters do: they stayed mounted after
+    sign-out and the next sign-in used them without the password. Drives
+    remembered with "Reconnect at sign-in" come back at the next sign-in
+    from the shell with the credentials saved for their server (wine-sg
+    0839). Test: test/netmount-signout-test.sh (root; mutant: the drop-in
+    without the new ExecStop).
+
+ -- Stained Glass OS <dev@stained-glass.example>  Mon, 05 Oct 2026 11:46:37 -0700
+
 sg-session (0.1.0-112) unstable; urgency=medium
 
   * The session lists _GTK_FRAME_EXTENTS among what its window manager
