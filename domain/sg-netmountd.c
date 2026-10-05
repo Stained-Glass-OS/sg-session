@@ -208,14 +208,29 @@ static int mkdirs(const char *path, mode_t mode)
     return (mkdir(buf, mode) && errno != EEXIST) ? -1 : 0;
 }
 
+/* Every share is mounted "nohandlecache". With it, the kernel's SMB client
+ * keeps a directory's handle and listing open on a lease and answers the next
+ * listing from that copy -- without the files' sizes, dates and attributes,
+ * so each file's stat is then a request to the server of its own: a folder of
+ * 2000 files listed in a millisecond and then stat'ed in seven seconds over
+ * Wi-Fi, while File Explorer's window stayed blank (David: a share "draws
+ * slowly"). Windows programs read a folder as a listing plus each file's
+ * details, and a listing fetched from the server brings those details along
+ * (0.1 s for the same folder, every time). */
 static int run_mount(const char *unc, const char *path, const char *opts)
 {
     pid_t pid;
     int status;
+    char all[1024];
 
+#ifndef SG_MUTANT_HANDLECACHE
+    snprintf(all, sizeof(all), "%s,nohandlecache", opts);
+#else
+    snprintf(all, sizeof(all), "%s", opts);
+#endif
     if ((pid = fork()) < 0) return -1;
     if (!pid) {
-        char *argv[] = { "mount", "-t", "cifs", (char *)unc, (char *)path, "-o", (char *)opts, NULL };
+        char *argv[] = { "mount", "-t", "cifs", (char *)unc, (char *)path, "-o", all, NULL };
         char *envp[] = { "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
         int null = open("/dev/null", O_RDWR);
         if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); }

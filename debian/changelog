@@ -1,3 +1,18 @@
+sg-session (0.1.0-111) unstable; urgency=medium
+
+  * sg-netmountd mounts every share "nohandlecache". With the kernel SMB
+    client's directory handle cache, a folder listed again was answered from
+    the cached listing, which carries no file details, so each file's stat
+    became a request to the server of its own: a folder of 2000 files on a
+    Linux Samba server took 7-10 s to read over a 3 ms (Wi-Fi-like) link
+    while File Explorer stayed blank, and a second visit was slower than the
+    first (David: a share "draws slowly"). Each listing now comes from the
+    server with the files' details (0.1-0.2 s for the same folder).
+    Test: test/netmount-listing-test.sh (root, a running smbd: a Stained
+    Glass machine or the QA VM; mutant -DSG_MUTANT_HANDLECACHE).
+
+ -- Stained Glass OS <dev@stained-glass.example>  Mon, 05 Oct 2026 11:23:19 -0700
+
 sg-session (0.1.0-110) unstable; urgency=medium
 
   * Mail links open SG Mail: the session's mimeapps.list names
