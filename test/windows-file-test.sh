@@ -15,6 +15,8 @@ for m in application/x-ms-dos-executable application/vnd.microsoft.portable-exec
     grep -q "^MimeType=.*$m;" "$D" && grep -q "^$m=sg-windows-file.desktop" "$HERE/config/applications/sg-mimeapps.list" \
         && pass "$m: claimed, the default" || fail "$m not claimed"
 done
+grep -qx "x-scheme-handler/mailto=sg-mail.desktop;thunderbird.desktop;" "$HERE/config/applications/sg-mimeapps.list" \
+    && pass "mailto: links open SG Mail (else Thunderbird)" || fail "mailto: is not SG Mail's"
 mkdir -p "$T/bin" "$T/lib"
 printf '#!/bin/sh\necho "$*" > %s/started\n' "$T" > "$T/bin/wine"; chmod +x "$T/bin/wine"
 sed "s|/usr/lib/stained-glass/sg-common.sh|$T/lib/common.sh|" "$HERE/bin/sg-open-windows-file" > "$T/open"

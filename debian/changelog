@@ -1,3 +1,14 @@
+sg-session (0.1.0-110) unstable; urgency=medium
+
+  * Mail links open SG Mail: the session's mimeapps.list names
+    sg-mail.desktop (package sg-mail, Stained Glass OS's mail and calendar
+    on Thunderbird), then thunderbird.desktop, for x-scheme-handler/mailto.
+    Linux programs' mailto: links, and Windows programs' (Wine's mailto
+    handler is winebrowser, which hands them to xdg-email), reach it.
+    Test: test/windows-file-test.sh.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Mon, 05 Oct 2026 10:59:23 -0700
+
 sg-session (0.1.0-109) unstable; urgency=medium
 
   * Wine Mono's support package (the .NET Framework's NDP and

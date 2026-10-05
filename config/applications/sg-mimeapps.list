@@ -1,10 +1,13 @@
 # Stained Glass OS: Windows programs, installers and shortcuts opened from a
 # Linux program (Firefox's downloads) run in the session's Wine
 # (sg-open-windows-file). A person's own choice (~/.config/mimeapps.list)
-# still comes first.
+# still comes first. Mail links (mailto:) open SG Mail (package sg-mail),
+# else Thunderbird -- from Linux programs and, through Wine's mailto
+# handler, from Windows programs.
 [Default Applications]
 application/x-ms-dos-executable=sg-windows-file.desktop
 application/x-msdownload=sg-windows-file.desktop
 application/vnd.microsoft.portable-executable=sg-windows-file.desktop
 application/x-msi=sg-windows-file.desktop
 application/x-ms-shortcut=sg-windows-file.desktop
+x-scheme-handler/mailto=sg-mail.desktop;thunderbird.desktop;
