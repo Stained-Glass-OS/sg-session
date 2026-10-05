@@ -3,7 +3,8 @@
 # taskbar (_NET_WORKAREA, and _NET_SUPPORTED saying so) -- without it Qt and
 # GTK took the whole screen, and SG Office's editors covered the taskbar.
 # _NET_SUPPORTED stays a list of atoms: the window manager's, each its own
-# atom, then _NET_WORKAREA. (xprop -set had made the whole list one atom
+# atom, then _NET_WORKAREA, then _GTK_FRAME_EXTENTS (GTK names its
+# windows' shadows only for a window manager listing it). (xprop -set had made the whole list one atom
 # named "_NET_WM_STATE, _NET_ACTIVE_WINDOW, _NET_WORKAREA": Qt saw no
 # _NET_WM_MOVERESIZE, and SG Office's title bar could not be dragged.)
 # On a scratch X server (Xvfb) with a window manager's _NET_SUPPORTED.
@@ -30,10 +31,10 @@ timeout 60 xvfb-run -a -s '-noreset -screen 0 1024x700x24' "$T/run.sh"
 RC=0
 grep -qx '_NET_WORKAREA(CARDINAL) = 0, 0, 1024, 660' "$T/props" && echo "PASS  _NET_WORKAREA is the screen less the 40 px bar" ||
     { echo "FAIL  work area: $(cat "$T/props")"; RC=1; }
-grep -qx '_NET_SUPPORTED(ATOM) = _NET_WM_STATE, _NET_WM_MOVERESIZE, _NET_WORKAREA' "$T/props" &&
-    echo "PASS  _NET_SUPPORTED says so, once, after what the window manager said" ||
+grep -qx '_NET_SUPPORTED(ATOM) = _NET_WM_STATE, _NET_WM_MOVERESIZE, _NET_WORKAREA, _GTK_FRAME_EXTENTS' "$T/props" &&
+    echo "PASS  _NET_SUPPORTED says so, once, after what the window manager said -- and _GTK_FRAME_EXTENTS, for GTK's own title bars" ||
     { echo "FAIL  supported: $(grep SUPPORTED "$T/props")"; RC=1; }
 n=$(sed -n 's/^_NET_SUPPORTED(ATOM) = //p' "$T/ids" | tr ',' '\n' | grep -c .)
-[ "$n" = 3 ] && echo "PASS  each is an atom of its own (3), not one atom named after the list" ||
+[ "$n" = 4 ] && echo "PASS  each is an atom of its own (4), not one atom named after the list" ||
     { echo "FAIL  atoms in the list: $n ($(cat "$T/ids"))"; RC=1; }
 exit $RC

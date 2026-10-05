@@ -646,6 +646,13 @@ sg_x11_workarea() {
         [ "$_rc" -ne 1 ] && break
         sleep 0.5; _tries=$((_tries + 1))
     done
+    # GTK programs that draw their own title bar (GNOME apps) name the shadow
+    # around their window in _GTK_FRAME_EXTENTS only for a window manager
+    # listing it -- without it GTK 3 drew the shadow's room as a blank margin
+    # inside the frame, and neither GTK 3 nor 4 had edges to size the window
+    # by. Their Wine frame keeps the shadow outside itself and sizes them by
+    # its own edge (wine-sg 0813, 0842).
+    [ "$_rc" -eq 0 ] && sg_x11_add_supported _GTK_FRAME_EXTENTS 2>/dev/null
     xprop -root -f _NET_WORKAREA 32c -set _NET_WORKAREA "0, 0, $_w, $((_h - ${SG_TASKBAR_H:-40}))" 2>/dev/null &&
         sg_log "work area for Linux programs: ${_w}x$((_h - ${SG_TASKBAR_H:-40}))"
     return 0

@@ -1,3 +1,17 @@
+sg-session (0.1.0-112) unstable; urgency=medium
+
+  * The session lists _GTK_FRAME_EXTENTS among what its window manager
+    supports (_NET_SUPPORTED, beside _NET_WORKAREA). GTK names the shadow
+    around a window that draws its own title bar (GNOME apps) only for a
+    window manager listing it: without it GTK 3 programs (Help) showed a
+    blank margin of about 18 px inside their frame, and no GTK program
+    could be sized by its edges -- wine-sg 0813 never saw a shadow to keep
+    outside the frame. Breaks wine-sg << 10.0-183 (0842: a GTK 4 window
+    maximized see-sawed between two sizes once its shadow was named).
+    Test: test/workarea-test.sh (mutant: the line removed from sg-common.sh).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 11:38:27 -0700
+
 sg-session (0.1.0-111) unstable; urgency=medium
 
   * sg-netmountd mounts every share "nohandlecache". With the kernel SMB
