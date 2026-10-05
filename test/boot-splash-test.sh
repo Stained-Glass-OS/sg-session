@@ -11,8 +11,7 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
 E="$T/esp"; mkdir -p "$E/loader/entries" "$T/theme"
 touch "$T/theme/stained-glass.plymouth" "$T/theme/stained-glass.script"
-mkdir -p "$T/dri/0" "$T/dri/1"; echo 0 > "$T/dri/0/i915_edp_psr_debug"; echo 1 > "$T/dri/1/i915_edp_psr_debug"
-export SG_ESP="$E" SG_KERNEL_CMDLINE="$T/cmdline" SG_PLYMOUTHD_CONF="$T/plymouthd.conf" SG_THEME_DIR="$T/theme" SG_NO_INITRD=1 SG_DRI_DEBUG="$T/dri"
+export SG_ESP="$E" SG_KERNEL_CMDLINE="$T/cmdline" SG_PLYMOUTHD_CONF="$T/plymouthd.conf" SG_THEME_DIR="$T/theme" SG_NO_INITRD=1
 OLD="root=PARTUUID=abc rw console=ttyS0 console=tty0 systemd.show_status=yes loglevel=7"
 echo "$OLD" > "$T/cmdline"
 printf '[Daemon]\nTheme=spinner\nDeviceTimeout=5\n' > "$T/plymouthd.conf"
@@ -40,13 +39,6 @@ ro=$(sed -n 's/^options *//p' "$r" 2>/dev/null)
   && grep -q '^initrd     /debian/6.12.1/initrd.img-6.12.1$' "$r" && ! echo " $ro " | grep -q ' quiet \| splash ' \
   && echo " $ro " | grep -q ' plymouth.enable=0 ' && echo " $ro " | grep -q ' root=PARTUUID=abc rw '; } \
     && pass "a recovery-mode twin shows Linux's messages (no quiet, no splash), same kernel" || fail "recovery: $(cat "$r" 2>&1)"
-# Intel panels: PSR1 at most (PSR2's selective update flickered the X1)
-{ [ "$(echo " $c " | grep -o ' i915.enable_psr=[^ ]*' | wc -l)" = 1 ] && echo " $c " | grep -q ' i915.enable_psr=1 ' \
-  && echo " $ro " | grep -q ' i915.enable_psr=1 '; } \
-    && pass "i915.enable_psr=1 on the command line, the entry and its recovery twin" || fail "psr: $c / $ro"
-{ [ "$(cat "$T/dri/0/i915_edp_psr_debug")" = 0x3 ] && [ "$(cat "$T/dri/1/i915_edp_psr_debug")" = 1 ]; } \
-    && pass "the running kernel: PSR1 forced where the default was on, a chosen mode kept" \
-    || fail "debugfs: $(cat "$T/dri/0/i915_edp_psr_debug") $(cat "$T/dri/1/i915_edp_psr_debug")"
 grep -q 'loglevel=7$' "$E/loader/entries/sg-live.conf" || grep -q 'loglevel=7 systemd.volatile' "$E/loader/entries/sg-live.conf" \
     && [ ! -e "$E/loader/entries/sg-live-recovery.conf" ] && pass "live entries are left alone" || fail "live: $(ls "$E/loader/entries")"
 [ ! -e "$E/loader/entries/debian-6.11.9-recovery.conf" ] && pass "a twin whose kernel is gone goes" || fail "orphan twin kept"
@@ -55,12 +47,6 @@ grep -q 'loglevel=7$' "$E/loader/entries/sg-live.conf" || grep -q 'loglevel=7 sy
 before=$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)
 sh "$HERE/bin/sg-boot-splash" apply
 [ "$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)" = "$before" ] && pass "a second run changes nothing" || fail "not idempotent"
-
-# someone's own PSR choice stays theirs
-echo "$OLD i915.enable_psr=0" > "$T/c2"
-SG_KERNEL_CMDLINE="$T/c2" SG_ESP="$T/none" sh "$HERE/bin/sg-boot-splash" apply
-echo " $(cat "$T/c2") " | grep -q ' i915.enable_psr=0 ' && ! grep -q 'enable_psr=1' "$T/c2" \
-    && pass "an i915.enable_psr someone set is kept" || fail "own psr: $(cat "$T/c2")"
 
 # kernel-install: a new kernel's entry gets its twin; a removed one's goes
 sed 's/6\.12\.1/6.12.2/g' "$E/loader/entries/debian-6.12.1.conf" > "$E/loader/entries/debian-6.12.2.conf"
@@ -76,10 +62,5 @@ sed 's/^        line="\$line \$a "$/        :/' "$HERE/bin/sg-boot-splash" > "$T
 grep -q '^        :$' "$T/mut" || fail "the mutant did not apply"
 echo "$OLD" > "$T/cmdline"; sh "$T/mut" apply
 echo " $(cat "$T/cmdline") " | grep -q ' splash ' && fail "MUTANT NOQUIET not detected" || pass "MUTANT NOQUIET leaves the text boot (gate catches it)"
-# mutant: without the panel argument, the X1's flicker comes back
-sed 's/^        case "\$line" in \*" \${a%%=\*}="\*) ;; \*) line="\$line \$a " ;; esac$/        :/' "$HERE/bin/sg-boot-splash" > "$T/mut2"
-grep -q '^        :$' "$T/mut2" || fail "the PSR mutant did not apply"
-echo "$OLD" > "$T/cmdline"; sh "$T/mut2" apply
-grep -q 'enable_psr=1' "$T/cmdline" && fail "MUTANT NOPSR not detected" || pass "MUTANT NOPSR leaves PSR2 (gate catches it)"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

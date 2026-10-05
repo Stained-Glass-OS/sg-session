@@ -1,3 +1,12 @@
+sg-session (0.1.0-106) unstable; urgency=medium
+
+  * -105's i915.enable_psr=1 taken back: the X1's flickering Start menu was
+    not the panel's self refresh -- it went on with PSR off -- but
+    sg-deskcomp's frost reading black through glamor (fixed in
+    sg-compositor 0.2.0+sg36). -105 was never released.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 00:08:47 +0000
+
 sg-session (0.1.0-105) unstable; urgency=medium
 
   * Intel laptops' panels: i915.enable_psr=1 (PSR1 at most) on the kernel
