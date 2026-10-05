@@ -1,3 +1,13 @@
+sg-session (0.1.0-116) unstable; urgency=medium
+
+  * Setup: Tab and Shift+Tab move in and out of the license text; it kept
+    Tab (a multi-line edit asks for every key), so with a keyboard alone "I
+    accept" could not be reached (David 2026-10-05, a Surface Pro 7 whose
+    touch screen had no driver). Test: test/setup-e2e.sh (mutant
+    SG_MUTANT_LICENSE_TAB_TRAP).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 16:32:21 -0700
+
 sg-session (0.1.0-115) unstable; urgency=medium
 
   * A DYMO LabelWriter 5xx (550, 550 Turbo, 5XL, Pro models) plugged in

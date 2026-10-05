@@ -1456,6 +1456,20 @@ static HIMAGELIST make_drive_icons( void )
     return il;
 }
 
+/* The license text is read only: Tab and Shift+Tab move on from it, as in
+ * Windows' own Setup. A multi-line edit asks for every key (DLGC_WANTALLKEYS)
+ * and kept the focus: with a keyboard alone (a Surface whose touch screen
+ * had no driver, David 2026-10-05) "I accept" could not be reached. */
+static WNDPROC g_lictext_proc;
+static LRESULT CALLBACK lictext_proc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
+{
+    LRESULT r = CallWindowProcA( g_lictext_proc, hwnd, msg, wp, lp );
+#ifndef SG_MUTANT_LICENSE_TAB_TRAP
+    if (msg == WM_GETDLGCODE) r &= ~(DLGC_WANTALLKEYS | DLGC_WANTTAB);
+#endif
+    return r;
+}
+
 /* Enter and Escape: act on release, for a press seen on this page. */
 static BOOL handle_key( MSG *m )
 {
@@ -1590,6 +1604,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     g_lictext = child( "EDIT", g_license, style | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
                        WS_EX_CLIENTEDGE, 40, 60, CW - 80, 330, ID_LICTEXT );
     g_accept = child( "BUTTON", "I accept the license terms", style | BS_AUTOCHECKBOX, 0, 40, 400, 400, 26, ID_ACCEPT );
+    g_lictext_proc = (WNDPROC)SetWindowLongPtrA( g_lictext, GWLP_WNDPROC, (LONG_PTR)lictext_proc );
     g_upgrade = child( "BUTTON", "Upgrade", style | BS_OWNERDRAW | WS_DISABLED, 0, 40, 70, CW - 80, 118, ID_UPGRADE );
     g_custom = child( "BUTTON", "Custom", style | BS_OWNERDRAW, 0, 40, 200, CW - 80, 118, ID_CUSTOM );
     g_drivers = child( "BUTTON", "Install third-party drivers for graphics and Wi-Fi (recommended)",

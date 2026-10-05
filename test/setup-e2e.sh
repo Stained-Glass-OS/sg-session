@@ -8,6 +8,8 @@
 # Driven from the keyboard, as remote support and the image gate drive it.
 #
 #   - Next on the license page does nothing until the terms are accepted
+#   - Tab and Shift+Tab move in and out of the license text (it kept Tab;
+#     mutant SG_MUTANT_LICENSE_TAB_TRAP)
 #   - a password typed twice differently is refused, and nothing is installed
 #   - the partitioner preselects the largest place Stained Glass OS fits; New
 #     makes a partition of the size typed in the space chosen, and selects it;
@@ -142,6 +144,7 @@ page license; shot license
 k Return                         # not accepted: Next is disabled, nothing happens
 sleep 1
 grep -c 'page type$' "$T/bridge.log" > "$T/type-before-accept"
+k shift+Tab; k Tab               # into the license text and out again (it kept Tab: David 2026-10-05)
 k space; k Return                # accept, Next
 page type
 w=0; until grep -q 'sg-setup: drivers' "$T/bridge.log" || [ "$w" -gt 30 ]; do sleep 0.3; w=$((w + 1)); done
