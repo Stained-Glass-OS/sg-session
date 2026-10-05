@@ -1,0 +1,70 @@
+#!/bin/sh
+# A CUPS queue for a DYMO LabelWriter 5xx plugged in over USB (550, 550 Turbo,
+# 5XL, their Pro models), so Windows programs -- DYMO Connect -- find it.
+#
+# CUPS on Debian makes no queue for a USB printer that does not speak IPP
+# over USB, and the LabelWriter 5xx does not. Run as root by
+# sg-dymo-queue.service, which udev starts when a DYMO device (vendor 0922)
+# appears (udev/73-stained-glass-dymo.rules), and at boot for one already
+# there: for every usb://DYMO/... device CUPS's usb backend lists, with a
+# PPD of sg-dymo-lw5xx whose model is that device's, it adds the queue
+# DYMO_<model> on that URI with the PPD -- unless a queue for that URI exists.
+# The queue's make and model is the PPD's ("DYMO LabelWriter 550"): wine-sg
+# names the printer's Windows driver after it (0871), which is the name DYMO
+# Connect looks for, and wine-sg brings it to Windows programs without a
+# sign-out (0873). A LabelWriter the PPDs do not cover (the 4xx series) is
+# left alone.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+PPD_DIR="${SG_DYMO_PPD_DIR:-/usr/share/ppd/dymo-lw5xx}"
+LPINFO="${SG_LPINFO:-/usr/sbin/lpinfo}"
+LPADMIN="${SG_LPADMIN:-/usr/sbin/lpadmin}"
+LPSTAT="${SG_LPSTAT:-lpstat}"
+TRIES="${SG_DYMO_TRIES:-10}"
+
+[ -d "$PPD_DIR" ] || { echo "sg-dymo-queue: no $PPD_DIR (sg-dymo-lw5xx), nothing to do"; exit 0; }
+
+# the PPD for a model ("DYMO LabelWriter 550"): the one whose *ModelName is it
+ppd_for() {
+    for p in "$PPD_DIR"/*.ppd; do
+        [ -f "$p" ] || continue
+        m=$(sed -n 's/^\*ModelName:[[:space:]]*"\(.*\)".*/\1/p' "$p" | head -1)
+        [ "$m" = "$1" ] && { echo "$p"; return 0; }
+    done
+    return 1
+}
+
+# usb:// URIs of DYMO devices; the usb backend may need a moment after the
+# device appears
+uris=
+i=0
+while [ $i -lt "$TRIES" ]; do
+    uris=$("$LPINFO" --include-schemes usb -v 2>/dev/null | awk '$1 == "direct" && $2 ~ /^usb:\/\/DYMO\// { print $2 }')
+    [ -n "$uris" ] && break
+    i=$((i + 1))
+    [ $i -lt "$TRIES" ] && sleep 2
+done
+[ -n "$uris" ] || { echo "sg-dymo-queue: no DYMO printer on USB"; exit 0; }
+
+queues=$("$LPSTAT" -v 2>/dev/null)
+for uri in $uris; do
+    if printf '%s\n' "$queues" | grep -q " $uri\$"; then
+        echo "sg-dymo-queue: $uri has its queue"
+        continue
+    fi
+    # usb://DYMO/LabelWriter%20550?serial=... -> "DYMO LabelWriter 550"
+    model=$(printf '%s\n' "$uri" | sed 's|^usb://DYMO/||; s|?.*||; s|%20| |g; s|+| |g')
+    model="DYMO $model"
+    ppd=$(ppd_for "$model") || { echo "sg-dymo-queue: no PPD for $model ($uri), left alone"; continue; }
+    base=$(printf '%s' "$model" | tr -c 'A-Za-z0-9' '_')
+    name=$base; n=1
+    while printf '%s\n' "$queues" | grep -q "^device for $name:"; do n=$((n + 1)); name="${base}_$n"; done
+    if "$LPADMIN" -p "$name" -E -v "$uri" -P "$ppd" -D "$model" -L "USB" 2>/dev/null; then
+        echo "sg-dymo-queue: added $name for $model ($uri)"
+        queues=$("$LPSTAT" -v 2>/dev/null)
+    else
+        echo "sg-dymo-queue: lpadmin failed for $name ($uri)" >&2
+    fi
+done
+exit 0

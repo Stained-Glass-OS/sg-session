@@ -110,6 +110,8 @@ case "$1" in
         if [ -d /run/udev ]; then
             udevadm control --reload >/dev/null 2>&1 || true
             udevadm trigger --subsystem-match=usb --attr-match=idVendor=1dcc >/dev/null 2>&1 || true
+            # a DYMO LabelWriter plugged in already gets its queue now
+            udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=0922 >/dev/null 2>&1 || true
         fi
 
         if ! getent passwd "$SG_USER" >/dev/null; then

@@ -1,0 +1,13 @@
+[Unit]
+Description=Stained Glass: a printer queue for a DYMO LabelWriter plugged in
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# Started by udev when a DYMO device appears (73-stained-glass-dymo.rules),
+# at boot too for one already plugged in. Idempotent: a queue there is kept.
+After=cups.service
+Wants=cups.service
+ConditionPathIsDirectory=/usr/share/ppd/dymo-lw5xx
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/stained-glass/sg-dymo-queue
+TimeoutStartSec=90

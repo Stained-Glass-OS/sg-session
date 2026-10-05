@@ -1,3 +1,18 @@
+sg-session (0.1.0-115) unstable; urgency=medium
+
+  * A DYMO LabelWriter 5xx (550, 550 Turbo, 5XL, Pro models) plugged in
+    over USB gets its CUPS queue: udev (73-stained-glass-dymo.rules, vendor
+    0922) starts sg-dymo-queue.service, whose helper adds DYMO_<model> on
+    the printer's usb:// URI with sg-dymo-lw5xx's PPD for that model -- the
+    queue's make and model ("DYMO LabelWriter 550") is what wine-sg names
+    the Windows driver after and DYMO Connect looks for. A printer already
+    plugged in gets it at install (postinst triggers udev). Depends on
+    sg-dymo-lw5xx (DYMO's GPL 5xx CUPS driver, built in sg-image
+    dymo-deb). Test test/dymo-queue-test.sh in make lint (and its
+    --mutant: the PPD picked without the model, fails).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 16:14:18 -0700
+
 sg-session (0.1.0-114) unstable; urgency=medium
 
   * Depends on sg-office and sg-mail: SG Office and SG Mail, which new

@@ -153,6 +153,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-audit $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# The Print to PDF printer (sg-print-setup.service).
 	install -m 0755 bin/sg-print-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# A DYMO LabelWriter 5xx's queue when it is plugged in (sg-dymo-queue.service, udev).
+	install -m 0755 bin/sg-dymo-queue $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-audit $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
@@ -200,7 +202,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
-	    systemd/sg-print-setup.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
+	    systemd/sg-print-setup.service systemd/sg-dymo-queue.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
 	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
@@ -214,6 +216,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0644 udev/70-stained-glass-devices.rules $(UDEVDIR)
 	install -m 0644 udev/71-stained-glass-media.rules $(UDEVDIR)
 	install -m 0644 udev/72-stained-glass-usb-writes.rules $(UDEVDIR)
+	install -m 0644 udev/73-stained-glass-dymo.rules $(UDEVDIR)
 	install -d $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d
 	install -m 0644 config/polkit/50-stained-glass-network.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
 	install -m 0644 config/polkit/50-stained-glass-power.rules $(DESTDIR)$(PREFIX)/share/polkit-1/rules.d/
@@ -262,6 +265,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh
+	@sh test/dymo-queue-test.sh
+	@! sh test/dymo-queue-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd

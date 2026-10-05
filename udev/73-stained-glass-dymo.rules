@@ -1,0 +1,6 @@
+# A DYMO label printer plugged in gets its CUPS queue (sg-dymo-queue.service:
+# bin/sg-dymo-queue makes it for a LabelWriter 5xx -- 550 0922:0028, 550
+# Turbo 0029, 5XL 002a and their Pro models -- with sg-dymo-lw5xx's PPD), so
+# Windows programs (DYMO Connect) find the printer. Any DYMO device starts
+# it; the helper leaves what it has no PPD for alone.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0922", TAG+="systemd", ENV{SYSTEMD_WANTS}+="sg-dymo-queue.service"
