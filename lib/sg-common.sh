@@ -520,6 +520,42 @@ sg_dotnet_support() {
     return 0
 }
 
+# Wine Mono's support MSI (winemono-support.msi: the .NET Framework's
+# registry -- NDP\v2.0/v3.0/v3.5/v4, .NETFramework\AssemblyFolders -- and its
+# files in windows\Microsoft.NET) is installed into a prefix once: Wine runs
+# it again only when Wine Mono's version number grows, and our builds of it
+# (sg1, sg2...) keep 9.4.0. So what a newer build's MSI adds never reached a
+# prefix made before it: machines installed before Mono sg9 had no
+# AssemblyFolders\v3.5, and Meedio's and MeediOS's installers took .NET 3.5
+# for missing and ran Microsoft's 3.5 setup, which only says to use "Turn
+# Windows features on or off" (David 2026-10-05). Re-applied from the
+# package's MSI (REINSTALL=ALL; REINSTALLMODE v: from this package, not the
+# cached copy) when it differs from the one applied last (its SHA-256 in
+# STATEDIR); nothing otherwise.
+#   sg_mono_support_refresh STATEDIR [MSI]
+sg_mono_support_refresh() {
+    _st=$1
+    _msi=${2:-}
+    if [ -z "$_msi" ]; then
+        for _m in "${SG_WINE_DIR:-/opt/wine-sg}"/share/wine/mono/wine-mono-*/support/winemono-support.msi \
+                  /usr/share/wine/mono/wine-mono-*/support/winemono-support.msi; do
+            [ -f "$_m" ] && _msi=$_m
+        done
+    fi
+    [ -n "$_msi" ] && [ -f "$_msi" ] || return 0
+    _sum=$(sha256sum < "$_msi" | cut -d' ' -f1)
+    [ "$(cat "$_st/mono-support.sha256" 2>/dev/null)" != "$_sum" ] || return 0
+    _wmsi="Z:$(printf '%s' "$_msi" | tr '/' '\134')"
+    if wine msiexec /i "$_wmsi" REINSTALL=ALL REINSTALLMODE=vomus /qn >/dev/null 2>&1; then
+        mkdir -p "$_st"
+        printf '%s\n' "$_sum" > "$_st/mono-support.sha256"
+        sg_log "Wine Mono's support package applied ($_msi)"
+    else
+        sg_log "WARNING: could not apply Wine Mono's support package $_msi"
+    fi
+    return 0
+}
+
 # Program Files is the administrators': users may read and run what is there,
 # not change it -- as on Windows, where Users have read and execute only. The
 # prefix is made by SYSTEM with the Wine group's write (umask 002), so every

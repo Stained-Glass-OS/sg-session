@@ -249,6 +249,7 @@ lint:
 	@sh test/programdata-test.sh || [ $$? -eq 77 ]
 	@sh test/device-rules-test.sh || [ $$? -eq 77 ]
 	@sh test/dotnet-support-test.sh || [ $$? -eq 77 ]
+	@sh test/mono-support-refresh-test.sh
 	@sh test/backdrop-first-test.sh
 	@sh test/keep-running-test.sh
 	@sh test/wineserver-wait-test.sh

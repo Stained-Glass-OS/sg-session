@@ -1,3 +1,21 @@
+sg-session (0.1.0-109) unstable; urgency=medium
+
+  * Wine Mono's support package (the .NET Framework's NDP and
+    AssemblyFolders keys, its files in windows\Microsoft.NET) reaches
+    machines installed before it: sg-prefix-init applies the packaged
+    winemono-support.msi again (msiexec REINSTALL=ALL, REINSTALLMODE=vomus)
+    whenever it differs from the one applied last (its SHA-256 in the state
+    directory). Wine re-runs it only when Wine Mono's version number grows,
+    and our builds keep 9.4.0: machines installed before Mono sg9 lacked
+    AssemblyFolders\v3.5, so Meedio's and MeediOS's installers took .NET 3.5
+    for missing and ran Microsoft's 3.5 setup, which only says to use "Turn
+    Windows features on or off" (David 2026-10-05).
+    test/mono-support-refresh-test.sh (in make lint; with SG_TEST_WINE,
+    SG_TEST_MONO_OLD/NEW also on a real prefix; mutant: the function doing
+    nothing).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 17:10:36 +0000
+
 sg-session (0.1.0-108) unstable; urgency=medium
 
   * The shell's helpers include the notification centre's icon (sg-shell's

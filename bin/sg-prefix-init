@@ -159,6 +159,7 @@ if [ -e "$STAMP" ]; then
     sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
     sg_c_root_users "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
     sg_dotnet_support "$SG_PREFIX/drive_c"
+    sg_mono_support_refresh "$SG_STATE"
     sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
     exit 0
 fi
@@ -256,6 +257,7 @@ sg_system_access "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER" "$SG_STATE"
 sg_program_files_protected "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
 sg_c_root_users "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
 sg_dotnet_support "$SG_PREFIX/drive_c"
+sg_mono_support_refresh "$SG_STATE"
 sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
 
 # The prefix is machine state, not user state.
