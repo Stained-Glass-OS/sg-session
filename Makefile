@@ -181,6 +181,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	@if [ -f build/sg-xtype ]; then install -m 0755 build/sg-xtype $(DESTDIR)$(PREFIX)/libexec/stained-glass/; fi
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0755 lib/sg-fetch $(LIBDIR)
+	install -m 0755 lib/sg-apt-sources $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# Windows programs opened from Linux programs (Firefox's downloads): sg-open-windows-file
@@ -266,6 +267,10 @@ lint:
 	@sh test/shell-supervisor-test.sh
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-apt-sources
+	@sh test/apt-sources-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@! sh test/apt-sources-test.sh --mutant >/dev/null 2>&1
+	@! sh test/apt-sources-test.sh --mutant-problems >/dev/null 2>&1
 	@sh test/prefix-current-test.sh
 	@sh test/prefix-repair-test.sh
 	@! sh test/prefix-repair-test.sh --mutant >/dev/null

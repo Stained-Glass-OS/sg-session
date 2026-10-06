@@ -26,7 +26,7 @@ esac
 exit 0
 W
 chmod +x "$T/bin/apt-get" "$T/bin/pkcon"
-export PATH="$T/bin:$PATH" SG_UPDATE_STATE="$T/state" SG_APT_ARCHIVES="$T/archives" SG_SYSTEM_UPDATE="$T/system-update"
+export SG_APT_SOURCES_TOOL=/nonexistent PATH="$T/bin:$PATH" SG_UPDATE_STATE="$T/state" SG_APT_ARCHIVES="$T/archives" SG_SYSTEM_UPDATE="$T/system-update"
 sh "$HERE/bin/sg-update-prepare" >/dev/null 2>&1 & P=$!
 sleep 1.8
 MID=$(cat "$T/state/progress" 2>/dev/null); MIDSTATE=$(cat "$T/state/state" 2>/dev/null)

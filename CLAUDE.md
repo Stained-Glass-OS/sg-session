@@ -2011,6 +2011,17 @@ configured.
 - **The package starts the timer, never the service.** A postinst that started
   the service would run a network update check inside dpkg on a live system.
   `debian/rules` handles the two units separately for that reason.
+- **Third-party sources never block updates.** One repository configured
+  twice with different keyrings (SG Store's `mozilla.list` plus Mozilla's own
+  instructions' entry) makes apt refuse *every* source ("Conflicting values
+  set for option Signed-By"). `lib/sg-apt-sources heal` runs first: one
+  keyring per repository, the repeat turned off, malformed third-party lines
+  turned off, files backed up to `/var/backups/sg-apt-sources`, each change
+  logged. A repository whose key expired or was replaced is published in
+  `/run/sg-update/problems` and shown in Settings > Updates; the others still
+  update. SG Store's vendor sources go through `sg-apt-sources adopt`, which
+  reuses a repository already configured. Gate: `test/apt-sources-test.sh`
+  (real apt, scratch root, local signed repositories; two mutants).
 - **The gate is sg-image's `make update-test`**: a canary package upgraded from
   a local test repository, asserted *not* installed before the reboot and
   installed after it, with the machine still reaching its login screen.

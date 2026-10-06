@@ -1,0 +1,469 @@
+#!/usr/bin/python3
+# sg-apt-sources -- keep third-party apt sources from blocking every update.
+#
+# apt refuses to read any of its sources when two entries for one repository
+# disagree on an option: "E: Conflicting values set for option Signed-By
+# regarding source https://packages.mozilla.org/apt/ mozilla: A != B" and then
+# "E: The list of sources could not be read." -- no update from anywhere, not
+# even Debian's security updates. It happens when a repository is added twice:
+# SG Store's Firefox puts packages.mozilla.org in mozilla.list with the key in
+# /usr/share/keyrings, and Mozilla's own instructions append the same
+# repository with the key in /etc/apt/keyrings (a VM of David's, 2026-10-06).
+#
+#   sg-apt-sources heal            make the sources readable again; prints what
+#                                  it changed (and logs it), exits 0 unless it
+#                                  could not
+#   sg-apt-sources adopt FILE      SG Store: put the maker's source FILE in place
+#                                  unless the same repository is configured
+#                                  already (any file, one-line or deb822), then
+#                                  heal; prints "reuse PATH" or "added PATH"
+#   sg-apt-sources problems        read `apt-get update` output on stdin; print
+#                                  one line per repository it could not use:
+#                                  "HOST<TAB>reason" (Settings > Updates shows
+#                                  them; the other repositories still update)
+#
+# heal: entries for one repository and suite that name different keyrings get
+# one keyring -- a system one (Debian's, ours) if involved, else the first in
+# apt's order whose file exists -- and an entry that then repeats another is
+# turned off. Any other "Conflicting values"/"Malformed entry" error apt still
+# reports turns off the later entry (a one-line entry is commented out, a
+# deb822 stanza gets "Enabled: no", an unreadable file is renamed
+# NAME.sg-disabled). Debian's and Stained Glass OS's own sources are never
+# turned off. Each changed file is first copied to /var/backups/sg-apt-sources.
+#
+# SG_APT_ROOT (default /) is the root the files are under, for the gate
+# (SG_APT_ETC, if set, is its etc/apt); apt itself is run with whatever
+# APT_CONFIG says.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = os.environ.get("SG_APT_ROOT", "/")
+LOG = "[sg-apt-sources]"
+# never turned off: the system's own repositories
+SYSTEM_HOSTS = ("deb.debian.org", "security.debian.org", "debian.org", "freesoft.page")
+SYSTEM_FILES = ("sources.list", "debian.sources", "stained-glass.sources")
+
+
+def rooted(path):
+    r = os.path.abspath(ROOT)
+    if r != "/" and (path == r or path.startswith(r + "/")):
+        return path             # already under the root (the gate's keyrings)
+    return os.path.join(ROOT, path.lstrip("/"))
+
+
+def say(msg):
+    print(msg)
+    sys.stdout.flush()
+
+
+def norm_uri(u):
+    return u.rstrip("/") + "/"
+
+
+class Entry:
+    """one source: a line of a .list file or a stanza of a .sources file"""
+
+    def __init__(self, path, kind, start, end, types, uris, suites, comps, signed_by, enabled, opts=None):
+        self.path, self.kind, self.start, self.end = path, kind, start, end
+        self.types, self.uris, self.suites, self.comps = types, uris, suites, comps
+        self.signed_by = signed_by          # None, or the value as written
+        self.enabled = enabled
+        self.opts = opts or {}
+
+    def key_value(self):
+        """Signed-By as apt compares it, or None"""
+        if self.signed_by is None:
+            return None
+        v = self.signed_by.strip()
+        if "BEGIN PGP" in v:
+            return "inline:" + re.sub(r"\s+", "", v)
+        return ",".join(sorted(p for p in re.split(r"[,\s]+", v) if p))
+
+    def keyring_files(self):
+        v = self.key_value()
+        if not v or v.startswith("inline:"):
+            return []
+        return [p for p in v.split(",") if p.startswith("/")]
+
+    def keyring_ok(self):
+        v = self.key_value()
+        if v is None or v.startswith("inline:"):
+            return True
+        files = self.keyring_files()
+        return all(os.path.isfile(rooted(p)) and os.path.getsize(rooted(p)) > 0 for p in files)
+
+    def targets(self):
+        return {(norm_uri(u), s) for u in self.uris for s in self.suites}
+
+    def is_system(self):
+        if os.path.basename(self.path) in SYSTEM_FILES:
+            return True
+        for u in self.uris:
+            host = re.sub(r"^[a-z+]+:/*", "", u).split("/")[0].split(":")[0]
+            if any(host == h or host.endswith("." + h) for h in SYSTEM_HOSTS):
+                return True
+        return False
+
+    def where(self):
+        return "%s:%d" % (strip_root(self.path), self.start + 1)
+
+
+def strip_root(path):
+    r = os.path.abspath(ROOT)
+    return "/" + os.path.relpath(path, r) if r != "/" else path
+
+
+def apt_etc():
+    # SG_APT_ETC: sg-admind's gate keeps its sources in a folder of its own
+    return os.environ.get("SG_APT_ETC") or rooted("/etc/apt")
+
+
+def source_files():
+    """in apt's order: sources.list, then sources.list.d by name"""
+    out = []
+    main = os.path.join(apt_etc(), "sources.list")
+    if os.path.isfile(main):
+        out.append(main)
+    d = os.path.join(apt_etc(), "sources.list.d")
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        names = []
+    for n in names:
+        if (n.endswith(".list") or n.endswith(".sources")) and re.fullmatch(r"[A-Za-z0-9_.\-]+", n):
+            out.append(os.path.join(d, n))
+    return out
+
+
+LIST_RE = re.compile(r"^\s*(deb|deb-src)\s+(?:\[([^\]]*)\]\s+)?(\S+)\s+(\S+)((?:\s+\S+)*)\s*$")
+
+
+def parse_list(path, lines):
+    entries = []
+    for i, line in enumerate(lines):
+        s = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
+        m = LIST_RE.match(s)
+        if not m:
+            continue
+        opts = {}
+        for o in re.findall(r"([A-Za-z0-9\-]+)(?:[+-]?=)(\S+)", m.group(2) or ""):
+            opts[o[0].lower()] = o[1]
+        entries.append(Entry(path, "list", i, i, [m.group(1)], [m.group(3)], [m.group(4)],
+                             m.group(5).split(), opts.get("signed-by"), True, opts))
+    return entries
+
+
+def parse_deb822(path, lines):
+    entries = []
+    i, n = 0, len(lines)
+    while i < n:
+        while i < n and not lines[i].strip():
+            i += 1
+        if i >= n:
+            break
+        start, fields, cur = i, {}, None
+        while i < n and lines[i].strip():
+            line = lines[i]
+            if line.startswith("#"):
+                pass
+            elif line[0] in " \t" and cur:
+                fields[cur] += "\n" + line.strip()
+            elif ":" in line:
+                cur, v = line.split(":", 1)
+                cur = cur.strip().lower()
+                fields[cur] = v.strip()
+            i += 1
+        if "uris" not in fields:
+            continue
+        enabled = fields.get("enabled", "yes").strip().lower() not in ("no", "false", "0")
+        entries.append(Entry(path, "deb822", start, i - 1, fields.get("types", "deb").split(),
+                             fields.get("uris", "").split(), fields.get("suites", "").split(),
+                             fields.get("components", "").split(), fields.get("signed-by"), enabled))
+    return entries
+
+
+def read_lines(path):
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        return f.read().split("\n")
+
+
+def all_entries():
+    out = []
+    for p in source_files():
+        try:
+            lines = read_lines(p)
+        except OSError:
+            continue
+        out += parse_deb822(p, lines) if p.endswith(".sources") else parse_list(p, lines)
+    return out
+
+
+BACKED_UP = set()
+
+
+def backup(path):
+    if path in BACKED_UP:
+        return
+    d = rooted("/var/backups/sg-apt-sources")
+    os.makedirs(d, exist_ok=True)
+    shutil.copy2(path, os.path.join(d, "%s.%s" % (os.path.basename(path), time.strftime("%Y%m%d-%H%M%S"))))
+    BACKED_UP.add(path)
+
+
+def write_lines(path, lines):
+    backup(path)
+    st = os.stat(path)
+    tmp = path + ".sg-tmp"
+    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write("\n".join(lines))
+    os.chmod(tmp, st.st_mode & 0o7777)
+    os.replace(tmp, path)
+
+
+def set_signed_by(e, value):
+    """rewrite e's Signed-By to value (a keyring path list, as written)"""
+    lines = read_lines(e.path)
+    if e.kind == "list":
+        line = lines[e.start]
+        m = LIST_RE.match(line.split("#", 1)[0])
+        opts = m.group(2)
+        new = re.sub(r"signed-by=\S+", "signed-by=" + value, opts, flags=re.I)
+        lines[e.start] = line.replace("[" + opts + "]", "[" + new + "]", 1)
+    else:
+        out, j = [], e.start
+        stanza = lines[e.start:e.end + 1]
+        k = 0
+        while k < len(stanza):
+            if stanza[k].lower().startswith("signed-by:"):
+                out.append("Signed-By: " + value.replace("\n", "\n "))
+                k += 1
+                while k < len(stanza) and stanza[k][:1] in (" ", "\t"):
+                    k += 1
+                continue
+            out.append(stanza[k])
+            k += 1
+        lines[j:e.end + 1] = out
+    write_lines(e.path, lines)
+
+
+def disable(e, why):
+    lines = read_lines(e.path)
+    if e.kind == "list":
+        lines[e.start] = "# %s (sg-apt-sources %s): %s" % (why, time.strftime("%Y-%m-%d"), lines[e.start])
+    else:
+        stanza = [l for l in lines[e.start:e.end + 1] if not l.lower().startswith("enabled:")]
+        stanza.insert(0, "# %s (sg-apt-sources %s)" % (why, time.strftime("%Y-%m-%d")))
+        stanza.insert(1, "Enabled: no")
+        lines[e.start:e.end + 1] = stanza
+    write_lines(e.path, lines)
+
+
+def covered(e, others):
+    """does an enabled entry among others give every type/repository/suite of
+    e with at least its components and the same keyring?"""
+    for t in e.types:
+        for tgt in e.targets():
+            if not any(o is not e and o.enabled and t in o.types and tgt in o.targets()
+                       and set(e.comps) <= set(o.comps) and o.key_value() == e.key_value() for o in others):
+                return False
+    return True
+
+
+def resolve_signed_by():
+    """one keyring per repository and suite; True if anything changed"""
+    entries = [e for e in all_entries() if e.enabled]
+    groups = {}
+    for e in entries:
+        if e.key_value() is None:
+            continue
+        for t in e.targets():
+            groups.setdefault(t, []).append(e)
+    for (uri, suite), es in groups.items():
+        values = []
+        for e in es:
+            if e.key_value() not in values:
+                values.append(e.key_value())
+        if len(values) < 2:
+            continue
+        # the winner: a system source's keyring; else the first (apt order)
+        # whose keyring file is there; else simply the first
+        ranked = sorted(es, key=lambda e: (not e.is_system(), not e.keyring_ok(), e.key_value().startswith("inline:")))
+        win = ranked[0]
+        say("%s %s %s: the entries name different keyrings (%s); all now use %s's" %
+            (LOG, uri, suite, ", ".join(x.where() for x in es), win.where()))
+        for e in es:
+            if e.key_value() != win.key_value() and not e.is_system():
+                set_signed_by(e, win.signed_by.strip())
+                say("%s %s: Signed-By %s -> %s" % (LOG, e.where(), e.key_value(), win.key_value()))
+        # one change per pass: the files' line numbers may have moved
+        return True
+    return False
+
+
+def disable_duplicates(paths):
+    """entries in the files just changed that now repeat another"""
+    changed = False
+    entries = [e for e in all_entries() if e.enabled]
+    for e in reversed(entries):         # the later of two is the repeat
+        if e.path in paths and not e.is_system() and covered(e, [o for o in entries if o is not e]):
+            disable(e, "repeats another source")
+            say("%s %s repeated another entry for %s: turned off" % (LOG, e.where(), " ".join(sorted(u for u, _ in e.targets()))))
+            return True
+    return changed
+
+
+def apt_errors():
+    """the errors apt reports reading its sources (no network)"""
+    try:
+        r = subprocess.run(["apt-cache", "policy"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return ["apt-cache: %s" % e]
+    return [l[3:].strip() for l in r.stderr.splitlines() if l.startswith("E: ")]
+
+
+def heal_reported(errors):
+    """act on one error apt reports; True if something changed"""
+    entries = all_entries()
+    for err in errors:
+        m = re.match(r"Conflicting values set for option (\S+) regarding source (\S+) (\S+):", err)
+        if m:
+            uri, suite = norm_uri(m.group(2)), m.group(3)
+            es = [e for e in entries if e.enabled and (uri, suite) in e.targets()]
+            keep = sorted(es, key=lambda e: not e.is_system())[:1]
+            for e in es:
+                if e not in keep and not e.is_system():
+                    disable(e, "conflicts with %s on %s" % (keep[0].where(), m.group(1)))
+                    say("%s %s set %s differently for %s %s: turned off" % (LOG, e.where(), m.group(1), uri, suite))
+                    return True
+        m = re.match(r"Malformed (?:entry|stanza) (\d+) in (?:list|sources) file (\S+)", err) or \
+            re.match(r"Type '.*' is not known on (?:line|stanza) (\d+) in source list (\S+)", err)
+        if m:
+            path = m.group(2)
+            full = path if os.path.isabs(path) and os.path.exists(path) else rooted(path)
+            name = os.path.basename(full)
+            if name in SYSTEM_FILES or not os.path.isfile(full):
+                continue
+            if full.endswith(".list"):
+                lines = read_lines(full)
+                k = int(m.group(1)) - 1
+                if 0 <= k < len(lines) and not lines[k].lstrip().startswith("#"):
+                    backup(full)
+                    lines[k] = "# unreadable (sg-apt-sources %s): %s" % (time.strftime("%Y-%m-%d"), lines[k])
+                    write_lines(full, lines)
+                    say("%s %s:%d could not be read: turned off" % (LOG, strip_root(full), k + 1))
+                    return True
+            backup(full)
+            os.rename(full, full + ".sg-disabled")
+            say("%s %s could not be read: renamed %s.sg-disabled" % (LOG, strip_root(full), name))
+            return True
+    return False
+
+
+def heal():
+    if os.environ.get("SG_MUTANT") == "NO_HEAL":
+        return 0
+    changed_files = set()
+    for _ in range(20):
+        before = {p: os.path.getmtime(p) for p in source_files()}
+        if resolve_signed_by():
+            changed_files |= {p for p in source_files() if os.path.getmtime(p) != before.get(p)}
+            continue
+        if disable_duplicates(changed_files):
+            continue
+        break
+    for _ in range(20):
+        errors = apt_errors()
+        if not errors or not heal_reported(errors):
+            break
+    errors = apt_errors()
+    if any("could not be read" in e for e in errors):
+        say("%s the sources still cannot be read: %s" % (LOG, "; ".join(errors)))
+        return 1
+    return 0
+
+
+def adopt(src):
+    """SG Store: the maker's source, unless that repository is there already"""
+    lines = read_lines(src)
+    mine = parse_deb822(src, lines) if src.endswith(".sources") else parse_list(src, lines)
+    dst = os.path.join(apt_etc(), "sources.list.d", os.path.basename(src))
+    want = set().union(*(e.targets() for e in mine)) if mine else set()
+    have = [e for e in all_entries() if e.enabled and e.targets() & want]
+    good = [e for e in have if e.keyring_ok()]
+    if good:
+        say("reuse %s" % good[0].where())
+    else:
+        for e in have:          # there, but its keyring is gone: ours instead
+            disable(e, "its keyring is missing; replaced by %s" % strip_root(dst))
+            say("%s %s: keyring %s missing, turned off" % (LOG, e.where(), ",".join(e.keyring_files())))
+        if os.path.exists(dst):
+            backup(dst)
+        shutil.copyfile(src, dst)
+        os.chmod(dst, 0o644)
+        say("added %s" % strip_root(dst))
+    return heal()
+
+
+def problems(text):
+    """per repository, why `apt-get update` could not use it"""
+    found = {}
+    if os.environ.get("SG_MUTANT") == "NO_PROBLEMS":
+        return []
+
+    def note(url, why):
+        m = re.match(r"[a-z+]+://([^/]+)", url)
+        found.setdefault(m.group(1) if m else url.rstrip("/"), why)
+
+    for line in text.splitlines():
+        line = line.strip()
+        m = re.match(r"(?:W|E): (?:GPG error|OpenPGP signature verification failed): (\S+) .*", line)
+        if m:
+            low = line.lower()
+            if "expkeysig" in low or "expired" in low:
+                why = "its signing key has expired"
+            elif "no_pubkey" in low or "missing key" in low or "not available" in low or "no keyring" in low:
+                why = "its signing key is missing or has been replaced"
+            else:
+                why = "its signature could not be checked"
+            note(m.group(1), why)
+            continue
+        m = re.match(r"E: The repository '(\S+) .*' (?:is not signed|does not have a Release file)", line)
+        if m:
+            note(m.group(1), "its signature could not be checked" if "not signed" in line else "it has no Release file")
+            continue
+        m = re.match(r"(?:W|E): Failed to fetch (\S+)\s+(.*)", line)
+        if m:
+            note(m.group(1), "it could not be reached (%s)" % m.group(2).strip()[:120])
+            continue
+        m = re.match(r"E: Conflicting values set for option (\S+) regarding source (\S+)", line)
+        if m:
+            note(m.group(2), "it is configured twice with different %s" % m.group(1))
+            continue
+        if line.startswith("E: The list of sources could not be read"):
+            found.setdefault("apt", "the list of package sources could not be read")
+    return ["%s\t%s" % (h, w) for h, w in found.items()]
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "heal":
+        return heal()
+    if len(argv) == 3 and argv[1] == "adopt":
+        return adopt(argv[2])
+    if len(argv) == 2 and argv[1] == "problems":
+        for l in problems(sys.stdin.read()):
+            print(l)
+        return 0
+    sys.stderr.write("usage: sg-apt-sources heal | adopt FILE | problems < apt-get-update-output\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

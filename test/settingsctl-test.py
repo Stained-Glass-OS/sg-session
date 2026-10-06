@@ -373,6 +373,12 @@ with open(os.path.join(ENV["SG_UPDATE_STATE"], "state"), "w") as f:
     f.write("ready\n")
 code, lines = ctl("updates", "progress")
 check("updates progress: not downloading once ready", "DOWNLOADING no" in lines, lines)
+# a package source the last check could not use (sg-apt-sources problems)
+with open(os.path.join(ENV["SG_UPDATE_STATE"], "problems"), "w") as f:
+    f.write("packages.mozilla.org\tits signing key has expired\n")
+code, lines = ctl("updates")
+check("updates: a source that could not be used is reported, with why",
+      "PROBLEM packages.mozilla.org\tits signing key has expired" in lines, lines)
 calls()
 code, lines = ctl("updates", "install")
 check("updates refuses other words", code == 2, (code, lines))

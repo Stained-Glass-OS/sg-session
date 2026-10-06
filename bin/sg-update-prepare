@@ -115,10 +115,29 @@ repair_dpkg() {
 }
 repair_dpkg
 
+# A third-party repository configured twice with different keyrings (SG
+# Store's mozilla.list and Mozilla's own instructions' entry, a VM of
+# David's 2026-10-06) makes apt refuse ALL its sources: "Conflicting values
+# set for option Signed-By", then no update from anywhere. sg-apt-sources
+# heals that class first (one keyring per repository, the repeat turned off,
+# the files backed up), logging each change here.
+APTSRC=${SG_APT_SOURCES_TOOL:-/usr/lib/stained-glass/sg-apt-sources}
+if [ -x "$APTSRC" ]; then
+    _h=$("$APTSRC" heal 2>&1) || log "the package sources could not all be repaired"
+    [ -z "$_h" ] || printf '%s\n' "$_h" | sed 's/^/[sg-update] /'
+fi
+
 log "refreshing package lists"
-# One archive out of reach (a Surface PC's linux-surface archive, say) must
-# not hold back every other update: its old list stays, the rest refresh.
-pk refresh || log "not every package list could be refreshed; going on with the lists here"
+# One archive out of reach (a Surface PC's linux-surface archive, say), or
+# one whose signing key expired or was replaced, must not hold back every
+# other update: its old list stays, the rest refresh -- and Settings > Updates
+# says which one and why ($STATE/problems: HOST<TAB>reason).
+_upd=$(apt-get update -q -o DPkg::Lock::Timeout=120 2>&1) || log "not every package list could be refreshed; going on with the lists here"
+if [ -x "$APTSRC" ]; then
+    printf '%s\n' "$_upd" | "$APTSRC" problems 2>/dev/null | publish problems || true
+    [ ! -s "$STATE/problems" ] || sed 's/^/[sg-update] cannot use /; s/\t/: /' "$STATE/problems"
+fi
+pk refresh || log "PackageKit could not refresh every package list; going on with the lists here"
 
 make_plan
 echo downloading | publish state

@@ -1,3 +1,26 @@
+sg-session (0.1.0-150) unstable; urgency=medium
+
+  * Updates are never blocked by a third-party package source configured
+    twice. On a VM of David's every apt update failed: SG Store's Linux
+    Firefox had added packages.mozilla.org with its key in
+    /usr/share/keyrings, Mozilla's own instructions added the same
+    repository with the key in /etc/apt/keyrings, and apt then refuses all
+    its sources ("Conflicting values set for option Signed-By ... The list
+    of sources could not be read"). New lib/sg-apt-sources: "heal" gives
+    each repository one keyring and turns the repeat off (malformed
+    third-party lines too), backs the files up to
+    /var/backups/sg-apt-sources and logs every change; sg-update-prepare
+    runs it before refreshing. "adopt" lets SG Store reuse a repository that
+    is already configured instead of adding a second entry.
+  * A vendor whose signing key expired or was replaced no longer goes
+    unnoticed: sg-update-prepare publishes the repositories `apt-get update`
+    could not use, and why, in /run/sg-update/problems, and sg-settingsctl
+    reports them (PROBLEM lines) for Settings > Updates; every other source
+    still updates. Gate test/apt-sources-test.sh (real apt, a scratch apt
+    root, local signed repositories) with mutants NO_HEAL and NO_PROBLEMS.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 16:08:49 -0700
+
 sg-session (0.1.0-149) unstable; urgency=medium
 
   * A computer without a keyboard can sign in: the login and lock screens,
