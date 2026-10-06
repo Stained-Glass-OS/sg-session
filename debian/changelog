@@ -1,3 +1,40 @@
+sg-session (0.1.0-148) unstable; urgency=medium
+
+  * Every session has a keyring (Secret Service, org.freedesktop.secrets),
+    opened by the sign-in password: sg-session depends on gnome-keyring,
+    libpam-gnome-keyring and libsecret-tools. Eddie said "Unable to talk
+    with OS keyring to save the password" and saved it in plain text;
+    Chromium, Chrome, VS Code, Element, Thunderbird and NetworkManager
+    applets expect one too. Signing in opens it through Debian's own greetd
+    PAM file (pam_gnome_keyring was there, the module was not installed);
+    installed machines get it with apt upgrade.
+  * The lock screen reopens a closed keyring with the password typed:
+    stained-glass-lock runs pam_gnome_keyring after the password check, and
+    sg-rdp-pamcheck (console path) tells it the person's runtime directory,
+    which sg-lockd, a system service, does not have.
+  * sg-password-change (new, root; sg-admind's user-password-own): a person
+    changing their own password, with the current one, as passwd(1) would
+    run for them (PAM stained-glass-password = common-password): pam_unix
+    checks the current password and the rules, pam_gnome_keyring
+    re-encrypts the keyring, so it still opens at the next sign-in --
+    signed in (the session's daemon) or signed out (a private daemon for the
+    change). An administrator's reset still cannot (no current password).
+  * sg-keyring-first (new; pam_exec in the auth stack, pam-configs
+    stained-glass-keyring, greetd only): makes the login keyring at a
+    person's first sign-in, before the session's daemon opens it.
+    gnome-keyring does not publish on D-Bus a keyring it creates through
+    its control socket, so the first program to store a secret got a "new
+    keyring password" prompt instead (found by the VM gate).
+  * test/keyring-test.sh (make test-keyring, test-keyring-mutants): the
+    first sign-in in a session-like bus, then secret-tool stores and finds
+    a secret with no prompt; the lock screen's check reopens a locked keyring, a wrong
+    password does not; as root, sg-password-change refuses a wrong current
+    password and re-encrypts the keyring signed out and in. Mutants
+    LOCK_KEYRING, PWCHANGE_RUID, PWCHANGE_RUNTIME, KEYRING_FIRST each fail
+    it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 14:46:25 -0700
+
 sg-session (0.1.0-147) unstable; urgency=medium
 
   * debian/changelog: a stanza body left after 0.1.0-137's sign-off by a

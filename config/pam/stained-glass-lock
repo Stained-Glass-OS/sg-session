@@ -4,3 +4,8 @@
 # password rules and lockout (pam_faillock, if configured) as signing in.
 @include common-auth
 @include common-account
+# ... and, once the password is right, the session's keyring opens with it if
+# it was closed (its daemon restarted, or a program locked it), as signing in
+# opens it (greetd's own PAM file). sg-rdp-pamcheck tells the module where the
+# person's keyring daemon is. "-": nothing if gnome-keyring is not installed.
+-auth       optional    pam_gnome_keyring.so

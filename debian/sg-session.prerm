@@ -3,9 +3,9 @@ set -e
 
 case "$1" in
     remove)
-        # Unregister the profile hook before its script is removed, or every
-        # login would run a pam_exec that no longer exists.
-        pam-auth-update --package --remove stained-glass-profile stained-glass-audit
+        # Unregister the profile and keyring hooks before their programs are
+        # removed, or every login would run a pam_exec that no longer exists.
+        pam-auth-update --package --remove stained-glass-profile stained-glass-audit stained-glass-keyring
         ;;
 esac
 

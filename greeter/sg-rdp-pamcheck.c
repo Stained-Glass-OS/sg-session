@@ -15,9 +15,11 @@
  */
 #define _GNU_SOURCE
 #include <security/pam_appl.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define MAXFIELD 512
@@ -71,9 +73,30 @@ static int read_field( char *buf, size_t max )
     }
 }
 
+/* The lock screen opens the session's keyring if it was closed (its daemon
+ * restarted, or a program locked it): pam_gnome_keyring, in the lock
+ * screen's PAM stack, unlocks it with the password just typed. It finds the
+ * person's keyring daemon through XDG_RUNTIME_DIR, which sg-lockd -- a
+ * system service -- does not have: name the person's runtime directory, if
+ * it is theirs. SG_RUNTIME_ROOT (default /run/user) is the gate's. */
+static int set_runtime_dir( pam_handle_t *ph, const char *user )
+{
+    const char *root = getenv( "SG_RUNTIME_ROOT" );
+    char dir[400], line[440];
+    struct passwd *pw = getpwnam( user );
+    struct stat st;
+
+    if (!pw) return PAM_SUCCESS;
+    if (!root || !root[0]) root = "/run/user";
+    snprintf( dir, sizeof(dir), "%s/%u", root, (unsigned)pw->pw_uid );
+    if (lstat( dir, &st ) || !S_ISDIR( st.st_mode ) || st.st_uid != pw->pw_uid) return PAM_SUCCESS;
+    snprintf( line, sizeof(line), "XDG_RUNTIME_DIR=%s", dir );
+    return pam_putenv( ph, line );
+}
+
 int main( void )
 {
-    const char *service = getenv( "SG_REMOTE_PAM_SERVICE" );
+    const char *service = getenv( "SG_REMOTE_PAM_SERVICE" ), *confdir = getenv( "SG_PAM_CONFDIR" );
     char user[MAXFIELD];
     struct pam_conv pc = { conv, NULL };
     pam_handle_t *ph = NULL;
@@ -90,7 +113,8 @@ int main( void )
     }
     if (!user[0]) { puts( "FAIL empty user" ); return 1; }
 
-    rc = pam_start( service, user, &pc, &ph );
+    /* SG_PAM_CONFDIR: the gate's PAM configuration instead of /etc/pam.d */
+    rc = confdir && confdir[0] ? pam_start_confdir( service, user, &pc, confdir, &ph ) : pam_start( service, user, &pc, &ph );
     /* A blank password is refused -- unless the caller is the lock screen,
      * at the console: as Windows' "limit local account use of blank
      * passwords to console logon only". The live system's account has none. */
@@ -103,6 +127,9 @@ int main( void )
      * report 2) */
     if (!(rhost = getenv( "SG_PAMCHECK_RHOST" ))) rhost = console ? "" : "rdp";
     if (rc == PAM_SUCCESS && *rhost) rc = pam_set_item( ph, PAM_RHOST, rhost );
+#ifndef SG_MUTANT_LOCK_KEYRING
+    if (rc == PAM_SUCCESS && console) rc = set_runtime_dir( ph, user );
+#endif
     if (rc == PAM_SUCCESS) rc = pam_authenticate( ph, flags );
     /* Authentication is not authorisation: an expired or locked account has a
      * correct password and must still be refused. */

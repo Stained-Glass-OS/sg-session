@@ -70,9 +70,11 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	fi
 	@# The lock service and its helpers. sg-rdp-pamcheck is the PAM check the
 	@# lock service's root monitor runs; it has no setuid bit and is only of
-	@# use to root.
+	@# use to root. So are sg-password-change (sg-admind's: a person changes
+	@# their own password, and their keyring follows) and sg-keyring-first
+	@# (pam_exec's at sign-in: the keyring made at the first one).
 	@if [ -f build/sg-lockd ]; then \
-	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck \
+	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck build/sg-password-change build/sg-keyring-first \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# Remote Desktop (ADR 0010): the daemon and its certificate helper. The
@@ -142,7 +144,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    $(DESTDIR)/etc/stained-glass/policy.d/
 	install -d $(DESTDIR)/etc/pam.d
 	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote \
-	    config/pam/stained-glass-elevate $(DESTDIR)/etc/pam.d/
+	    config/pam/stained-glass-elevate config/pam/stained-glass-password $(DESTDIR)/etc/pam.d/
 	@# The profile service (sg-profile-create), run at login by pam_exec;
 	@# the deb's postinst registers it with pam-auth-update.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
@@ -166,6 +168,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-windows-printers $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -D -m 0700 bin/sgwindrv $(DESTDIR)$(PREFIX)/lib/cups/backend/sgwindrv
 	install -m 0644 config/pam-configs/stained-glass-audit $(DESTDIR)$(PREFIX)/share/pam-configs/
+	@# The keyring made at a person's first sign-in (sg-keyring-first, pam_exec in auth).
+	install -m 0644 config/pam-configs/stained-glass-keyring $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
 	install -m 0755 domain/sg-domain-groups domain/sg-domain-logon domain/sg-gpo-user domain/sg-gpo-machine $(DESTDIR)$(PREFIX)/libexec/stained-glass/
@@ -476,6 +480,8 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polimport greeter/sg-polimport.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-password-change greeter/sg-password-change.c -lpam
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-keyring-first greeter/sg-keyring-first.c
 	@# The gate looks for its fixtures beside the bridge, because in the image
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
@@ -598,6 +604,17 @@ test-elevate-debug: procagent
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh
+
+# The session keyring: secret-tool in a session-like bus, the lock screen's
+# PAM check opening it, sg-password-change re-encrypting it (that part as
+# root: sudo -n, a temporary account). Mutants: test-keyring-mutants.
+.PHONY: test-keyring test-keyring-mutants
+test-keyring:
+	@sh test/keyring-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+test-keyring-mutants:
+	@for m in LOCK_KEYRING PWCHANGE_RUID PWCHANGE_RUNTIME KEYRING_FIRST; do \
+	    if sh test/keyring-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
+	    echo "mutant $$m killed"; done
 
 .PHONY: test-pamcheck
 test-pamcheck: rdp

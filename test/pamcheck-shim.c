@@ -41,3 +41,11 @@ int pam_authenticate( pam_handle_t *ph, int flags )
 int pam_acct_mgmt( pam_handle_t *ph, int flags ) { return PAM_SUCCESS; }
 int pam_end( pam_handle_t *ph, int status ) { return PAM_SUCCESS; }
 const char *pam_strerror( pam_handle_t *ph, int err ) { return "shim"; }
+
+int pam_putenv( pam_handle_t *ph, const char *nv )
+{
+    FILE *f = out();
+    fprintf( f, "env=%s\n", nv );
+    if (f != stderr) fclose( f );
+    return PAM_SUCCESS;
+}

@@ -1860,6 +1860,98 @@ Things that caught me out:
   `PeekNamedPipe` from a timer; a login screen that stops repainting while PAM
   thinks is indistinguishable from a hung machine.
 
+## The session keyring (Secret Service)
+
+Every session has a keyring: **gnome-keyring**'s Secret Service
+(`org.freedesktop.secrets`), which Linux programs keep passwords in -- Eddie
+(AirVPN; without one it said "Unable to talk with OS keyring" and saved the
+password in plain text), Chromium and Chrome, VS Code, Element, Thunderbird,
+NetworkManager applets: anything using libsecret or `secret-tool`. It is
+opened by the sign-in password, as GNOME does. sg-session Depends on
+`gnome-keyring`, `libpam-gnome-keyring` and `libsecret-tools`, so installed
+machines get it with apt upgrade.
+
+- **Signing in** opens it: Debian's own `/etc/pam.d/greetd` already has
+  `-auth optional pam_gnome_keyring.so` and `-session optional
+  pam_gnome_keyring.so auto_start`; they were no-ops because the module was
+  not installed. At session open, pam_systemd has started the user manager,
+  whose `gnome-keyring-daemon.socket` (enabled by the package) listens at
+  `$XDG_RUNTIME_DIR/keyring/control`; the module sends the password there and
+  the daemon starts and opens (or, the first time, creates) the login
+  keyring. D-Bus activates `org.freedesktop.secrets` on the session bus.
+- **The first sign-in** needs `sg-keyring-first`: gnome-keyring 48 does not
+  publish on D-Bus a login keyring it *creates* through the control socket
+  (gkd-login makes it; only collections present at D-Bus start-up or made
+  over D-Bus are registered) -- `Collections` lists it, everything else says
+  "Object does not exist", and the first secret stored raises a "choose a
+  password for the new keyring" prompt. A keyring that exists when the
+  daemon starts is fine. So pam_exec (pam-configs/stained-glass-keyring,
+  `Auth-Type: Additional`, expose_authtok), after the password is accepted
+  and for greetd only, makes it: no `~/.local/share/keyrings/login.keyring`
+  -> a daemon of the person's in a private runtime directory with
+  `--unlock` and the password (not `--login`: that delays initialisation
+  until a later `--start`), stopped as soon as the file is there. Run
+  unprivileged it only acts on `SG_KEYRING_FIRST_HOME` (the gate's), never on
+  the account's real home.
+- **The lock screen** leaves it open (GNOME does too) and reopens it if it
+  was closed -- its daemon restarted, or a program locked it:
+  `config/pam/stained-glass-lock` has `-auth optional pam_gnome_keyring.so`
+  after the password check, and `sg-rdp-pamcheck`, on the console path only,
+  puts the person's `/run/user/UID` into the PAM environment (sg-lockd is a
+  system service with no `XDG_RUNTIME_DIR`; without it the module cannot
+  find the daemon and silently does nothing).
+- **Changing your own password** (Settings, Control Panel: "Change your
+  password", which asks for the current one) goes through sg-admind's
+  `user-password-own` to `sg-password-change` (root): the PAM service
+  `stained-glass-password` is `@include common-password`, run with
+  **passwd's identity** -- real uid the person's, effective uid root -- so
+  pam_unix asks for and checks the current password and applies the password
+  rules, and pam_gnome_keyring (in common-password through its
+  pam-auth-update profile) re-encrypts the keyring with old and new. Signed
+  in, the session's daemon does it; signed out, there is no runtime
+  directory and the module would do nothing, so the helper makes a private
+  one in /tmp and runs a daemon there for the change (pam_gnome_keyring
+  cannot start one under passwd's identity: it drops to the real uid, then
+  cannot set the group -- "couldn't setup credentials").
+- **An administrator's reset** (chpasswd: `user-password` on another account,
+  Setup, the OOBE) cannot re-encrypt the keyring: there is no
+  current password to open it with. The person's next sign-in leaves the old
+  keyring locked; programs then ask for its old password. Windows behaves
+  the same way (a reset loses DPAPI-protected saved passwords), and the
+  reset dialog says so.
+- `passwd` in a terminal works natively (common-password). Wine's
+  `net.exe` has no `net user`, so that is no path to a password.
+
+**`make test-keyring` is the gate** (`test/keyring-test.sh`): a session-like
+bus (dbus-run-session; the first sign-in as above) stores and finds a secret
+with secret-tool and no prompt; the real stained-glass-lock file
+(its password check stood in for) through sg-rdp-pamcheck, without
+`XDG_RUNTIME_DIR`, reopens a locked keyring and a wrong password does not; as
+root (sudo -n; a temporary account under /var/tmp, removed) sg-password-change
+refuses a wrong current password and re-encrypts the keyring signed out and
+signed in. `make test-keyring-mutants`: SG_MUTANT_LOCK_KEYRING,
+SG_MUTANT_PWCHANGE_RUID, SG_MUTANT_PWCHANGE_RUNTIME, SG_MUTANT_KEYRING_FIRST
+each fail it. Part 1 reproduces the first sign-in exactly (fresh home,
+sg-keyring-first, a daemon started as the socket unit starts it, opened
+through pam_gnome_keyring): starting the test daemon with `--unlock` instead
+hides the D-Bus bug -- the first VM run found it. In the VM,
+sg-image's boot-test checks secret-tool in the signed-in session and across
+lock/unlock, and `make keyring-test` there changes the password and signs out
+and in again.
+
+Traps: PAM resolves `@include` in /etc/pam.d even under `pam_start_confdir`;
+an application cannot set `PAM_OLDAUTHTOK`/`PAM_AUTHTOK` (`PAM_BAD_ITEM`) --
+only a module (pam_unix) can, hence passwd's identity; pam_gnome_keyring's
+auth needs `PAM_AUTHTOK` set by an earlier module (pam_permit sets none).
+
+**Windows programs' Credential Manager** (CredWrite/CredRead) is not bridged:
+Wine keeps credentials in the user's HKCU hive (`Software\Wine\Credential
+Manager`, the secret RC4-scrambled with a random key stored beside it), and
+its only host bridge is mountmgr.sys's macOS Keychain path -- which in our
+shared prefix runs in the machine's SYSTEM wineserver, not the person's
+session, so it could not reach their keyring anyway. A bridge would be a
+unixlib in advapi32 calling libsecret in the person's own process.
+
 ## Bundled Windows applications: PowerShell 7 and Python
 
 `sg-install-apps` installs what the image stages under `SG_APPS_DIR`

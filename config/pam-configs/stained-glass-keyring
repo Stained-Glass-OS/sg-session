@@ -1,0 +1,6 @@
+Name: Stained Glass OS: make the keyring at a person's first sign-in
+Default: yes
+Priority: 0
+Auth-Type: Additional
+Auth:
+	optional	pam_exec.so quiet expose_authtok /usr/libexec/stained-glass/sg-keyring-first
