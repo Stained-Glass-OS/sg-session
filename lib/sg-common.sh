@@ -839,6 +839,69 @@ sg_program_files_protected() {
     return 0
 }
 
+# C:\windows is the system's, as on Windows, where Users may read and run
+# what is there and change none of it. The prefix is made and updated by the
+# SYSTEM account with the Wine group's write (umask 002), so every user could
+# replace a DLL in system32 -- one that SYSTEM's services, the elevated
+# programs and every other user's programs then load -- or put one beside
+# explorer.exe or regedit.exe in C:\windows itself. The group loses write in
+# the whole tree: everything there now, and (a default ACL on its folders)
+# what the system makes there later. Users still write where Windows lets
+# them: Temp, Tasks (AT jobs written by the programs that make them),
+# Installer (Wine's msiexec runs in the user's own process: a per-user
+# install caches its package there), Logs, and system32\catroot and
+# catroot2 (Wine's crypt32 adds an installer's catalogs in the user's
+# process) -- sticky, so each user's files are their own, what a user makes
+# there not the group's to change, and the system's files there not theirs
+# to change. The print spool is left as it is: Wine's winspool adds the
+# CUPS printers, PPDs into spool\drivers, in each user's session, and the
+# spool files are the user's (set_machine_settings). SystemTemp is SYSTEM's
+# alone. Wine's record of the
+# prefix's version (.update-timestamp) is the system's too: a person's process
+# must not take a prefix update for done. Every boot (a cheap find: what a
+# Wine update or an elevated installer made group-writable since); the
+# folders' default ACLs once (STATE stamp).
+#   sg_windows_protected DRIVE_C GROUP STATEDIR
+sg_windows_protected() {
+    _c=$1 _grp=$2 _st=$3
+    _w="$_c/windows"
+    [ -d "$_w" ] || return 0
+    [ "${SG_MUTANT_WINDOWS_WRITABLE:-}" = 1 ] && return 0
+    for _d in temp tasks Installer logs system32/catroot system32/catroot2; do
+        [ -d "$_w/$_d" ] || mkdir -p "$_w/$_d" 2>/dev/null || continue
+        chgrp "$_grp" "$_w/$_d" 2>/dev/null || :
+        chmod 3775 "$_w/$_d" 2>/dev/null || :
+        if command -v setfacl >/dev/null 2>&1; then setfacl -m g::rwx -m d:g::r-x "$_w/$_d" 2>/dev/null || :; fi
+    done
+    find "$_w" -xdev \( -path "$_w/temp" -o -path "$_w/tasks" -o -path "$_w/Installer" -o -path "$_w/logs" \
+        -o -path "$_w/system32/catroot" -o -path "$_w/system32/catroot2" \
+        -o -path "$_w/SystemTemp" -o -path "$_w/system32/spool" \) -prune -o \
+        ! -type l -perm -g=w -print0 2>/dev/null | xargs -0 -r chmod g-w 2>/dev/null || :
+    _ts="${_c%/*}/.update-timestamp"
+    if [ -f "$_ts" ]; then chmod g-w "$_ts" 2>/dev/null || :; fi
+    [ -e "$_st/windows-protected-1" ] && return 0
+    if command -v setfacl >/dev/null 2>&1; then
+        find "$_w" -xdev \( -path "$_w/temp" -o -path "$_w/tasks" -o -path "$_w/Installer" -o -path "$_w/logs" \
+            -o -path "$_w/system32/catroot" -o -path "$_w/system32/catroot2" \
+            -o -path "$_w/SystemTemp" -o -path "$_w/system32/spool" \) -prune -o \
+            -type d -print0 2>/dev/null | xargs -0 -r setfacl -m d:g::r-x 2>/dev/null || :
+    fi
+    _owner=$(stat -c %u "$_w" 2>/dev/null)
+    # what a person put in C:\windows before this (theirs to change still):
+    # said once, for an administrator to look at -- not removed
+    _alien=$(find "$_w" -xdev \( -path "$_w/temp" -o -path "$_w/tasks" -o -path "$_w/Installer" -o -path "$_w/logs" \
+        -o -path "$_w/system32/catroot" -o -path "$_w/system32/catroot2" -o -path "$_w/SystemTemp" \
+        -o -path "$_w/system32/spool" \) -prune -o ! -user "${_owner:-0}" ! -user 0 -print 2>/dev/null | head -5 | tr '\n' ' ')
+    [ -z "$_alien" ] || sg_log "WARNING: files in C:\\windows that a person owns (they can still change them): $_alien"
+    for _d in temp tasks Installer logs system32/catroot system32/catroot2; do
+        if [ ! -d "$_w/$_d" ] || [ -z "$_owner" ]; then continue; fi
+        find "$_w/$_d" -xdev -mindepth 1 -user "$_owner" ! -type l -perm -g=w -print0 2>/dev/null |
+            xargs -0 -r chmod g-w 2>/dev/null || :
+    done
+    : > "$_st/windows-protected-1" 2>/dev/null || :
+    return 0
+}
+
 # The work area for Linux programs on X11: the screen (W H) less the taskbar.
 # Without _NET_WORKAREA, Qt and GTK take the whole screen as theirs, and a
 # program that sizes itself to it (SG Office's editors) covered the taskbar.

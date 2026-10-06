@@ -1,5 +1,18 @@
 sg-session (0.1.0-137) unstable; urgency=medium
 
+  * C:\windows is the system's (sg_windows_protected, every boot): users
+    read and run what is there and change none of it, as on Windows. The
+    prefix was made with the Wine group's write, so any user could replace
+    a DLL in system32 that SYSTEM's services load, or put one beside
+    explorer.exe (older notes, David 2026-10-02 #34). Users still write in
+    Temp, Tasks, Installer, Logs, catroot and catroot2 (sticky: their own
+    files only); the print spool is left as it is; Wine's .update-timestamp
+    is the system's. Files a person put in C:\windows before are logged.
+    VM-checked (qa3): a standard user can no longer plant in or change
+    system32; cmd (64/32-bit), reg, PowerShell still run for them.
+    Test: test/windows-protected-test.sh (mutant SG_MUTANT_WINDOWS_WRITABLE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:00:00 -0700
   * Tests: scratch-home.sh gives every gate a runtime directory of its own
     and unsets WAYLAND_DISPLAY and DISPLAY: Wine's Wayland driver connects
     to $XDG_RUNTIME_DIR/wayland-0 even with WAYLAND_DISPLAY unset, and a
