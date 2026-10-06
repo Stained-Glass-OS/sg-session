@@ -15,6 +15,17 @@ if [ -z "${SG_GATE_HOME:-}" ]; then
     export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share" XDG_DESKTOP_DIR="$HOME/Desktop"
     mkdir -p "$HOME/Desktop" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
     export WINEDLLOVERRIDES="winemenubuilder.exe=d${WINEDLLOVERRIDES:+;$WINEDLLOVERRIDES}"
+    # Nothing a gate runs may reach the person's own session: Wine's Wayland
+    # driver connects to $XDG_RUNTIME_DIR/wayland-0 even with WAYLAND_DISPLAY
+    # unset (2026-10-06: a printing run reached the host's desktop), and
+    # DISPLAY=:0 is the host's X server. A gate starts its own display and
+    # gets a runtime directory of its own; SG_REAL_XDG_RUNTIME_DIR keeps the
+    # person's for the rare gate that must reach their user services.
+    export SG_REAL_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}"
+    XDG_RUNTIME_DIR="$SG_GATE_HOME/run"
+    mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+    export XDG_RUNTIME_DIR
+    unset WAYLAND_DISPLAY DISPLAY
 fi
 # sg_prefix_safe PREFIX: fail when any folder of PREFIX's user profiles
 # resolves outside the prefix and the gate's HOME (an old prefix made on the

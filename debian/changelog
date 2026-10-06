@@ -1,3 +1,14 @@
+sg-session (0.1.0-137) unstable; urgency=medium
+
+  * Tests: scratch-home.sh gives every gate a runtime directory of its own
+    and unsets WAYLAND_DISPLAY and DISPLAY: Wine's Wayland driver connects
+    to $XDG_RUNTIME_DIR/wayland-0 even with WAYLAND_DISPLAY unset, and a
+    printing run reached the person's own desktop that way (2026-10-06).
+    SG_REAL_XDG_RUNTIME_DIR keeps theirs for a gate that must reach their
+    user services.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 09:53:52 -0700
+
 sg-session (0.1.0-136) unstable; urgency=medium
 
   * Print to PDF names the PDF after the document: cups-pdf took the title
