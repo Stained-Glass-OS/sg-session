@@ -1,3 +1,15 @@
+sg-session (0.1.0-135) unstable; urgency=medium
+
+  * sg-settingsctl printers: CUPS's queues (name, make and model, device
+    URI, idle/printing/stopped, description), for Settings' Printers &
+    scanners and Devices and Printers (sg-shell 0.1.0-133), which list each
+    printer's queues for Linux programs under it -- its own (the Linux
+    driver) and "(maker's driver)" (sgwindrv:/PRINTER). lpoptions' quoted
+    values with an unescaped apostrophe are read right. Test:
+    test/settingsctl-test.py.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 09:02:46 -0700
+
 sg-session (0.1.0-134) unstable; urgency=medium
 
   * A network drive whose server is not there says so: with nothing

@@ -480,6 +480,31 @@ got = calls()
 check("session-start: the kept look again", "gtk-application-prefer-dark-theme=false" in ini("gtk-4.0")
       and "gsettings set org.gnome.desktop.interface color-scheme default" in got, got)
 
+# ---- printers: CUPS's queues, as Settings groups them under the Windows printer
+stand_in("lpstat", """case "$1" in
+  -v) echo "device for DYMO_LabelWriter_550: usb://DYMO/LabelWriter%20550?serial=0440"
+      echo "device for DYMO_LabelWriter_550_MakersDriver: sgwindrv:/DYMO_LabelWriter_550"
+      echo "device for Office: ipp://office.local/ipp/print" ;;
+  -p) echo "printer DYMO_LabelWriter_550 is idle.  enabled since Tue Oct  6 07:00:00 2026"
+      echo "printer DYMO_LabelWriter_550_MakersDriver now printing DYMO_LabelWriter_550_MakersDriver-4.  enabled since Tue"
+      echo "printer Office disabled since Tue Oct  6 07:00:00 2026 -"
+      echo "	Paused" ;;
+esac""")
+stand_in("lpoptions", """case "$2" in
+  DYMO_LabelWriter_550) echo "device-uri=usb://x printer-info='DYMO LabelWriter 550' printer-make-and-model='DYMO LabelWriter 550' printer-state=3" ;;
+  DYMO_LabelWriter_550_MakersDriver) printf "copies=1 device-uri=sgwindrv:/DYMO_LabelWriter_550 printer-info='DYMO LabelWriter 550 (maker\\047s driver)' printer-location printer-make-and-model='DYMO LabelWriter 550 (maker\\047s driver)' printer-state=4\\n" ;;
+  Office) echo "printer-make-and-model=Office\\ Laser" ;;
+esac""")
+code, lines = ctl("printers")
+check("printers: OK, one line a queue", code == 0 and lines[-1] == "OK" and len(lines) == 4, lines)
+check("printers: the label printer's queue, its model, USB device, idle, description",
+      "QUEUE DYMO_LabelWriter_550\tDYMO LabelWriter 550\tusb://DYMO/LabelWriter%20550?serial=0440\tidle\tDYMO LabelWriter 550" in lines, lines)
+check("printers: the maker's-driver queue, printing, its URI naming the Windows printer",
+      "QUEUE DYMO_LabelWriter_550_MakersDriver\tDYMO LabelWriter 550 (maker's driver)\tsgwindrv:/DYMO_LabelWriter_550\tprinting\tDYMO LabelWriter 550 (maker's driver)" in lines, lines)
+check("printers: a disabled queue is stopped", "QUEUE Office\tOffice Laser\tipp://office.local/ipp/print\tstopped\t" in lines, lines)
+code, lines = ctl("printers", "add")
+check("printers: arguments are refused", code == 2, lines)
+
 # ---- usage
 code, lines = ctl("reboot")
 check("an unknown command is refused", code == 2 and lines[-1].startswith("ERROR invalid"), lines)

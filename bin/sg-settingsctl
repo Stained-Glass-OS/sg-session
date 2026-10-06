@@ -60,6 +60,10 @@
 #       LOCKSCREEN <picture published yes|no>\t<shown on sign-in yes|no>
 #   sg-settingsctl lockscreen picture FILE | default
 #   sg-settingsctl lockscreen signin yes|no
+#   sg-settingsctl printers          CUPS's queues, for Settings' Printers & scanners
+#       QUEUE <name>\t<make and model>\t<device-uri>\t<idle|printing|stopped>\t<description>
+#       (the Windows printers are winspool's; these are the same printers'
+#       queues Linux programs print to, grouped under them by sg-shell)
 #
 # Settings are the user's: ~/.config/stained-glass/settings.json.
 #
@@ -980,10 +984,56 @@ def session_start(args):
     return []
 
 
+def lpoptions_values(text):
+    """lpoptions' key=value list: a value with spaces is in single quotes, but
+    a quote inside it is not escaped ('DYMO LabelWriter 550 (maker's
+    driver)'), so a value runs to the next " key=" rather than to a quote."""
+    keys = list(re.finditer(r"(?:^|\s)([a-z][a-z0-9-]*)=", text.strip()))
+    text = text.strip()
+    values = {}
+    for i, m in enumerate(keys):
+        end = keys[i + 1].start() if i + 1 < len(keys) else len(text)
+        v = text[m.end():end].strip()
+        if v.startswith("'") and v.rfind("'") > 0:
+            v = v[1:v.rfind("'")]       # a key with no value may follow ("printer-location")
+        else:
+            v = re.split(r"(?<!\\)\s", v)[0].replace("\\ ", " ")
+        values[m.group(1)] = v
+    return values
+
+
+def printers(args):
+    """CUPS's queues: what Linux programs print to (lpstat, lpoptions)."""
+    if args:
+        raise Fail("invalid", "usage: printers")
+    uris, states, out = {}, {}, []
+    for line in run(["lpstat", "-v"], check=False).splitlines():
+        m = re.match(r"device for (\S+): (.*)$", line.strip())
+        if m:
+            uris[m.group(1)] = m.group(2).strip()
+    for line in run(["lpstat", "-p"], check=False).splitlines():
+        m = re.match(r"printer (\S+) (.*)$", line.strip())
+        if not m:
+            continue
+        rest = m.group(2)
+        states[m.group(1)] = ("stopped" if "disabled" in rest else
+                              "printing" if "printing" in rest else "idle")
+    for name in sorted(uris):
+        try:
+            opts = lpoptions_values(run(["lpoptions", "-p", name], check=False))
+        except Fail:
+            opts = {}
+        out.append("QUEUE %s\t%s\t%s\t%s\t%s" % (clean(name), clean(opts.get("printer-make-and-model", "")),
+                                                 clean(uris[name]), states.get(name, "idle"),
+                                                 clean(opts.get("printer-info", ""))))
+    return out
+
+
 COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
-            "lockscreen": lockscreen, "look": look, "display-scale": display_scale}
+            "lockscreen": lockscreen, "look": look, "display-scale": display_scale,
+            "printers": printers}
 
 
 def main(argv):
