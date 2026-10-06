@@ -1,3 +1,18 @@
+sg-session (0.1.0-144) unstable; urgency=medium
+
+  * The first-run setup takes input only once its first page is on the
+    screen and it has the keyboard ("sg-oobe: ready"; 5 s after the first
+    paint at the latest): on a slow first boot keys came before it was
+    shown and went nowhere or to a page not yet seen (s14 regression walk
+    2026-10-06). Test: test/oobe-early-input-test.sh (make test-oobe;
+    --mutant built with SG_MUTANT_OOBE_EARLY_INPUT fails it).
+  * Recommends systemd-coredump: a program that crashes leaves its core
+    and a backtrace in the journal (coredumpctl), also on the live medium
+    (in memory) -- the regression walk's crashes of the login screen's
+    compositor and of the Windows system's server left one line each.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 13:41:50 -0700
+
 sg-session (0.1.0-143) unstable; urgency=medium
 
   * VPN kill switches work: sg-session depends on nftables and iptables.

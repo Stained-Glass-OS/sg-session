@@ -52,6 +52,32 @@ static const char *const page_names[] = { "region", "keyboard", "second-keyboard
 #define WM_BRIDGE_EOF  (WM_APP + 2)
 #define TIMER_CLOSE    1
 #define TIMER_RESCAN   2
+#define TIMER_READY    3
+
+/* Input only once the first page is on the screen and the window has the
+ * keyboard: on a slow first boot keys and clicks came before it was shown
+ * (s14 regression walk, 2026-10-06) -- they went nowhere, or to a page the
+ * person had not seen. Before that they are dropped; "sg-oobe: ready" says
+ * when it takes them (active, or 5 s after the first paint at the latest). */
+static BOOL g_painted, g_active, g_ready;
+static void log_line( const char *fmt, ... );
+static DWORD g_painted_at;
+static void check_ready( HWND hwnd, BOOL timeout )
+{
+    char hold[16];
+    if (g_ready || !g_painted) return;
+    if (!g_active && !timeout) return;
+    /* the gate's stand-in for a slow first boot: not ready for this long */
+    if (GetEnvironmentVariableA( "SG_OOBE_READY_DELAY_MS", hold, sizeof(hold) ) &&
+        GetTickCount() - g_painted_at < (DWORD)atoi( hold ))
+    {
+        SetTimer( hwnd, TIMER_READY, 200, NULL );
+        return;
+    }
+    g_ready = TRUE;
+    KillTimer( hwnd, TIMER_READY );
+    log_line( "sg-oobe: ready" );
+}
 
 static const COLORREF COL_CARD    = RGB(0x22, 0x10, 0x42);
 static const COLORREF COL_ART     = RGB(0x3A, 0x17, 0x6E);
@@ -1135,7 +1161,13 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
 {
     switch (msg)
     {
-    case WM_PAINT: paint( hwnd ); return 0;
+    case WM_PAINT:
+        paint( hwnd );
+        if (!g_painted) { g_painted = TRUE; g_painted_at = GetTickCount(); SetTimer( hwnd, TIMER_READY, 5000, NULL ); check_ready( hwnd, FALSE ); }
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wp) != WA_INACTIVE) { g_active = TRUE; check_ready( hwnd, FALSE ); }
+        break;
     case WM_ERASEBKGND: return 1;
     case WM_MEASUREITEM:
     {
@@ -1175,6 +1207,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         return 0;
     case WM_TIMER:
         if (wp == TIMER_CLOSE) { KillTimer( hwnd, TIMER_CLOSE ); DestroyWindow( hwnd ); }
+        else if (wp == TIMER_READY) check_ready( hwnd, g_active || GetTickCount() - g_painted_at >= 5000 );
         else if (wp == TIMER_RESCAN && g_page == P_NETWORK && !g_busy && !g_listing_nets && !g_online) request_networks();
         return 0;
     case WM_CLOSE:
@@ -1301,6 +1334,11 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
 
     while (GetMessageA( &msg, NULL, 0, 0 ))
     {
+#ifndef SG_MUTANT_OOBE_EARLY_INPUT
+        if (!g_ready && ((msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST) ||
+                         (msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST && msg.message != WM_MOUSEMOVE)))
+            continue;
+#endif
         if (msg.message >= WM_KEYFIRST && msg.message <= WM_KEYLAST && handle_key( &msg )) continue;
         if (!IsDialogMessageA( g_main, &msg ))
         {
