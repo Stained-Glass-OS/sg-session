@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../greeter/sg-smooth.h"
 
 enum page { P_REGION, P_KBD, P_KBD2, P_KBD2_PICK, P_NETWORK, P_ACCOUNT, P_PRIVACY, P_BROWSER, P_APPLY, P_DONE, P_FAILED };
 static const char *const page_names[] = { "region", "keyboard", "second-keyboard", "second-keyboard-pick", "network",
@@ -792,7 +793,7 @@ static void build_backdrop( HDC ref, int w, int h )
                 r = r < 0 ? 0 : r > 255 ? 255 : r; g = g < 0 ? 0 : g > 255 ? 255 : g; bl = bl < 0 ? 0 : bl > 255 ? 255 : bl;
                 br = CreateSolidBrush( RGB(r, g, bl) );
                 oldb = SelectObject( dc, br );
-                Polygon( dc, t, 3 );
+                Polygon( dc, t, 3 );   /* sg-smooth: dark lead between dark panes, drawn once for the whole screen (4x of it would be 100s of MB) */
                 SelectObject( dc, oldb );
                 DeleteObject( br );
             }
@@ -817,7 +818,7 @@ static void draw_logo( HDC dc, int cx, int cy, int size )
         int dy = i == 0 ? -(h + gap) : i == 2 ? h + gap : 0;
         POINT p[4] = { { cx + dx, cy + dy - h }, { cx + dx + h, cy + dy }, { cx + dx, cy + dy + h }, { cx + dx - h, cy + dy } };
         HBRUSH br = CreateSolidBrush( colors[i] ), oldb = SelectObject( dc, br );
-        Polygon( dc, p, 4 );
+        sg_polygon( dc, p, 4 );
         SelectObject( dc, oldb );
         DeleteObject( br );
     }
@@ -826,7 +827,8 @@ static void draw_logo( HDC dc, int cx, int cy, int size )
 }
 
 /* Each page's picture, drawn in white lines on the art panel. */
-static void draw_art( HDC dc )
+/* sg-smooth: drawn in a region (draw_art, below) */
+static void draw_art_raw( HDC dc )
 {
     int cx = (g_art.left + g_art.right) / 2, cy = (g_art.top + g_art.bottom) / 2 + 10, r = 78, i;
     HPEN pen = CreatePen( PS_SOLID, 4, COL_TEXT ), thin = CreatePen( PS_SOLID, 2, COL_SUBTLE ), oldp;
@@ -901,6 +903,15 @@ static void draw_art( HDC dc )
     SelectObject( dc, oldb );
     DeleteObject( pen );
     DeleteObject( thin );
+}
+
+/* the picture drawn soft-edged (sg-smooth.h): four times finer, averaged down */
+static void draw_art( HDC dc )
+{
+    struct sg_ss ss;
+    HDC big = sg_ss_begin( &ss, dc, g_art.left, g_art.top, g_art.right - g_art.left, g_art.bottom - g_art.top, 4 );
+    draw_art_raw( big );
+    sg_ss_end( &ss );
 }
 
 /* The steps down the art panel, Windows 10's: Basics, Network, Account, Services. */
@@ -1069,11 +1080,11 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         HBRUSH br = CreateSolidBrush( on ? COL_ACCENT2 : COL_CARD ), oldb;
         FillRect( dc, &r, g_card_brush );
         oldp = SelectObject( dc, pen ); oldb = SelectObject( dc, br );
-        RoundRect( dc, x, y, x + w, y + h, h, h );
+        sg_round_rect( dc, x, y, x + w, y + h, h, h );
         SelectObject( dc, oldb ); DeleteObject( br );
         br = CreateSolidBrush( COL_TEXT ); oldb = SelectObject( dc, br );
         SelectObject( dc, GetStockObject( NULL_PEN ) );
-        Ellipse( dc, on ? x + w - 16 : x + 5, y + 5, on ? x + w - 5 : x + 16, y + 16 );
+        sg_ellipse( dc, on ? x + w - 16 : x + 5, y + 5, on ? x + w - 5 : x + 16, y + 16 );
         SelectObject( dc, oldb ); SelectObject( dc, oldp );
         DeleteObject( br ); DeleteObject( pen );
         SelectObject( dc, g_font_small );
@@ -1112,7 +1123,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         fill( dc, r.left, r.top, r.right, r.bottom, down ? COL_LIST : COL_CARD );
         oldp = SelectObject( dc, pen );
         MoveToEx( dc, cx + 9, cy, NULL ); LineTo( dc, cx - 9, cy );
-        MoveToEx( dc, cx - 2, cy - 7, NULL ); LineTo( dc, cx - 9, cy ); LineTo( dc, cx - 2, cy + 7 );
+        { POINT head[3] = { { cx - 2, cy - 7 }, { cx - 9, cy }, { cx - 2, cy + 7 } }; sg_polyline( dc, head, 3 ); }
         SelectObject( dc, oldp ); DeleteObject( pen );
         if (focus) { RECT f = r; InflateRect( &f, -2, -2 ); focus_frame( dc, &f, d->itemState ); }
         break;

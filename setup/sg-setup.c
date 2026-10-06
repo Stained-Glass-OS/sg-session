@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../greeter/sg-smooth.h"
 
 enum page { P_WELCOME, P_START, P_LICENSE, P_TYPE, P_ACCOUNT, P_DISK, P_READY, P_INSTALLING, P_DONE, P_FAILED };
 static const char *const page_names[] = { "welcome", "start", "license", "type", "account", "disk", "ready",
@@ -932,7 +933,7 @@ static void draw_logo( HDC dc, int cx, int cy, int size )
         int dy = i == 0 ? -(h + gap) : i == 2 ? h + gap : 0;
         POINT p[4] = { { cx + dx, cy + dy - h }, { cx + dx + h, cy + dy }, { cx + dx, cy + dy + h }, { cx + dx - h, cy + dy } };
         HBRUSH br = CreateSolidBrush( colors[i] ), oldb = SelectObject( dc, br );
-        Polygon( dc, p, 4 );
+        sg_polygon( dc, p, 4 );
         SelectObject( dc, oldb );
         DeleteObject( br );
     }
@@ -996,7 +997,7 @@ static void build_backdrop( HDC ref, int w, int h )
                 else if (accent == 2) { dr += 30; dg -= 4; }       /* a rose one */
                 br = CreateSolidBrush( shade( cy, h, dr, dg, db ) );
                 oldb = SelectObject( dc, br );
-                Polygon( dc, t, 3 );
+                Polygon( dc, t, 3 );   /* sg-smooth: dark lead between dark panes, drawn once for the whole screen (4x of it would be 100s of MB) */
                 SelectObject( dc, oldb );
                 DeleteObject( br );
             }
@@ -1021,7 +1022,7 @@ static void draw_warning_icon( HDC dc, int x, int y )
     POINT p[3] = { { x + 8, y }, { x + 16, y + 15 }, { x, y + 15 } };
     HBRUSH br = CreateSolidBrush( RGB(0xF2, 0xB7, 0x05) ), oldb = SelectObject( dc, br );
     HPEN pen = CreatePen( PS_SOLID, 1, RGB(0xB0, 0x80, 0x00) ), oldp = SelectObject( dc, pen );
-    Polygon( dc, p, 3 );
+    sg_polygon( dc, p, 3 );
     SelectObject( dc, oldb ); SelectObject( dc, oldp );
     DeleteObject( br ); DeleteObject( pen );
     text_at( dc, g_font_bold, RGB(0, 0, 0), x, y + 2, x + 16, y + 15, "!", DT_CENTER | DT_SINGLELINE );
@@ -1074,7 +1075,8 @@ static void draw_install_steps( HDC dc )
         if (done)
         {
             HPEN pen = CreatePen( PS_SOLID, 2, RGB(0x10, 0x7C, 0x10) ), oldp = SelectObject( dc, pen );
-            MoveToEx( dc, X( 58 ), Y( y + 10 ), NULL ); LineTo( dc, X( 63 ), Y( y + 15 ) ); LineTo( dc, X( 72 ), Y( y + 4 ) );
+            POINT tick[3] = { { X( 58 ), Y( y + 10 ) }, { X( 63 ), Y( y + 15 ) }, { X( 72 ), Y( y + 4 ) } };
+            sg_polyline( dc, tick, 3 );
             SelectObject( dc, oldp ); DeleteObject( pen );
         }
         text_at( dc, now ? g_font_bold : g_font, done || now ? COL_TEXT : COL_SUBTLE,
@@ -1274,7 +1276,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         FillRect( dc, &r, down ? (HBRUSH)GetStockObject( LTGRAY_BRUSH ) : g_win_brush );
         oldp = SelectObject( dc, pen );
         MoveToEx( dc, cx + 8, cy, NULL ); LineTo( dc, cx - 8, cy );
-        MoveToEx( dc, cx - 2, cy - 6, NULL ); LineTo( dc, cx - 8, cy ); LineTo( dc, cx - 2, cy + 6 );
+        { POINT head[3] = { { cx - 2, cy - 6 }, { cx - 8, cy }, { cx - 2, cy + 6 } }; sg_polyline( dc, head, 3 ); }
         SelectObject( dc, oldp ); DeleteObject( pen );
         if (focus) { RECT f = r; InflateRect( &f, -2, -2 ); DrawFocusRect( dc, &f ); }
         break;
@@ -1286,8 +1288,8 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         HBRUSH br = CreateSolidBrush( down ? RGB(0xE8, 0x11, 0x23) : COL_WIN );
         FillRect( dc, &r, br ); DeleteObject( br );
         oldp = SelectObject( dc, pen );
-        MoveToEx( dc, cx - 5, cy - 5, NULL ); LineTo( dc, cx + 6, cy + 6 );
-        MoveToEx( dc, cx + 5, cy - 5, NULL ); LineTo( dc, cx - 6, cy + 6 );
+        sg_line( dc, cx - 5, cy - 5, cx + 6, cy + 6 );
+        sg_line( dc, cx + 5, cy - 5, cx - 6, cy + 6 );
         SelectObject( dc, oldp ); DeleteObject( pen );
         break;
     }
@@ -1299,7 +1301,7 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         FillRect( dc, &r, br ); DeleteObject( br );
         oldp = SelectObject( dc, pen );
         SelectObject( dc, GetStockObject( NULL_BRUSH ) );
-        Arc( dc, cx - 9, cy - 8, cx + 9, cy + 10, cx - 5, cy - 7, cx + 5, cy - 7 );
+        sg_arc( dc, cx - 9, cy - 8, cx + 9, cy + 10, cx - 5, cy - 7, cx + 5, cy - 7 );
         MoveToEx( dc, cx, cy - 11, NULL ); LineTo( dc, cx, cy + 1 );
         SelectObject( dc, oldp ); DeleteObject( pen );
         break;
@@ -1456,7 +1458,7 @@ static HIMAGELIST make_drive_icons( void )
     fill( dc, 0, 0, 16, 22, RGB(0xFF, 0x00, 0xFF) );
     oldp = SelectObject( dc, pen );
     oldb = SelectObject( dc, body );
-    RoundRect( dc, 0, 7, 16, 16, 3, 3 );
+    RoundRect( dc, 0, 7, 16, 16, 3, 3 );   /* sg-smooth: hard edges for the image list's colour key (magenta), else a pink fringe */
     fill( dc, 2, 8, 14, 9, RGB(0xE2, 0xE4, 0xEA) );
     fill( dc, 11, 12, 14, 14, RGB(0x2E, 0xB8, 0x4A) );
     SelectObject( dc, oldb ); SelectObject( dc, oldp ); SelectObject( dc, old );

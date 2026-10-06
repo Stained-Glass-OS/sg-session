@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "sg-smooth.h"
 
 #define ID_USER   101
 #define ID_SECRET 102
@@ -276,7 +277,7 @@ static void paint( HWND hwnd )
         SIZE sz;
         if (cy - r > 8)
         {
-            Ellipse( mem, cx - r, cy - r, cx + r, cy + r );
+            sg_ellipse( mem, cx - r, cy - r, cx + r, cy + r );
             SelectObject( mem, g_font_avatar );
             GetTextExtentPoint32A( mem, initial, 1, &sz );
             SetTextColor( mem, COL_TEXT );
@@ -549,7 +550,7 @@ static void draw_power( const DRAWITEMSTRUCT *di )
     DeleteObject( br );
     oldp = SelectObject( dc, pen );
     SelectObject( dc, GetStockObject( NULL_BRUSH ) );
-    Arc( dc, cx - 9, cy - 8, cx + 9, cy + 10, cx - 5, cy - 7, cx + 5, cy - 7 );
+    sg_arc( dc, cx - 9, cy - 8, cx + 9, cy + 10, cx - 5, cy - 7, cx + 5, cy - 7 );
     MoveToEx( dc, cx, cy - 11, NULL );
     LineTo( dc, cx, cy + 1 );
     SelectObject( dc, oldp );

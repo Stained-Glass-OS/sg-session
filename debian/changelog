@@ -1,3 +1,22 @@
+sg-session (0.1.0-141) unstable; urgency=medium
+
+  * The login screen's, Setup's and the first-run setup's drawn glyphs are
+    smooth: the account picture's circle and the power button's arc on
+    the login and lock screens; Setup's logo, warning triangle, ticks,
+    back, close and power glyphs; the first-run setup's pictures (globe,
+    keyboard, Wi-Fi, person, shield, browser), toggles, logo and back
+    arrow. greeter/sg-smooth.h (a copy of sg-shell's) draws them four
+    times larger and averages them down; GDI's own had stepped edges.
+  * Setup's icon has 16, 20, 24, 32, 40, 48, 64, 96, 128 and 256 px
+    frames (it had 16, 24, 32, 48, 256).
+  * Test: test/smooth-glyphs-test.sh (in make lint; a raw shape put back,
+    or the old icon sizes, fail it). oobe-e2e, setup-e2e, lockpic-e2e and
+    greeter-lastuser-ui pass; sg-image boot-test passes with these
+    greeter, Setup and first-run binaries in the image (login, lock,
+    unlock).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:36:17 -0700
+
 sg-session (0.1.0-140) unstable; urgency=medium
 
   * debian/changelog: 0.1.0-137's note on the gates' own runtime directory

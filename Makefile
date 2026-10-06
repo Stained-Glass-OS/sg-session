@@ -254,6 +254,7 @@ lint:
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
+	@sh test/smooth-glyphs-test.sh
 	@sh test/shell-supervisor-test.sh
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh

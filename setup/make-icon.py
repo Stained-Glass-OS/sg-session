@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 # Draws Setup's icon -- the Stained Glass mark, four panes of coloured glass
-# around a point -- as a Windows .ico (16, 24, 32, 48 and 256 pixels, 32-bit
-# with alpha). Our own art, generated at build time; nothing is committed.
+# around a point -- as a Windows .ico (16, 20, 24, 32, 40, 48, 64, 96, 128 and
+# 256 pixels: every size a display scale asks for, each drawn for its size;
+# 32-bit with alpha). Our own art, generated at build time; nothing is committed.
 #
 #   make-icon.py OUT.ico
 #
@@ -61,7 +62,7 @@ def dib(size):
 
 
 def main():
-    sizes = [16, 24, 32, 48, 256]
+    sizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
     images = [dib(s) for s in sizes]
     out = struct.pack('<HHH', 0, 1, len(sizes))
     offset = 6 + 16 * len(sizes)
