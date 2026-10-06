@@ -520,6 +520,43 @@ sg_ui_scale() {
     return 0
 }
 
+# The user's display scale, for the lock screen (David 2026-10-06: "lock
+# screen honours the user's chosen scale"): published as <user>.scale in the
+# lock screen's drop directory (mode 1733, as the picture: sg-settingsctl
+# lockscreen), which sg-lockd reads -- only the user's own file, 100-500 --
+# and hands the lock UI (SG_LOCK_SCALE). Only a person's session publishes
+# (not the machine's or the greeter's accounts).   sg_publish_scale PERCENT
+sg_publish_scale() {
+    _ps_dir=${SG_LOCKSCREEN_DIR:-/var/lib/stained-glass/lockscreen}
+    case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$(id -u)" -ge 1000 ] 2>/dev/null || [ -n "${SG_LOCKSCREEN_DIR:-}" ] || return 0
+    [ -d "$_ps_dir" ] && [ -w "$_ps_dir" ] || return 0
+    _ps_user=$(id -un 2>/dev/null) || return 0
+    _ps_tmp="$_ps_dir/.$_ps_user.scale.$$"
+    if printf '%s\n' "$1" > "$_ps_tmp" 2>/dev/null && chmod 644 "$_ps_tmp" 2>/dev/null; then
+        mv -f "$_ps_tmp" "$_ps_dir/$_ps_user.scale" 2>/dev/null || rm -f "$_ps_tmp" 2>/dev/null
+    else
+        rm -f "$_ps_tmp" 2>/dev/null
+    fi
+    return 0
+}
+
+# The lock screen's display scale: the user's (SG_LOCK_SCALE, from sg-lockd),
+# else the screen's recommended one (sg_ui_scale). Exports SG_LOGPIXELS, or
+# leaves it unset at 100%.   sg_lock_scale [x]
+sg_lock_scale() {
+    unset SG_LOGPIXELS
+    case "${SG_LOCK_SCALE:-}" in
+    ''|*[!0-9]*) sg_ui_scale "${1:-}" ;;
+    *)
+        if [ "$SG_LOCK_SCALE" -gt 100 ] && [ "$SG_LOCK_SCALE" -le 500 ]; then
+            SG_LOGPIXELS=$(( SG_LOCK_SCALE * 96 / 100 ))
+            export SG_LOGPIXELS
+        fi ;;
+    esac
+    return 0
+}
+
 # The taskbar's height at a scale, as explorer sizes it (wine-sg 0832: 40 px
 # at 100%, in eighths of the scale).   sg_taskbar_h PERCENT
 sg_taskbar_h() {
@@ -597,6 +634,7 @@ sg_xsettings_conf() {
 # display ($DISPLAY) started or told (SIGHUP: it reads its file again and
 # tells every program), and the X resources.   sg_linux_scale PERCENT
 sg_linux_scale() {
+    sg_publish_scale "${1:-100}"
     sg_x_resources "${1:-100}"
     command -v xsettingsd >/dev/null 2>&1 || return 0
     [ -n "${DISPLAY:-}" ] || return 0

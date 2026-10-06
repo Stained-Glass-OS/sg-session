@@ -10,7 +10,34 @@ Window.SetBackgroundBottomColor(0.063, 0.063, 0.078);
 cx = Window.GetX() + Window.GetWidth() / 2;
 cy = Window.GetY() + Window.GetHeight() / 2;
 
-diamond.image = Image("diamond.png");
+# The splash at the display scale the screen recommends, as the session
+# picks it (sg-common.sh sg_scale_for: the shorter side over 1080, to 25%
+# steps, 100% to 400%): 175% on a Surface Pro 7's 2736x1824. Plymouth's own
+# device scale is off (plymouthd.conf DeviceScale=1, sg-boot-splash): it
+# doubled the pictures drawn for 100% -- soft -- and only on screens that
+# report their size in millimetres; a VM's showed a small diamond. Drawn
+# from a larger picture (diamond-hi.png) above 100%, crisp; at 100% as before.
+short = Window.GetHeight();
+if (Window.GetWidth() < short)
+    short = Window.GetWidth();
+quarters = Math.Int((short * 4 + 540) / 1080);
+if (quarters < 4)
+    quarters = 4;
+if (quarters > 16)
+    quarters = 16;
+scale = quarters / 4;
+fun S (v)
+{
+    return Math.Int(v * scale + 0.5);
+}
+
+if (scale > 1)
+{
+    hi = Image("diamond-hi.png");
+    diamond.image = hi.Scale(S(192), S(192));
+}
+else
+    diamond.image = Image("diamond.png");
 diamond.sprite = Sprite(diamond.image);
 diamond.sprite.SetX(cx - diamond.image.GetWidth() / 2);
 diamond.sprite.SetY(cy - diamond.image.GetHeight() / 2);
@@ -32,20 +59,20 @@ status_sprite = Sprite();
 note_sprite = Sprite();
 fun show_status (text, note)
 {
-    img = Image.Text(text, 0.95, 0.95, 0.95, 1, "Sans 16");
+    img = Image.Text(text, 0.95, 0.95, 0.95, 1, "Sans " + S(16));
     status_sprite.SetImage(img);
     status_sprite.SetX(cx - img.GetWidth() / 2);
-    status_sprite.SetY(below + 44);
-    nimg = Image.Text(note, 0.68, 0.68, 0.72, 1, "Sans 11");
+    status_sprite.SetY(below + S(44));
+    nimg = Image.Text(note, 0.68, 0.68, 0.72, 1, "Sans " + S(11));
     note_sprite.SetImage(nimg);
     note_sprite.SetX(cx - nimg.GetWidth() / 2);
-    note_sprite.SetY(below + 120);
+    note_sprite.SetY(below + S(120));
 }
 
 # The progress bar: a dim track and the accent fill over it, both scaled from
 # one-pixel pictures (bar-track.png, bar-fill.png).
-bar_w = 320;
-bar_h = 4;
+bar_w = S(320);
+bar_h = S(4);
 bar_track = Image("bar-track.png");
 bar_fill = Image("bar-fill.png");
 track_sprite = Sprite();
@@ -54,13 +81,13 @@ fun show_bar (percent)
 {
     track_sprite.SetImage(bar_track.Scale(bar_w, bar_h));
     track_sprite.SetX(cx - bar_w / 2);
-    track_sprite.SetY(below + 88);
+    track_sprite.SetY(below + S(88));
     w = Math.Int(bar_w * percent / 100);
     if (w < 1)
         w = 1;
     fill_sprite.SetImage(bar_fill.Scale(w, bar_h));
     fill_sprite.SetX(cx - bar_w / 2);
-    fill_sprite.SetY(below + 88);
+    fill_sprite.SetY(below + S(88));
     fill_sprite.SetZ(track_sprite.GetZ() + 1);
 }
 
@@ -105,9 +132,12 @@ fun message_callback (text)
 {
     if (updating || Plymouth.GetMode() == "updates")
         return;
-    img = Image.Text(text, 0.85, 0.85, 0.85);
+    if (scale > 1)
+        img = Image.Text(text, 0.85, 0.85, 0.85, 1, "Sans " + S(12));
+    else
+        img = Image.Text(text, 0.85, 0.85, 0.85);
     message_sprite.SetImage(img);
     message_sprite.SetX(cx - img.GetWidth() / 2);
-    message_sprite.SetY(below + 150);
+    message_sprite.SetY(below + S(150));
 }
 Plymouth.SetMessageFunction(message_callback);

@@ -10,7 +10,8 @@
 #                                        after a kernel on trial (boot
 #                                        counting) started well, its twin
 #
-# apply: Plymouth's theme is ours (plymouthd.conf: Theme, shown at once);
+# apply: Plymouth's theme is ours (plymouthd.conf: Theme, shown at once, at
+# device scale 1 -- the theme scales itself);
 # /etc/kernel/cmdline and each boot entry get the quiet-boot arguments
 # (machines installed from images before the splash showed every line);
 # each entry gets a recovery twin; and the initrds are made again when the
@@ -86,7 +87,10 @@ apply() {
         mkdir -p "$(dirname "$CONF")"
         [ -f "$CONF" ] || printf '[Daemon]\n' > "$CONF"
         grep -q '^\[Daemon\]' "$CONF" || printf '[Daemon]\n' >> "$CONF"
-        for kv in Theme=stained-glass ShowDelay=0 DeviceTimeout=8; do
+        # DeviceScale=1: the theme scales itself to the display scale the
+        # screen recommends, crisp (stained-glass.script); Plymouth's own
+        # scale doubled its 100% pictures, soft, on some screens only
+        for kv in Theme=stained-glass ShowDelay=0 DeviceTimeout=8 DeviceScale=1; do
             k=${kv%%=*}
             if grep -q "^$k=" "$CONF"; then sed -i "s|^$k=.*|$kv|" "$CONF"
             else sed -i "/^\[Daemon\]/a $kv" "$CONF"; fi

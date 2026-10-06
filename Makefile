@@ -189,6 +189,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -d $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass
 	install -m 0644 splash/stained-glass.plymouth splash/stained-glass.script $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/
 	python3 splash/make-splash.py $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/diamond.png 192
+	@# (and for high-resolution screens, drawn smaller from it: up to 400%)
+	python3 splash/make-splash.py $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/diamond-hi.png 768
 	python3 splash/make-splash.py --bar $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/bar-fill.png 8a2be2
 	python3 splash/make-splash.py --bar $(DESTDIR)$(PREFIX)/share/plymouth/themes/stained-glass/bar-track.png 3a3a44
 	for d in systemd/plymouth/*.service.d; do \
@@ -265,6 +267,7 @@ lint:
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
 	@sh test/display-scale-test.sh
+	@sh test/lockscale-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/systemroot-temp-test.sh
 	@sh test/ssh-migrate-test.sh
 	@sh test/oobe-browser-linux-test.sh

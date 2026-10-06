@@ -44,6 +44,10 @@ grep -q 'loglevel=7$' "$E/loader/entries/sg-live.conf" || grep -q 'loglevel=7 sy
 [ ! -e "$E/loader/entries/debian-6.11.9-recovery.conf" ] && pass "a twin whose kernel is gone goes" || fail "orphan twin kept"
 { grep -qx 'Theme=stained-glass' "$T/plymouthd.conf" && grep -qx 'ShowDelay=0' "$T/plymouthd.conf" && grep -qx 'DeviceTimeout=8' "$T/plymouthd.conf" \
   && [ "$(grep -c '^Theme=' "$T/plymouthd.conf")" = 1 ]; } && pass "Plymouth's theme is ours, shown at once" || fail "conf: $(cat "$T/plymouthd.conf")"
+# (the theme scales itself to the screen's display scale: Plymouth's own
+# device scale off -- it doubled the 100% pictures, soft)
+grep -qx 'DeviceScale=1' "$T/plymouthd.conf" && pass "Plymouth's device scale is 1: the theme scales itself, crisp" \
+    || fail "no DeviceScale=1: $(cat "$T/plymouthd.conf")"
 before=$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)
 sh "$HERE/bin/sg-boot-splash" apply
 [ "$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)" = "$before" ] && pass "a second run changes nothing" || fail "not idempotent"
@@ -62,5 +66,10 @@ sed 's/^        line="\$line \$a "$/        :/' "$HERE/bin/sg-boot-splash" > "$T
 grep -q '^        :$' "$T/mut" || fail "the mutant did not apply"
 echo "$OLD" > "$T/cmdline"; sh "$T/mut" apply
 echo " $(cat "$T/cmdline") " | grep -q ' splash ' && fail "MUTANT NOQUIET not detected" || pass "MUTANT NOQUIET leaves the text boot (gate catches it)"
+# MUTANT NO_DEVICE_SCALE: Plymouth's own scale left on
+sed 's/ DeviceTimeout=8 DeviceScale=1; do$/ DeviceTimeout=8; do/' "$HERE/bin/sg-boot-splash" > "$T/mut2"
+cmp -s "$T/mut2" "$HERE/bin/sg-boot-splash" && fail "the mutant NO_DEVICE_SCALE did not apply"
+printf '[Daemon]\nTheme=spinner\n' > "$T/plymouthd.conf"; sh "$T/mut2" apply
+grep -qx 'DeviceScale=1' "$T/plymouthd.conf" && fail "MUTANT NO_DEVICE_SCALE not detected" || pass "MUTANT NO_DEVICE_SCALE caught (no DeviceScale=1)"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

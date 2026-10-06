@@ -300,6 +300,33 @@ fail:
     return NULL;
 }
 
+/* The user's display scale (the session publishes it as <user>.scale in the
+ * same drop directory, sg-common.sh sg_publish_scale): the lock screen is
+ * drawn at it, as the session was -- not the screen's recommended one when
+ * the user picked another. Trusted no more than the picture: the user's own
+ * regular file, a number from 100 to 500. Returns 0 for none. */
+static int lockscale_read( const char *user )
+{
+    struct passwd *pw = getpwnam( user );
+    struct stat st;
+    char name[MAXFIELD + 16], buf[17];
+    ssize_t n;
+    int fd, v;
+
+#ifdef SG_MUTANT_LOCK_SCALE_IGNORED
+    return 0;
+#endif
+    if (!pw) return 0;
+    snprintf( name, sizeof(name), "%s.scale", user );
+    if ((fd = open_owned( name, pw->pw_uid, 16, &st )) < 0) return 0;
+    n = read( fd, buf, 16 );
+    close( fd );
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    v = atoi( buf );
+    return v >= 100 && v <= 500 ? v : 0;
+}
+
 /* ---- the lock UI ------------------------------------------------------- */
 
 struct ui { pid_t pid; int to, from; char *picture; int sas; };
@@ -315,6 +342,13 @@ static int ui_start( struct ui *ui, const char *user, int sas )
     {
         if (ui->picture) setenv( "SG_LOCK_PICTURE", ui->picture, 1 );
         else unsetenv( "SG_LOCK_PICTURE" );
+        {
+            char scale[16];
+            int v = lockscale_read( user );
+            snprintf( scale, sizeof(scale), "%d", v );
+            if (v) setenv( "SG_LOCK_SCALE", scale, 1 );
+            else unsetenv( "SG_LOCK_SCALE" );
+        }
         setenv( "SG_LOCK_SIGNIN", signin ? "1" : "0", 1 );
         if (sas) setenv( "SG_LOCK_MODE", "sas", 1 );
         else unsetenv( "SG_LOCK_MODE" );
@@ -462,7 +496,7 @@ int main( int argc, char **argv )
         char *p;
         g_log = stderr;
         p = lockpic_stage( argv[2], &signin );
-        printf( "PICTURE %s\nSIGNIN %d\n", p ? p : "-", signin );
+        printf( "PICTURE %s\nSIGNIN %d\nSCALE %d\n", p ? p : "-", signin, lockscale_read( argv[2] ) );
         free( p );
         return 0;
     }

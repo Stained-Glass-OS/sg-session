@@ -1,3 +1,23 @@
+sg-session (0.1.0-142) unstable; urgency=medium
+
+  * The lock screen at the user's display scale (David 2026-10-06: "lock
+    screen honours the user's chosen scale"): the session publishes its
+    scale beside the lock picture (sg_publish_scale, from sg_linux_scale),
+    sg-lockd trusts it no more than the picture (the user's own file,
+    100-500) and hands it to the lock UI (SG_LOCK_SCALE), which draws at it
+    instead of the screen's recommended one. Tests lockscale-test (mutant
+    LOCK_SCALE_IGNORED) and display-scale-test (LOCK_NOT_PUBLISHED,
+    LOCK_RECOMMENDED).
+  * The boot splash at the screen's display scale: the theme scales itself
+    (the shorter side over 1080, as the session's recommendation; a larger
+    diamond drawn smaller above 100%), Plymouth's own device scale off
+    (DeviceScale=1, sg-boot-splash) -- it doubled the 100% pictures, soft,
+    and only on screens reporting their millimetres; a VM's diamond stayed
+    small. At 100% as before. Test boot-splash-test (mutant
+    NO_DEVICE_SCALE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 11:30:00 -0700
+
 sg-session (0.1.0-141) unstable; urgency=medium
 
   * The login screen's, Setup's and the first-run setup's drawn glyphs are

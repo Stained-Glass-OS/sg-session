@@ -27,7 +27,12 @@
 # written with wine reg first, as 0.1.0-120 did), UI_XSIZE (the size from
 # the X server, starting Xwayland), RECOMMEND_100, LIVE_NO_HUP (a change not
 # told to the running manager), QT_TWICE (QT_SCALE_FACTOR set as well: Qt
-# scaled twice).
+# scaled twice), LOCK_NOT_PUBLISHED (the session's scale not published for
+# the lock screen), LOCK_RECOMMENDED (the lock screen at the screen's
+# recommended scale, not the user's).
+#   - sg_publish_scale / sg_lock_scale: the session publishes its scale in
+#     the lock screen's drop directory; the lock UI takes it (SG_LOCK_SCALE
+#     from sg-lockd) over the screen's recommended one
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -204,6 +209,29 @@ u=$(ui "$LIB" 1920x1080 | tr '\n' ' ')
 u=$(ui "$LIB" none x | tr '\n' ' ')
 [ "$u" = "168 xwininfo " ] && pass "the lock screen's own X server, no DRM output: its size (2736x1824, 168)" || fail "sg_ui_scale x: '$u'"
 
+# --- the lock screen at the user's scale (David 2026-10-06) -----------------------------------
+# the session publishes its scale for sg-lockd (sg_linux_scale, as the
+# picture is published: the lock screen's drop directory); the lock UI takes
+# the user's scale over the screen's recommended one
+lockpub() {   # LIB PERCENT: what the session published
+    fresh; rm -rf "$T/lock"; mkdir -p "$T/lock"; chmod 1733 "$T/lock"
+    run "$1" "export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T SG_LOCKSCREEN_DIR=$T/lock; sg_linux_scale $2"
+    cat "$T/lock/$(id -un).scale" 2>/dev/null || echo none
+}
+lockui() {   # LIB SG_LOCK_SCALE: SG_LOGPIXELS as the lock UI is given it (a 2736x1824 screen)
+    fresh
+    rm -rf "$T/drm"; mkdir -p "$T/drm/card0-eDP-1"
+    echo connected > "$T/drm/card0-eDP-1/status"; printf '2736x1824\n' > "$T/drm/card0-eDP-1/modes"
+    run "$1" "SG_DRM_SYSFS=$T/drm; ${2:+SG_LOCK_SCALE=$2;} sg_lock_scale x; echo \"\${SG_LOGPIXELS:-none}\""
+}
+p1=$(lockpub "$LIB" 150); p2=$(lockpub "$LIB" 100)
+[ "$p1" = 150 ] && [ "$p2" = 100 ] && pass "the session publishes its scale for the lock screen: 150, then 100" \
+    || fail "the published scale: '$p1', '$p2' (want 150, 100)"
+u1=$(lockui "$LIB" 150); u2=$(lockui "$LIB" 100); u3=$(lockui "$LIB" "")
+[ "$u1" = 144 ] && [ "$u2" = none ] && [ "$u3" = 168 ] \
+    && pass "the lock screen at the user's scale: 150% picked -> 144, 100% picked -> none (not the screen's 175%), none published -> the screen's 168" \
+    || fail "the lock screen's scale: user 150 '$u1', user 100 '$u2', none '$u3' (want 144, none, 168)"
+
 # --- mutants: the checks above catch each --------------------------------------------------
 mutant() {   # NAME SED CHECK
     sed "$2" "$LIB" > "$T/mut.sh"
@@ -221,6 +249,10 @@ mutant UI_XSIZE 's/^    _us_size=\$(sg_drm_size)$/    _us_size=$(sg_x_size)/' \
 mutant RECOMMEND_100 's/echo \$(( _sq \* 25 ))/echo 100/' '[ -n "$(table "$T/mut.sh")" ]'
 mutant LIVE_NO_HUP 's/kill -HUP "\$_xs_p" 2>\/dev\/null \&\& return 0/return 0/' \
     '[ "$(live "$T/mut.sh")" != "$(live "$LIB")" ]'
+mutant LOCK_NOT_PUBLISHED 's/^    sg_publish_scale "\${1:-100}"$/    :/' \
+    '[ "$(lockpub "$T/mut.sh" 150)" != 150 ]'
+mutant LOCK_RECOMMENDED 's/^    ..|\*\[!0-9\]\*) sg_ui_scale "\${1:-}" ;;$/    *) sg_ui_scale "${1:-}" ;; xx)/' \
+    '[ "$(lockui "$T/mut.sh" 150)" != 144 ]'
 mutant QT_TWICE 's/^    QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough$/    QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough QT_SCALE_FACTOR=1.75; export QT_SCALE_FACTOR/' \
     '[ "$(linux "$T/mut.sh" 175)" != "$(linux "$LIB" 175)" ]'
 exit $RC
