@@ -12,7 +12,7 @@ Rules-Requires-Root: no
 
 Package: sg-session
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-203) | wine, clamav-daemon, clamav-freshclam, clamdscan, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, sg-dymo-lw5xx, poppler-utils, sg-wine-mono (>= 9.4.0+sg1-1), sg-wine-gecko (>= 2.47.4-1), sg-gtk-theme, openssh-server, spice-vdagent, plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, rtkit, isenkram-cli, desktop-file-utils, dconf-gsettings-backend, libglib2.0-bin, polkitd, x11-xserver-utils, xsettingsd,
+Depends: ${misc:Depends}, ${shlibs:Depends}, wine-sg (>= 10.0-206) | wine, clamav-daemon, clamav-freshclam, clamdscan, libpam-runtime, zstd, tar, systemd-repart, e2fsprogs, openssl, python3, udisks2, cifs-utils, smbclient, samba-common-bin, linux-sysctl-defaults, sg-d3d, sg-dymo-lw5xx, poppler-utils, sg-wine-mono (>= 9.4.0+sg1-1), sg-wine-gecko (>= 2.47.4-1), sg-gtk-theme, openssh-server, spice-vdagent, plymouth, plymouth-label, xdg-desktop-portal, xdg-desktop-portal-gtk, xdg-desktop-portal-wlr, pipewire, rtkit, isenkram-cli, desktop-file-utils, dconf-gsettings-backend, libglib2.0-bin, polkitd, x11-xserver-utils, xsettingsd,
          sg-office, sg-mail,
 Recommends: sg-shell, avahi-utils,
          python3-numpy, python3-onnxruntime, pulseaudio-utils,

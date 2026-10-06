@@ -25,6 +25,7 @@ SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 SG_SYSTEM_USER="${SG_SYSTEM_USER:-sgsystem}"
 RUNUSER="${SG_RUNUSER:-runuser}"
 PDFTOPPM="${SG_PDFTOPPM:-pdftoppm}"
+PDFINFO="${SG_PDFINFO:-pdfinfo}"
 
 if [ $# -eq 0 ]; then
     # discovery: nothing to find, the queues are made for the printers
@@ -72,6 +73,13 @@ work=$(mktemp -d "${TMPDIR:-/var/tmp}/sgwindrv.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT INT TERM
 if [ $# -ge 6 ]; then cat -- "$6" > "$work/job.pdf"; else cat > "$work/job.pdf"; fi
 head -c 4 "$work/job.pdf" | grep -q '%PDF' || { echo "ERROR: the job is not a PDF document" >&2; exit 1; }
+
+# the document's page size, in points: the driver's paper is the one of
+# that size (a program may lay a label out across, or name no paper of the
+# PPD's), else the paper chosen
+size=$("$PDFINFO" "$work/job.pdf" 2>/dev/null | sed -n 's/^Page size: *\([0-9.]*\) x \([0-9.]*\) pts.*/\1x\2/p' | head -1)
+case $paper in P[0-9]*) ;; *) paper= ;; esac
+[ -n "$size" ] && paper="$paper:$size"
 
 echo "INFO: Printing through the printer maker's driver" >&2
 # sharp edges: a label printer prints dots, and a barcode must not be blurred

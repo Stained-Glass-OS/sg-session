@@ -1,3 +1,14 @@
+sg-session (0.1.0-131) unstable; urgency=medium
+
+  * sgwindrv: a Linux program's job is printed through the maker's driver
+    on the paper of the document's page size (from pdfinfo), passed with
+    the PPD paper chosen ("P295:153.07x72.00"); Linux Firefox names its
+    paper by size alone and lays a label out across, and its label went
+    onto the driver's default paper, stretched. Needs wine-sg 10.0-206
+    (0927). windows-printers test updated.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 00:50:00 -0700
+
 sg-session (0.1.0-130) unstable; urgency=medium
 
   * GTK at the display scale itself: the session's XSETTINGS manager also

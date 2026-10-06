@@ -111,9 +111,9 @@ DEVICE_URI='sgwindrv:/DYMO%20LabelWriter%20550%2Fx' SG_LIB="$T/lib" SG_RUNUSER="
 rc=$?
 args=$(head -4 "$T/print.args" 2>/dev/null | tr '\n' '|')
 pages=$(tr '\n' ' ' < "$T/print.pages" 2>/dev/null)
-if [ $rc = 0 ] && [ "$args" = "print|DYMO LabelWriter 550/x|P295|2|" ] && [ "$pages" = "P6 P6 " ] &&
+if [ $rc = 0 ] && [ "$args" = "print|DYMO LabelWriter 550/x|P295:72x36|2|" ] && [ "$pages" = "P6 P6 " ] &&
    sed -n 6p "$T/print.args" | grep -q '^Z:\\.*\\page-1\.ppm$'; then
-    pass "the backend prints the PDF's pages through the Windows driver of the device URI's printer"
+    pass "the backend prints the PDF's pages (with their size) through the Windows driver of the device URI's printer"
 else
     fail "the backend: rc $rc, args '$args', pages '$pages'"; cat "$T/bout" | sed 's/^/      /'
 fi
