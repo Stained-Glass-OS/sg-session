@@ -9,6 +9,14 @@
 # there: for every usb://DYMO/... device CUPS's usb backend lists, with a
 # PPD of sg-dymo-lw5xx whose model is that device's, it adds the queue
 # DYMO_<model> on that URI with the PPD -- unless a queue for that URI exists.
+# The queue prints on the label loaded: the LabelWriter 5xx reads its roll's
+# NFC tag and answers a status request (ESC A) with the roll's product number
+# (bytes 11-15, "30336"); the queue's default page is the PPD's page of that
+# label, read whenever this runs (the printer plugged in, the machine started),
+# else the usual small label of the machine's country (LANG: 30336 1 x 2-1/8
+# in in the United States, Canada and with no country; 99010 elsewhere). And
+# it prints landscape by default, so that text runs along the label.
+#
 # The queue's make and model is the PPD's ("DYMO LabelWriter 550"): wine-sg
 # names the printer's Windows driver after it (0871), which is the name DYMO
 # Connect looks for, and wine-sg brings it to Windows programs without a
@@ -22,6 +30,8 @@ LPINFO="${SG_LPINFO:-/usr/sbin/lpinfo}"
 LPADMIN="${SG_LPADMIN:-/usr/sbin/lpadmin}"
 LPSTAT="${SG_LPSTAT:-lpstat}"
 TRIES="${SG_DYMO_TRIES:-10}"
+SYSFS="${SG_DYMO_SYSFS:-/sys}"
+DEVDIR="${SG_DYMO_DEVDIR:-/dev/usb}"
 
 [ -d "$PPD_DIR" ] || { echo "sg-dymo-queue: no $PPD_DIR (sg-dymo-lw5xx), nothing to do"; exit 0; }
 
@@ -33,6 +43,75 @@ ppd_for() {
         [ "$m" = "$1" ] && { echo "$p"; return 0; }
     done
     return 1
+}
+
+# the usblp device (/dev/usb/lpN) of the DYMO printer with serial number $1;
+# without a serial number, of the only DYMO printer
+lp_device() {
+    only= count=0
+    for c in "$SYSFS"/class/usbmisc/lp*; do
+        [ -e "$c" ] || continue
+        usb=$(readlink -f "$c/device/..")
+        [ "$(cat "$usb/idVendor" 2>/dev/null)" = 0922 ] || continue
+        dev="$DEVDIR/$(basename "$c")"
+        if [ -n "$1" ] && [ "$(cat "$usb/serial" 2>/dev/null)" = "$1" ]; then echo "$dev"; return 0; fi
+        only=$dev; count=$((count + 1))
+    done
+    [ -z "$1" ] && [ "$count" = 1 ] && { echo "$only"; return 0; }
+    return 1
+}
+
+# the product number of the roll loaded in the printer at $1 ("30336"), from
+# its 32-byte status: byte 10 the main bay (0x08: a roll in), 11-15 the number.
+# The first status after the printer powers up may be before it has read the
+# roll: asked a few times.
+roll_sku() {
+    i=0
+    while [ $i -lt 3 ]; do
+        if [ -n "${SG_DYMO_STATUS_FILE:-}" ]; then
+            st=$(od -An -v -tx1 -N32 "$SG_DYMO_STATUS_FILE" 2>/dev/null)
+        else
+            st=$( { printf '\033A\000' >&3; timeout 3 dd bs=32 count=1 <&3 2>/dev/null | od -An -v -tx1; } 3<>"$1" 2>/dev/null)
+        fi
+        set -- "$1" $st
+        if [ $# -ge 17 ] && [ "${12}" = 08 ]; then
+            sku=$(for h in "${13}" "${14}" "${15}" "${16}" "${17}"; do printf "\\$(printf %o "0x$h")"; done | tr -cd 'A-Za-z0-9')
+            [ -n "$sku" ] && { echo "$sku"; return 0; }
+        fi
+        set -- "$1"
+        i=$((i + 1)); [ $i -lt 3 ] && sleep 1
+    done
+    return 1
+}
+
+# the PPD's page for a label: the PageSize whose name starts with its number
+page_for() {
+    sed -n "s|^\*PageSize \([^/]*\)/$2 .*|\1|p" "$1" | head -1
+}
+
+# the small label usual in the machine's country
+country_page() {
+    lang=${SG_DYMO_LANG:-$(sed -n 's/^LANG=//p' /etc/default/locale 2>/dev/null | tr -d '"')}
+    case "$lang" in
+        *_US*|*_CA*|C|C.*|POSIX|"") page_for "$1" 30336 ;;
+        *) page_for "$1" 99010 ;;
+    esac
+}
+
+# the queue $1 (PPD $2, URI $3) on the loaded label, landscape
+set_defaults() {
+    serial=$(printf '%s\n' "$3" | sed -n 's/.*[?&]serial=\([^&]*\).*/\1/p')
+    page= how=
+    if dev=$(lp_device "$serial") && sku=$(roll_sku "$dev"); then
+        page=$(page_for "$2" "$sku"); how="the roll loaded ($sku)"
+    fi
+    [ -n "$page" ] || { page=$(country_page "$2"); how="no roll read; the country's usual label"; }
+    [ -n "$page" ] || return 0
+    if "$LPADMIN" -p "$1" -o PageSize="$page" -o orientation-requested-default=4 2>/dev/null; then
+        echo "sg-dymo-queue: $1 prints on $page, landscape: $how"
+    else
+        echo "sg-dymo-queue: lpadmin could not set $1's defaults" >&2
+    fi
 }
 
 # usb:// URIs of DYMO devices; the usb backend may need a moment after the
@@ -49,8 +128,10 @@ done
 
 queues=$("$LPSTAT" -v 2>/dev/null)
 for uri in $uris; do
-    if printf '%s\n' "$queues" | grep -q " $uri\$"; then
+    if have=$(printf '%s\n' "$queues" | sed -n "s|^device for \(.*\): $uri\$|\1|p" | head -1) && [ -n "$have" ]; then
         echo "sg-dymo-queue: $uri has its queue"
+        ppd=${SG_DYMO_QUEUE_PPD_DIR:-/etc/cups/ppd}/$have.ppd
+        [ -f "$ppd" ] && set_defaults "$have" "$ppd" "$uri"
         continue
     fi
     # usb://DYMO/LabelWriter%20550?serial=... -> "DYMO LabelWriter 550"
@@ -62,6 +143,7 @@ for uri in $uris; do
     while printf '%s\n' "$queues" | grep -q "^device for $name:"; do n=$((n + 1)); name="${base}_$n"; done
     if "$LPADMIN" -p "$name" -E -v "$uri" -P "$ppd" -D "$model" -L "USB" 2>/dev/null; then
         echo "sg-dymo-queue: added $name for $model ($uri)"
+        set_defaults "$name" "$ppd" "$uri"
         queues=$("$LPSTAT" -v 2>/dev/null)
     else
         echo "sg-dymo-queue: lpadmin failed for $name ($uri)" >&2

@@ -1,3 +1,21 @@
+sg-session (0.1.0-125) unstable; urgency=medium
+
+  * sg-dymo-queue sets a LabelWriter 5xx's queue to the label loaded and to
+    landscape. A text printed with lp came out turned and cut off ("Stained
+    Gl"): the queue printed on the PPD's default page, a 4 in shipping
+    label, portrait. The 550 reads its roll's tag and answers a status
+    request (ESC A, written to its usblp device) with the roll's product
+    number; the queue's default page is now the PPD's page of that label
+    (30336: w72h154.1), read whenever sg-dymo-queue runs -- the printer
+    plugged in, the machine started -- else the country's usual small label
+    (30336 for the United States, Canada and no country set; 99010
+    elsewhere), and orientation-requested-default=4, so text runs along the
+    label. The real 550 with a 30336 roll: "prints on w72h154.1, landscape:
+    the roll loaded (30336)". Test: test/dymo-queue-test.sh (a stand-in
+    sysfs and status; a roll changed between runs; mutant --mutant-roll).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 21:56:57 -0700
+
 sg-session (0.1.0-124) unstable; urgency=medium
 
   * sg-prefix-init repairs Windows' own programs and libraries left empty:
