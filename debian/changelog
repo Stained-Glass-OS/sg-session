@@ -1,3 +1,17 @@
+sg-session (0.1.0-127) unstable; urgency=medium
+
+  * test/display-scale-test.sh: the check of a new scale while the session
+    runs is deterministic -- each step in its own shell, waited for rather
+    than slept on, and the stand-in XSETTINGS manager ready for SIGHUP
+    before it says it started. Under the release's package build it
+    raced: the manager was told before it could hear it.
+  * test/desktop-follow-test.sh runs without an X server whatever the
+    environment has (never the real display's), with one try at the work
+    area: with xprop installed and no display, its retries outlasted the
+    test.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 23:50:00 -0700
+
 sg-session (0.1.0-126) unstable; urgency=medium
 
   * Linux programs follow a new display scale while they run (David

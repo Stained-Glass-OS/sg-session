@@ -55,12 +55,13 @@ delete) grep -v -F "$key|" "$store" > "$store.n"; mv "$store.n" "$store" ;;
 esac
 exit 0
 EOS
-# a stand-in XSETTINGS manager: says when it starts and when it is told
+# a stand-in XSETTINGS manager: says when it starts and when it is told --
+# ready for SIGHUP before it says it started (a HUP before the trap ended it)
 cat > "$T/bin/xsettingsd" <<'EOS'
 #!/bin/sh
-echo "start $2" >> "$SG_T/xsd"
 trap 'echo hup >> "$SG_T/xsd"' HUP
-i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+echo "start $2" >> "$SG_T/xsd"
+i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
 EOS
 chmod +x "$T/bin/xsettingsd"
 for c in systemctl dbus-update-activation-environment xrdb; do
@@ -149,9 +150,21 @@ l=$(linux "$LIB" 100)
 [ "$l" = "$QT Xft/DPI 98304 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 98304 Gtk/CursorThemeSize 24 Xft.dpi: 96 Xcursor.size: 24 " ] \
     && pass "at 100%: 96 DPI, scale 1 (a 1080p session's Linux programs as before): $l" || fail "at 100%: '$l'"
 
+# until the stand-in manager's log has N lines matching PATTERN (at most 10 s)
+xsd_wait() {   # PATTERN N
+    _w=0
+    while [ "$(grep -c "$1" "$T/xsd" 2>/dev/null)" -lt "$2" ] && [ $_w -lt 100 ]; do sleep 0.1; _w=$((_w + 1)); done
+}
 live() {   # LIB: the manager's life over 100% -> 175% -> 125%: "start CONF hup hup" and the file's last values
     fresh; rm -f "$T/xsd"
-    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T; sg_linux_scale_env 100; sleep 0.3; sg_linux_scale 175; sleep 0.3; sg_linux_scale 125; sleep 0.3"
+    # each step in a shell of its own, as each change is (Settings runs
+    # sg-display-scale); each waited for, not slept on
+    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T; sg_linux_scale_env 100"
+    xsd_wait '^start ' 1
+    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T; sg_linux_scale 175"
+    xsd_wait '^hup$' 1
+    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T; sg_linux_scale 125"
+    xsd_wait '^hup$' 2
     sed "s|$T/||" "$T/xsd" 2>/dev/null | tr '\n' ' '
     grep -E '^(Xft/DPI|Gdk/WindowScalingFactor)' "$T/sg-xsettings_sg_test.conf" 2>/dev/null | tr '\n' ' '
     kill "$(cat "$T/sg-xsettings_sg_test.pid" 2>/dev/null)" 2>/dev/null
