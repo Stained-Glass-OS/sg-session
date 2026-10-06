@@ -284,6 +284,7 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh
+	@! sh test/print-setup-test.sh --mutant >/dev/null
 	@sh test/print-apparmor-test.sh || [ $$? -eq 77 ]
 	@! sh test/print-apparmor-test.sh --mutant >/dev/null
 	@sh test/dymo-queue-test.sh

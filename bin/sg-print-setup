@@ -20,6 +20,7 @@ PPD="${SG_CUPS_PDF_PPD:-/usr/share/ppd/cups-pdf/CUPS-PDF_opt.ppd}"
 CONF="${SG_CUPS_PDF_CONF:-/etc/cups/cups-pdf.conf}"
 LPADMIN="${SG_LPADMIN:-/usr/sbin/lpadmin}"
 LPSTAT="${SG_LPSTAT:-lpstat}"
+PPDDIR="${SG_CUPS_PPD_DIR:-/etc/cups/ppd}"
 
 [ -x "$BACKEND" ] || { echo "sg-print-setup: no cups-pdf, nothing to do"; exit 0; }
 
@@ -41,6 +42,14 @@ fi
 if ! "$LPSTAT" -p "$QUEUE" >/dev/null 2>&1; then
     "$LPADMIN" -p "$QUEUE" -E -v cups-pdf:/ -P "$PPD" -D "Print to PDF" -L "Saved in Documents"
     echo "sg-print-setup: added the $QUEUE printer"
+fi
+# the PDF named after the document: cups-pdf takes the title from the
+# PostScript (TitlePref 0, the PPD's default) with sscanf's %c, which does
+# not end the string -- what the buffer held before followed the title,
+# "Report__tained-glass_prefix_drive_c_users_rw_Documents-job_3.pdf"
+# (regression walk 2026-10-06). The job's own title (TitlePref 1) is whole.
+if ! grep -q '^\*DefaultTitlePref: 1' "$PPDDIR/$QUEUE.ppd" 2>/dev/null; then
+    "$LPADMIN" -p "$QUEUE" -o TitlePref=1
 fi
 # the default printer, unless an administrator chose another
 if ! "$LPSTAT" -d 2>/dev/null | grep -q 'system default destination:'; then

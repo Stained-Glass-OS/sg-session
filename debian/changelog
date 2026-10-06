@@ -1,3 +1,16 @@
+sg-session (0.1.0-136) unstable; urgency=medium
+
+  * Print to PDF names the PDF after the document: cups-pdf took the title
+    from the PostScript (its PPD's default, TitlePref 0) with sscanf's %c,
+    which leaves the string unterminated, and whatever its buffer held
+    followed -- "Report__tained-glass_prefix_drive_c_users_rw_Documents-
+    job_3.pdf" (regression walk 2026-10-06). sg-print-setup sets the
+    queue's TitlePref to 1 (the job's own title, whole): "Report-job_3.pdf".
+    Machines installed before get it at the next boot. Gate:
+    test/print-setup-test.sh (--mutant fails). VM-verified.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 09:29:10 -0700
+
 sg-session (0.1.0-135) unstable; urgency=medium
 
   * sg-settingsctl printers: CUPS's queues (name, make and model, device

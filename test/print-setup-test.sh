@@ -12,6 +12,9 @@ pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT INT TERM
+TOOL="$HERE/../bin/sg-print-setup"
+# --mutant: the TitlePref lines left out (the PDF named with cups-pdf's garbled title)
+if [ "${1:-}" = --mutant ]; then sed 's/-o TitlePref=1/-o TitlePref=0/' "$TOOL" > "$T/tool"; TOOL="$T/tool"; fi
 printf '#!/bin/sh\nexit 0\n' > "$T/cups-pdf"; chmod +x "$T/cups-pdf"
 printf '### Key: Out\n#Out ${HOME}/PDF\n### Key: Label\n#Label 0\n' > "$T/cups-pdf.conf"
 cat > "$T/lpstat" <<'S'
@@ -24,17 +27,19 @@ S
 cat > "$T/lpadmin" <<'S'
 #!/bin/sh
 echo "$*" >> "$STATE/calls"
+case "$*" in *"-o TitlePref=1"*) mkdir -p "$PPDS"; echo '*DefaultTitlePref: 1' > "$PPDS/Print-to-PDF.ppd" ;; esac
 case "$1" in -p) touch "$STATE/queue" ;; -d) echo "$2" > "$STATE/default" ;; esac
 S
 chmod +x "$T/lpstat" "$T/lpadmin"
 mkdir -p "$T/state"
-run() { env STATE="$T/state" SG_PREFIX=/var/lib/stained-glass/prefix SG_CUPS_PDF_BACKEND="$T/cups-pdf" \
-    SG_CUPS_PDF_CONF="$T/cups-pdf.conf" SG_LPADMIN="$T/lpadmin" SG_LPSTAT="$T/lpstat" sh "$HERE/../bin/sg-print-setup" >/dev/null; }
+run() { env STATE="$T/state" PPDS="$T/ppd" SG_CUPS_PPD_DIR="$T/ppd" SG_PREFIX=/var/lib/stained-glass/prefix SG_CUPS_PDF_BACKEND="$T/cups-pdf" \
+    SG_CUPS_PDF_CONF="$T/cups-pdf.conf" SG_LPADMIN="$T/lpadmin" SG_LPSTAT="$T/lpstat" sh "$TOOL" >/dev/null; }
 
 run
 calls=$(cat "$T/state/calls" 2>/dev/null)
 case "$calls" in *"-p Print-to-PDF -E -v cups-pdf:/ -P /usr/share/ppd/cups-pdf/CUPS-PDF_opt.ppd -D Print to PDF"*) pass "adds the Print-to-PDF queue on cups-pdf" ;; *) fail "lpadmin: $calls" ;; esac
 case "$calls" in *"-d Print-to-PDF"*) pass "and makes it the default when there is none" ;; *) fail "default: $calls" ;; esac
+case "$calls" in *"-p Print-to-PDF -o TitlePref=1"*) pass "the PDF is named after the job's title, not cups-pdf's PostScript title (TitlePref=1)" ;; *) fail "TitlePref: $calls" ;; esac
 grep -qx 'Out /var/lib/stained-glass/prefix/drive_c/users/${USER}/Documents' "$T/cups-pdf.conf" \
     && grep -qx 'Label 1' "$T/cups-pdf.conf" && pass "cups-pdf writes into the user's Windows Documents, never over a PDF" \
     || fail "cups-pdf.conf: $(cat "$T/cups-pdf.conf")"
