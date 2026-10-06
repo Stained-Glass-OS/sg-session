@@ -4,7 +4,9 @@
 # Win32_Printer), which makes Windows' printers again from CUPS's (a standard
 # user may not write them to HKLM); with it down it does nothing; and the
 # path unit starts it when CUPS's ppd directory or printers.conf changes.
-#   sh test/printers-refresh-test.sh [--mutant|--mutant-session|--mutant-winsta]
+# Then SYSTEM readies every printer's driver (splwow64 drivers): a standard
+# user may not write a printer's driver.
+#   sh test/printers-refresh-test.sh [--mutant|--mutant-session|--mutant-winsta|--mutant-drivers]
 #     (--mutant: run as the caller instead of SYSTEM; --mutant-session: the
 #     signed-in check left out; --mutant-winsta: on the interactive window
 #     station -- each must fail)
@@ -22,6 +24,8 @@ if [ "${1:-}" = --mutant ]; then
     sed 's|runuser -u "\$SG_SYSTEM_USER" -- ||' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 elif [ "${1:-}" = --mutant-winsta ]; then
     sed '/SG_WINSTATION=/d' "$TOOL" > "$T/tool"; TOOL="$T/tool"
+elif [ "${1:-}" = --mutant-drivers ]; then
+    sed 's/wine splwow64.exe drivers/true/' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 elif [ "${1:-}" = --mutant-session ]; then
     sed '/sg-session.env/d; /oobe.pending.*exit/d; /live boot.*exit/d' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 fi
@@ -69,6 +73,10 @@ case "$(cat "$T/calls" 2>/dev/null)" in
         pass "in the services' window station, not the login screen's" ;;
     *) fail "not in the services' window station: $(cat "$T/calls" 2>/dev/null)" ;; esac
 case "$out" in *"printers now: DYMO_LabelWriter_550,Print-to-PDF"*) pass "and it reports the Windows printers" ;; *) fail "output: $out" ;; esac
+case "$(cat "$T/calls")" in
+    *"wine wmic"*"wine splwow64.exe drivers"*) pass "SYSTEM readies every printer's driver for every user (splwow64 drivers)" ;;
+    *) fail "the printers' drivers were not readied as SYSTEM" ;;
+esac
 U="$HERE/../systemd/sg-printers-refresh.path"
 grep -qx 'PathChanged=/etc/cups/ppd' "$U" && grep -qx 'PathChanged=/etc/cups/printers.conf' "$U" \
     && grep -qx 'enable sg-printers-refresh.path' "$HERE/../config/preset/50-stained-glass.preset" \

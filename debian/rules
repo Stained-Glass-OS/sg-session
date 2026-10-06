@@ -61,3 +61,7 @@ override_dh_installsystemd:
 	dh_installsystemd --no-start sg-firmware-initrd.service
 	# Windows' printers follow CUPS's: the path unit enabled and started.
 	dh_installsystemd sg-printers-refresh.path
+	# Linux programs print through Windows printer drivers: the queues made
+	# at boot and when a driver is installed or a printer added.
+	dh_installsystemd --no-start sg-windows-printers.service
+	dh_installsystemd sg-windows-printers.path

@@ -1,3 +1,28 @@
+sg-session (0.1.0-129) unstable; urgency=medium
+
+  * Linux programs print through a printer's Windows driver (David
+    2026-10-05), with wine-sg 0920-0925 (10.0-203): a printer whose maker's
+    Windows driver is installed in the machine's Windows system gets the CUPS
+    queue "<printer>_MakersDriver" ("<printer> (maker's driver)"), made by
+    sg-windows-printers (sg-windows-printers.path: at boot, when a package is
+    staged or a driver installed, when CUPS's printers change; a queue already
+    right is left alone) with a PPD from the driver's own capabilities -- its
+    papers (a label printer's label stocks) with their printable areas,
+    resolutions, colour -- and the backend sgwindrv (root's, mode 0700): the
+    job's PDF drawn at the driver's resolution (pdftoppm, sharp edges) and
+    printed through the driver by the Windows system (SYSTEM), whose output
+    goes to the printer's own queue raw, so CUPS alone talks to the device.
+    Depends on poppler-utils.
+  * The Windows system readies every printer's driver for every user
+    (sg-printers-refresh runs splwow64 drivers as SYSTEM, point-and-print
+    style): a standard user may not write a printer's driver, so a CUPS queue
+    no administrator had opened had no driver for them; and a maker's driver
+    package an installer staged is installed for the printers it is for.
+  * test/windows-printers-test.sh (in make lint, mutants --mutant and
+    --mutant-decode); test/printers-refresh-test.sh --mutant-drivers.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 23:54:46 -0700
+
 sg-session (0.1.0-128) unstable; urgency=medium
 
   * Tests: display-scale-test's stand-in XSETTINGS manager starts with

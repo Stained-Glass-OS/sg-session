@@ -1,0 +1,12 @@
+[Unit]
+Description=Stained Glass: a Windows printer driver installed gets its CUPS queue for Linux programs
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+
+[Path]
+PathChanged=/var/lib/stained-glass/prefix/drive_c/windows/system32/spool/drivers/x64/3
+PathChanged=/var/lib/stained-glass/prefix/drive_c/windows/system32/DriverStore/FileRepository
+PathChanged=/etc/cups/printers.conf
+Unit=sg-windows-printers.service
+
+[Install]
+WantedBy=multi-user.target

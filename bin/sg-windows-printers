@@ -1,0 +1,86 @@
+#!/bin/sh
+# CUPS queues for Linux programs to print through Windows printer drivers.
+#
+# A printer whose maker's Windows driver is installed in the machine's
+# Windows system (wine-sg 0920-0925) prints from Windows programs through
+# that driver. Linux programs print to CUPS; for each such printer this
+# makes the queue "<printer>_MakersDriver" ("<printer> (maker's driver)"), whose
+# PPD is made from the driver's capabilities -- its papers (a label
+# printer's label stocks, with their printable areas), resolutions, colour
+# -- so a Linux print dialog offers what the driver does, and whose backend,
+# sgwindrv, prints through the driver. A queue whose Windows printer is gone
+# goes too. The printer's own queue (its Linux driver's) stays for Linux
+# programs that prefer it.
+#
+# First the Windows system (SYSTEM) installs the drivers a maker's
+# installer staged in the driver store for the printers they are for (a
+# standard user's programs never install drivers). Run as root by
+# sg-windows-printers.service: at boot, when a package is staged or a driver
+# installed and when CUPS's printers change (sg-windows-printers.path). A
+# queue already as it should be is left alone, so its own changes do not
+# start this again. Nothing to do without the machine's prefix.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+LPADMIN="${SG_LPADMIN:-/usr/sbin/lpadmin}"
+LPSTAT="${SG_LPSTAT:-lpstat}"
+RUNUSER="${SG_RUNUSER:-runuser}"
+CUPS_PPD_DIR="${SG_CUPS_PPD_DIR:-/etc/cups/ppd}"
+WORK=$(mktemp -d /var/tmp/sg-windows-printers.XXXXXX) || exit 1
+trap 'rm -rf "$WORK"' EXIT INT TERM
+chmod 0777 "$WORK"
+
+[ -d "${SG_PREFIX:-/nonexistent}/drive_c" ] || { echo "sg-windows-printers: no machine prefix"; exit 0; }
+
+# runs splwow64 as SYSTEM in the services' window station
+host() {
+    "$RUNUSER" -u "${SG_SYSTEM_USER:-sgsystem}" -- sh -c '
+        . "$0/sg-common.sh"; sg_wine_env; unset DISPLAY WAYLAND_DISPLAY
+        SG_WINSTATION="__wineservice_winstation\Default"; export SG_WINSTATION
+        WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d;explorer.exe=d" exec timeout 120 wine splwow64.exe "$@"' \
+        "$SG_LIB" "$@" </dev/null
+}
+winpath() { printf 'Z:%s' "$1" | tr '/' '\\'; }
+urlenc() {
+    printf '%s' "$1" | od -An -tx1 -v | tr -s ' \n' '\n\n' | sed '/^$/d' | while read -r h; do
+        case $h in
+        3[0-9]|4[1-9a-f]|5[0-9a]|6[1-9a-f]|7[0-9a]|2d|2e|5f|7e) printf "\\$(printf %o "0x$h")" ;;
+        *) printf '%%%s' "$(printf '%s' "$h" | tr a-f A-F)" ;;
+        esac
+    done
+}
+
+# a maker's package an installer staged: its printers get the driver
+host drivers 2>/dev/null | tr -d '\r' | while read -r p; do
+    [ -n "$p" ] && echo "sg-windows-printers: $p prints through its maker's driver"
+done
+host list "$(winpath "$WORK/list")" >/dev/null 2>&1
+[ -f "$WORK/list" ] || { echo "sg-windows-printers: the system account did not answer"; exit 0; }
+
+made=""
+while IFS="$(printf '\t')" read -r name driver; do
+    [ -n "$name" ] || continue
+    queue=$(printf '%s' "$name" | tr -c 'A-Za-z0-9_\n-' '_')_MakersDriver
+    rm -f "$WORK/q.ppd"
+    host ppd "$name" "$(winpath "$WORK/q.ppd")" >/dev/null 2>&1
+    [ -s "$WORK/q.ppd" ] || { echo "sg-windows-printers: no PPD from the driver of $name"; continue; }
+    made="$made $queue "
+    # unchanged: nothing written (CUPS's files changing start this again)
+    uri="sgwindrv:/$(urlenc "$name")"
+    if cmp -s "$WORK/q.ppd" "$CUPS_PPD_DIR/$queue.ppd" &&
+       "$LPSTAT" -v "$queue" 2>/dev/null | grep -qF "$uri"; then
+        continue
+    fi
+    "$LPADMIN" -p "$queue" -E -v "$uri" -P "$WORK/q.ppd" \
+        -D "$name (maker's driver)" -o printer-is-shared=false &&
+        echo "sg-windows-printers: $queue prints through the maker's driver \"$driver\""
+done < "$WORK/list"
+
+# queues of Windows printers that are gone
+"$LPSTAT" -v 2>/dev/null | sed -n 's/^device for \([^:]*\): sgwindrv:.*/\1/p' | while read -r q; do
+    case "$made" in *" $q "*) ;; *) "$LPADMIN" -x "$q" && echo "sg-windows-printers: removed $q" ;; esac
+done
+exit 0

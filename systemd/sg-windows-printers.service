@@ -1,0 +1,17 @@
+[Unit]
+Description=Stained Glass: CUPS queues for Linux programs to print through Windows printer drivers
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# A printer whose maker's Windows driver is installed in the machine's Windows
+# system gets "<printer>_MakersDriver", whose PPD is the driver's and whose backend
+# (sgwindrv) prints through it. At boot, when a driver is installed
+# or a printer is added to CUPS (sg-windows-printers.path).
+After=cups.service sg-prefix-init.service sg-wineserver.service
+Wants=cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/stained-glass/sg-windows-printers
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

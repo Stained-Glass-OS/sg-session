@@ -1,0 +1,100 @@
+#!/bin/sh
+# CUPS backend: a Linux program's job printed through a Windows printer
+# driver (installed to /usr/lib/cups/backend/sgwindrv, mode 0700, so CUPS
+# runs it as root).
+#
+# A printer whose Windows driver is installed in the machine's Windows system
+# (wine-sg 0920-0925: DYMO's LabelWriter driver, a Zebra, a Brother...) gets a
+# second CUPS queue, "<printer> (maker's driver)", made by
+# sg-windows-printers with a PPD from the driver's own capabilities. Its
+# device is sgwindrv:/<Windows printer name>. CUPS hands us the job as PDF
+# (the PPD's cupsFilter2); we draw its pages at the driver's resolution
+# (pdftoppm) and the Windows system's SYSTEM account prints them through the
+# driver (splwow64 print). The driver's output goes where the Windows printer
+# prints: as a raw job to the printer's own CUPS queue, so CUPS alone talks to
+# the device and its jobs are one queue's, Linux and Windows alike.
+#
+# Nothing a user supplies runs here but the PDF, read by pdftoppm: the
+# Windows side is the installed driver, in the machine's prefix.
+#
+#   CUPS: sgwindrv job user title copies options [file]
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+SG_SYSTEM_USER="${SG_SYSTEM_USER:-sgsystem}"
+RUNUSER="${SG_RUNUSER:-runuser}"
+PDFTOPPM="${SG_PDFTOPPM:-pdftoppm}"
+
+if [ $# -eq 0 ]; then
+    # discovery: nothing to find, the queues are made for the printers
+    echo 'direct sgwindrv "Unknown" "Printer maker'"'"'s driver"'
+    exit 0
+fi
+[ $# -ge 5 ] || { echo "ERROR: usage: sgwindrv job user title copies options [file]" >&2; exit 1; }
+title=$3
+copies=$4
+options=$5
+
+# the Windows printer: the device URI's path, percent-decoded
+uri="${DEVICE_URI:-}"
+enc=${uri#sgwindrv:}
+enc=${enc#//}
+enc=${enc#/}
+urldec() {
+    _s=$1; _o=
+    while [ -n "$_s" ]; do
+        case $_s in
+        %[0-9A-Fa-f][0-9A-Fa-f]*) _h=$(printf '%s' "$_s" | cut -c2-3); _o="$_o$(printf "\\$(printf %o "0x$_h")")"; _s=${_s#???} ;;
+        *) _o="$_o$(printf '%s' "$_s" | cut -c1)"; _s=${_s#?} ;;
+        esac
+    done
+    printf '%s' "$_o"
+}
+printer=$(urldec "$enc")
+[ -n "$printer" ] || { echo "ERROR: no printer in the device URI '$uri'" >&2; exit 1; }
+
+opt() {
+    # the value of option $1 in the job's options
+    printf '%s\n' "$options" | tr ' ' '\n' | sed -n "s/^$1=//p" | tail -1
+}
+ppd_default() {
+    [ -n "${PPD:-}" ] && [ -r "$PPD" ] && sed -n "s/^\*Default$1:[[:space:]]*\([^[:space:]]*\).*/\1/p" "$PPD" | head -1
+}
+
+paper=$(opt PageSize); [ -n "$paper" ] || paper=$(opt media)
+[ -n "$paper" ] || paper=$(ppd_default PageSize)
+res=$(opt Resolution); [ -n "$res" ] || res=$(ppd_default Resolution)
+dpi=$(printf '%s' "$res" | sed -n 's/^\([0-9][0-9]*\).*/\1/p')
+[ -n "$dpi" ] || dpi=300
+
+work=$(mktemp -d "${TMPDIR:-/var/tmp}/sgwindrv.XXXXXX") || exit 1
+trap 'rm -rf "$work"' EXIT INT TERM
+if [ $# -ge 6 ]; then cat -- "$6" > "$work/job.pdf"; else cat > "$work/job.pdf"; fi
+head -c 4 "$work/job.pdf" | grep -q '%PDF' || { echo "ERROR: the job is not a PDF document" >&2; exit 1; }
+
+echo "INFO: Printing through the printer maker's driver" >&2
+# sharp edges: a label printer prints dots, and a barcode must not be blurred
+"$PDFTOPPM" -r "$dpi" -aa no -aaVector no "$work/job.pdf" "$work/page" || { echo "ERROR: the document could not be drawn" >&2; exit 1; }
+pages=$(cd "$work" && ls page-*.ppm 2>/dev/null | sort -t- -k2 -n)
+[ -n "$pages" ] || { echo "ERROR: the document has no pages" >&2; exit 1; }
+# the SYSTEM account reads them
+chmod 0755 "$work"; chmod 0644 "$work"/*.ppm
+
+winpath() { printf 'Z:%s' "$1" | tr '/' '\\'; }
+set --
+for p in $pages; do set -- "$@" "$(winpath "$work/$p")"; done
+
+# In the services' window station, as the Windows system's programs are.
+"$RUNUSER" -u "$SG_SYSTEM_USER" -- sh -c '
+    . "$0/sg-common.sh"; sg_wine_env; unset DISPLAY WAYLAND_DISPLAY
+    SG_WINSTATION="__wineservice_winstation\Default"; export SG_WINSTATION
+    WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d;explorer.exe=d" exec wine splwow64.exe "$@"' \
+    "$SG_LIB" print "$printer" "$paper" "$copies" "$title" "$@" </dev/null
+rc=$?
+if [ $rc -ne 0 ]; then
+    echo "ERROR: the driver of '$printer' did not print the job ($rc)" >&2
+    exit 1
+fi
+echo "INFO: Printed through the driver of $printer" >&2
+exit 0
