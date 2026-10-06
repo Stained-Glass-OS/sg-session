@@ -1,3 +1,29 @@
+sg-session (0.1.0-139) unstable; urgency=medium
+
+  * SG PDF's engine (sg-pdf) grows the professional tools: Prepare Form
+    (fields of every kind and their properties; the blanks of a paper form
+    found and made into fields), forms that compute (formats and
+    calculations as the standard scripts, evaluated here: a refused entry,
+    a date kept in its pattern, totals), certificate signatures (our own
+    signer on python3-cryptography and python3-asn1crypto, appended as an
+    incremental update so earlier signatures stay valid; checking against
+    the trusted certificates; self-signed digital IDs), Create PDF (blank,
+    pictures, text, PDFs, office documents through SG Office's converter,
+    the scanner), Recognize Text (OCRmyPDF), headers and footers, page and
+    Bates numbers, watermarks, Reduce File Size, attachments, links,
+    bookmarks, stamps, replies and review status, check marks, Read Out
+    Loud; big pages rendered as tiles from cached display lists; find
+    skips pages without a hit.
+  * Depends: python3-pymupdf (was a Recommends, which machines do not
+    install), python3-cryptography, python3-asn1crypto,
+    python3-pyhanko-certvalidator, ocrmypdf, tesseract-ocr,
+    tesseract-ocr-eng, espeak-ng, sane-utils, fonts-urw-base35 and sg-pdf
+    (SG PDF's own package), so apt upgrade brings them.
+  * PDF files opened from Linux programs open in SG PDF (mimeapps.list).
+  * Gate test/pdf-pro-test.py (in make lint) and test/pdf-pro-mutants.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:06:59 -0700
+
 sg-session (0.1.0-138) unstable; urgency=medium
 
   * Restart to finish updating is not lost behind the lock screen: shown

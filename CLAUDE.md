@@ -1318,7 +1318,8 @@ child, so Settings reads files, as it does sg-dictate's.
 tokenizer -- and `sgpdf_docx.py`, our own .docx writer) is what sg-shell's
 **SG PDF** (`sg-pdf64.exe`, the `.pdf` association: a viewer and an editor)
 draws from and edits through: **MuPDF** via Debian's `python3-pymupdf`
-(AGPL, as we are; Recommends, and named in sg-image's package list). It
+(AGPL, as we are; a Depends since 0.1.0-139 -- machines do not install
+Recommends -- and named in sg-image's package list). It
 runs as the user, reads and writes only the files the program names, and
 touches no network. The program re-launches itself as `sg-pdf --bridge wine
 <itself> --bridged <args>` and talks on its standard handles, as
@@ -1328,7 +1329,9 @@ The viewer's requests (unchanged from the poppler days):
 
 ```
 open PATH [PASSWORD]     OK pages=N <state> bytes=K   "size W H" a page (points), "title T", "author A", ...
-render PAGE SCALE ROT    OK w=W h=H bytes=W*H*4   top-down B,G,R,A rows, opaque (white paper)
+render PAGE SCALE ROT [X Y W H]   OK w=W h=H x=X y=Y bytes=W*H*4   top-down B,G,R,A rows, opaque; X Y W H:
+                         only that part of the page's bitmap (a tile: the view draws a page larger than
+                         4 Mpx smaller, and its part in view as a tile); pages drawn from cached display lists
 text PAGE                OK n=N bytes=18N     N UTF-16LE units, then N boxes (4 x float32 LE: x1 y1 x2 y2)
 find NEEDLE [FLAGS]      OK n=N bytes=K       "PAGE X1 Y1 X2 Y2" lines; FLAGS c = match case, w = whole words
 links PAGE / outline     as before
@@ -1358,6 +1361,68 @@ extract PAGES FILE [DELETE] | split N DIR BASE | combine OUT FILE..
 protect mode=aes256 user= owner= perms=print,copy,.. | protect mode=none | unlock OWNERPW
 export png|jpeg|txt|html|docx FILE [pages= dpi=]
 ```
+
+The professional tools (pdf/sgpdf_forms.py, sgpdf_sign.py, sgpdf_create.py):
+
+```
+addfield PAGE KIND RECT [name= tooltip= required= readonly= multiline= maxlen= fontsize= align= default=
+         options=A\nB format= calc= export= border=]   KIND: text date number checkbox radio combo list signature
+fieldprops PAGE XREF | setfieldprops PAGE XREF key=value.. | delfield PAGE XREF | movefield PAGE XREF RECT
+formdetect [PAGES] [add=1]        the blanks a flat page suggests -> "PAGE KIND RECT NAME" (add=1 makes them)
+resetform | fillmark PAGE check|cross|dot|line|box RECT [color=]
+   format= number:DEC[:CURRENCY[:SEPSTYLE]] | percent:DEC | date:PATTERN | zip | zip4 | phone | ssn | none
+   calc=   sum|product|avg|min|max:NAME,NAME.. | expr:Qty * Price + Tax | none
+certsign OUT PFX PASSWORD field=XREF page=N | page=N rect=.. [name= reason= location= contact= picture=FILE]
+signatures                        "PAGE XREF NAME STATUS COVERS RECT SIGNER TIME REASON DETAIL" (unsigned valid unknown invalid)
+makeid PFX PASSWORD name= email= org= | idinfo PFX PASSWORD | trustsigner PAGE XREF
+new [W H N] | create FILE.. | scanners | scan device= dpi= mode= source= pages= [ocr=LANG] [at=N]   (new: untitled=1)
+ocrlangs | ocr lang= [pages=] [deskew=1]
+decorate header|footer|pagenumbers|bates|watermark key=value..   (left= center= right= <<page>> <<pages>> <<date>>;
+         prefix= start= digits= suffix= where= align=; text= | image= size= rotate= opacity= color= behind=; pages=)
+optimize dpi= quality= [metadata=1]   (answers images= before= after=)
+attachments | getattachment NAME FILE | addattachment FILE [description=] | delattachment NAME
+replacepages PAGES FILE [START [PW]] | addlink PAGE RECT uri=|page= | dellink PAGE RECT | setoutline toc=..
+annot PAGE stamp rect= stamp=Approved|Draft|.. | reply PAGE XREF TEXT | setstatus PAGE XREF STATE | thread PAGE XREF
+speak [TEXT [rate=]]              read out loud (espeak-ng, else spd-say); no text: stop
+```
+
+- **Forms.** Fields are standard AcroForm fields; formats and
+  calculations are the standard scripts (AFNumber_Format, AFDate_FormatEx,
+  AFSpecial_Format, AFSimple_Calculate, simplified field notation between
+  BVCALC/EVCALC) with /CO, so other readers format and compute the same.
+  MuPDF runs no form JavaScript: `sgpdf_forms` evaluates them -- a value
+  typed is checked against the format (letters in a number field, a date
+  that is not one: refused), stored as typed (numbers plainly, dates in the
+  field's pattern), shown formatted (the appearance; /V keeps the value),
+  and every calculated field is computed again after each change. Radio
+  buttons of one name are made kids of one field. PyMuPDF takes "" for "no
+  change": an emptied field is set by hand (`clear_value`). Auto-detect:
+  underscores, rules, empty boxes and table cells (named after their
+  column), small squares (check boxes), "Label:" with room after it; a
+  label with "date" makes a date field, "signature" a signature field.
+- **Signatures** are our own (python3-cryptography + python3-asn1crypto;
+  pyHanko is not in Debian): adbe.pkcs7.detached with PAdES's signed
+  attributes, appended as an incremental update by hand (objects, an xref
+  table or stream as the file has, the trailer), so the file before stays
+  byte for byte and earlier signatures stay valid; a dirty document is
+  first written whole. Checking: digest, signature against the signer's
+  certificate, coverage, then the path to the system's roots or the
+  person's trusted certificates (~/.config/sg-pdf/trusted) with
+  python3-pyhanko-certvalidator. poppler's pdfsig agrees (the gate).
+  Encrypted documents are not signed (yet).
+- **OCR**: OCRmyPDF (`--skip-text`, or `--force-ocr --deskew`), languages
+  from `tesseract --list-langs` (tesseract-ocr-LANG packages; English is a
+  Depends). **Create**: pictures (convert_to_pdf), text files (monospaced),
+  PDFs, office documents through SG Office's x2t
+  (/usr/lib/sg-office/engine/x2t, fonts by its allfontsgen) else
+  LibreOffice if installed. Scanning: SANE's scanimage.
+- **Find** checks MuPDF's plain text of a page first; only pages with a hit
+  get the per-character pass (600 pages: seconds, not minutes).
+- Gate: **`test/pdf-pro-test.py`** (everything above through `--serve`,
+  checked with pdftotext, pdfsig, qpdf and a fresh MuPDF) with
+  **`test/pdf-pro-mutants.sh`** (calculation, keystroke check, detection,
+  radio groups, the signed digest, the incremental append, the checker,
+  OCR, decorations, attachments: each mutant must fail it).
 
 - **True redaction.** Marks are Redact annotations (they survive other
   edits and undo). Apply runs MuPDF's redaction with text removed, image

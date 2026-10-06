@@ -69,6 +69,14 @@
 #   combine OUT FILE.. | protect mode=aes256|none user= owner= perms=..
 #   unlock OWNERPW | export png|jpeg|txt|html|docx FILE [pages= dpi=]
 #
+# The professional tools (Prepare Form, certificate signatures, Create PDF,
+# OCR, decorations, attachments, replies; see sg-session's CLAUDE.md):
+#   addfield fieldprops setfieldprops delfield movefield formdetect
+#   resetform fillmark | certsign signatures makeid idinfo trustsigner |
+#   new create scanners scan ocrlangs ocr | decorate optimize |
+#   attachments getattachment addattachment delattachment | replacepages
+#   addlink dellink setoutline | reply setstatus thread | speak
+#
 # A request that changes the document answers like open, with its state
 # (undo= redo= dirty= perms= encrypted= protect= form= redactions=) in
 # the header; PAGES are 0-based lists ("0,2,4-6").
@@ -143,7 +151,7 @@ def serve(fd_in, out, alive=None):
             if not line:
                 continue
             if TRACE:
-                secret = line.startswith(("protect", "unlock")) or (line.startswith("open\t") and line.count("\t") >= 2)
+                secret = line.startswith(("protect", "unlock", "certsign", "makeid", "idinfo")) or (line.startswith("open\t") and line.count("\t") >= 2)
                 with open(TRACE, "a") as t:
                     t.write((line.split("\t")[0] + "\t(passwords not logged)" if secret else line[:2000]) + "\n")
             ans = handle(doc, line)

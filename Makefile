@@ -42,7 +42,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/powershell $(BINDIR)
 	install -m 0755 bin/sg-defender $(BINDIR)
 	install -d $(LIBDIR)/pdf
-	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py $(LIBDIR)/pdf/
+	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py pdf/sgpdf_forms.py pdf/sgpdf_sign.py \
+	    pdf/sgpdf_create.py $(LIBDIR)/pdf/
 	@# Settings' native half: sound, Bluetooth, display, night light, idle, updates.
 	install -m 0755 bin/sg-settingsctl $(BINDIR)
 	@# the volume chime, made here (sounds/make-chime.py: our own, no recording)
@@ -313,9 +314,11 @@ lint:
 	@sh test/greeter-lastuser-test.sh || [ $$? -eq 77 ]
 	@sh test/greeter-lastuser-ui-test.sh || [ $$? -eq 77 ]
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
-	@for f in pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py; do python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' $$f || exit 1; done
+	@for f in pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py pdf/sgpdf_forms.py pdf/sgpdf_sign.py pdf/sgpdf_create.py; do \
+	    python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' $$f || exit 1; done
 	@/usr/bin/python3 test/pdf-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@/usr/bin/python3 test/pdf-edit-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@/usr/bin/python3 test/pdf-pro-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-fetch
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh

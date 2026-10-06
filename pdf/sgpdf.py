@@ -37,6 +37,7 @@
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -45,6 +46,8 @@ import pymupdf as fitz
 
 from sgpdf_content import count_do, remove_do, remove_invisible_text, remove_marked
 import sgpdf_docx
+import sgpdf_forms as forms
+import sgpdf_create as create_mod
 
 MAX_PIXELS = 60_000_000
 UNDO_LEVELS = 40
@@ -67,6 +70,9 @@ PATTERNS = {
     "card": r"(?<!\d)(?:\d{4}[ -]?){3}\d{1,4}(?!\d)",
     "date": r"(?<!\d)(?:\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{4}-\d{2}-\d{2})(?!\d)",
 }
+
+
+TEXT_FLAGS = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_MEDIABOX_CLIP
 
 
 class Refusal(Exception):
@@ -498,6 +504,7 @@ class Engine:
     def changed(self):
         self.dirty = True
         self.objcache = {}
+        self.dlcache = None
 
     def reopen(self, data):
         doc = fitz.open("pdf", data)
@@ -546,19 +553,51 @@ class Engine:
         self.objcache = {}
         return self.state()
 
-    def render(self, n, scale, rot):
+    def _display_list(self, p):
+        """the page's display list (parsed once, drawn at any zoom), the last few pages kept"""
+        cache = getattr(self, "dlcache", None)
+        if cache is None or cache[0] is not self.doc:
+            cache = self.dlcache = (self.doc, {}, [])
+        lists, order = cache[1], cache[2]
+        key = p.number
+        dl = lists.get(key)
+        if dl is None:
+            dl = p.get_displaylist(annots=True)
+            lists[key] = dl
+            order.append(key)
+            while len(order) > 8:
+                lists.pop(order.pop(0), None)
+        return dl
+
+    def render(self, n, scale, rot, x="", y="", w="", h=""):
+        """the page as a bitmap; X Y W H: only that part of the page's bitmap (a tile of a page
+        too large to draw whole at this zoom); the answer's x= y= say where the part starts"""
         p = self.page(n)
         try:
             scale = float(scale)
             rot = int(rot) % 360
+            clip = [int(v) for v in (x, y, w, h)] if w else None
         except ValueError:
-            raise Refusal("invalid", "scale or rotation is not a number")
+            raise Refusal("invalid", "scale, rotation or part is not a number")
         if not (0.01 <= scale <= 64) or math.isnan(scale) or rot not in (0, 90, 180, 270):
             raise Refusal("invalid", "scale or rotation out of range")
-        r = p.rect
-        if math.ceil(r.width * scale) * math.ceil(r.height * scale) > MAX_PIXELS:
-            raise Refusal("toolarge", "the page would be too large a bitmap")
-        pix = p.get_pixmap(matrix=fitz.Matrix(scale, scale).prerotate(rot), alpha=False, annots=True)
+        mat = fitz.Matrix(scale, scale).prerotate(rot)
+        full = (p.rect * mat).irect
+        dl = self._display_list(p)
+        if clip:
+            cx, cy, cw, ch = clip
+            if cw <= 0 or ch <= 0 or cw * ch > MAX_PIXELS:
+                raise Refusal("toolarge", "the part would be too large a bitmap")
+            dev = fitz.Rect(full.x0 + cx, full.y0 + cy, full.x0 + cx + cw, full.y0 + cy + ch) & fitz.Rect(full)
+            if dev.is_empty:
+                raise Refusal("range", "the part is outside the page")
+            pix = dl.get_pixmap(matrix=mat, alpha=False, clip=(dev * ~mat).normalize())
+            ox, oy = pix.x - full.x0, pix.y - full.y0
+        else:
+            if full.width * full.height > MAX_PIXELS:
+                raise Refusal("toolarge", "the page would be too large a bitmap")
+            pix = dl.get_pixmap(matrix=mat, alpha=False)
+            ox = oy = 0
         w, h = pix.width, pix.height
         s = pix.samples
         if pix.stride != w * 3:
@@ -568,13 +607,14 @@ class Engine:
         buf[1::4] = s[1::3]
         buf[2::4] = s[0::3]
         buf[3::4] = b"\xff" * (w * h)
-        return "OK w=%d h=%d bytes=%d" % (w, h, len(buf)), bytes(buf)
+        return "OK w=%d h=%d x=%d y=%d bytes=%d" % (w, h, ox, oy, len(buf)), bytes(buf)
 
     def chars(self, p):
         """the page's characters in reading order: (text, [boxes]) -- a "\n"
         (box of zeros) after each line; boxes in shown-page coordinates"""
         text, boxes = [], []
-        d = p.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_MEDIABOX_CLIP)
+        d = p.get_text("rawdict", flags=TEXT_FLAGS)
+        turned = bool(p.rotation)
         for b in d.get("blocks", []):
             if b.get("type") != 0:
                 continue
@@ -585,9 +625,12 @@ class Engine:
                         c = ch.get("c", "")
                         if not c:
                             continue
-                        r = self.out_rect(p, ch["bbox"])
                         text.append(c)
-                        boxes.append((r.x0, r.y0, r.x1, r.y1))
+                        if turned:
+                            r = self.out_rect(p, ch["bbox"])
+                            boxes.append((r.x0, r.y0, r.x1, r.y1))
+                        else:
+                            boxes.append(tuple(ch["bbox"]))
                 if len(text) > n0:
                     text.append("\n")
                     boxes.append((0.0, 0.0, 0.0, 0.0))
@@ -608,14 +651,17 @@ class Engine:
     def search_page(self, p, needle, flags="", regex=None):
         """hits on one page: a list of rectangle lists (one rectangle a line
         of the hit), shown-page coordinates"""
-        text, boxes = self.chars(p)
-        flat = text.replace("\n", " ")
         if regex is None:
             pat = re.escape(needle)
             pat = re.sub(r"\\ ", r"\\s+", pat)
             if "w" in flags:
                 pat = r"(?<!\w)" + pat + r"(?!\w)"
             regex = re.compile(pat, 0 if "c" in flags else re.IGNORECASE)
+        # most pages of a long document have no hit: MuPDF's plain text says so quickly
+        if not regex.search(p.get_text("text", flags=TEXT_FLAGS).replace("\n", " ")):
+            return []
+        text, boxes = self.chars(p)
+        flat = text.replace("\n", " ")
         hits = []
         for m in regex.finditer(flat):
             rects, cur = [], None
@@ -1187,9 +1233,20 @@ class Engine:
             if not strokes:
                 raise Refusal("invalid", "no strokes")
             a = p.add_ink_annot(strokes)
+        elif kind == "stamp":
+            r = self.ui_rect(p, floats(o.get("rect", ""), 4))
+            names = ["Approved", "AsIs", "Confidential", "Departmental", "Experimental", "Expired", "Final",
+                     "ForComment", "ForPublicRelease", "NotApproved", "NotForPublicRelease", "Sold", "TopSecret",
+                     "Draft"]
+            name = o.get("stamp") or "Approved"
+            if name not in names:
+                raise Refusal("invalid", "unknown stamp")
+            a = p.add_stamp_annot(r, stamp=names.index(name))
+            if p.rotation:
+                a.set_rotation(p.rotation)
         else:
             raise Refusal("invalid", "unknown comment kind")
-        if kind not in ("freetext",):
+        if kind not in ("freetext", "stamp"):
             if kind in ("rect", "ellipse") and o.get("fill"):
                 a.set_colors(stroke=color, fill=rgb(o["fill"]))
             else:
@@ -1204,21 +1261,30 @@ class Engine:
         self.changed()
         return self.state("xref=%d" % xref)
 
-    def _annot_line(self, p, a):
+    def _annot_line(self, p, a, replies=0, status=""):
         t = a.type[1]
-        return "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s" % (
+        return "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s" % (
             p.number, a.xref, t, fmt_rect(self.out_rect(p, a.rect)), hexcolor((a.colors or {}).get("stroke")),
-            esc(a.info.get("title", "")), esc(a.info.get("content", "")), esc(a.info.get("modDate", "")))
+            esc(a.info.get("title", "")), esc(a.info.get("content", "")), esc(a.info.get("modDate", "")),
+            replies, status)
 
     def annots(self, n=None):
         self.need_doc()
         pages = [self.page(n)] if n not in (None, "", "all") else list(self.doc)
         out = []
         for p in pages:
+            replies, status = {}, {}
             for a in p.annots():
-                if a.type[0] in (fitz.PDF_ANNOT_POPUP, fitz.PDF_ANNOT_LINK, fitz.PDF_ANNOT_WIDGET):
+                if a.irt_xref:
+                    st = self.doc.xref_get_key(a.xref, "State")
+                    if st[0] == "string":
+                        status[a.irt_xref] = st[1]
+                    else:
+                        replies[a.irt_xref] = replies.get(a.irt_xref, 0) + 1
+            for a in p.annots():
+                if a.type[0] in (fitz.PDF_ANNOT_POPUP, fitz.PDF_ANNOT_LINK, fitz.PDF_ANNOT_WIDGET) or a.irt_xref:
                     continue
-                out.append(self._annot_line(p, a))
+                out.append(self._annot_line(p, a, replies.get(a.xref, 0), status.get(a.xref, "")))
         data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
         return "OK n=%d bytes=%d" % (len(out), len(data)), data
 
@@ -1334,10 +1400,12 @@ class Engine:
                     val = "\n".join(str(v) for v in val)
                 opts = w.choice_values or []
                 opts = [o if isinstance(o, str) else (o[1] if len(o) > 1 else o[0]) for o in opts]
-                out.append("%d\t%d\t%s\t%s\t%d\t%s\t%s\t%s\t%.2f" % (
+                fmt, calc = forms.field_specs(self.doc, w)
+                out.append("%d\t%d\t%s\t%s\t%d\t%s\t%s\t%s\t%.2f\t%s\t%s\t%s" % (
                     p.number, w.xref, t, fmt_rect(self.out_rect(p, w.rect)), w.field_flags or 0,
                     esc(w.field_name or ""), esc(str(val if val is not None else "")),
-                    esc("\n".join(opts)), w.text_fontsize or 0))
+                    esc("\n".join(opts)), w.text_fontsize or 0, esc(fmt), esc(calc),
+                    esc(forms.tooltip(self.doc, w))))
         data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
         return "OK n=%d bytes=%d" % (len(out), len(data)), data
 
@@ -1353,14 +1421,28 @@ class Engine:
             raise Refusal("range", "no such field")
         if (w.field_flags or 0) & fitz.PDF_FIELD_IS_READ_ONLY:
             raise Refusal("invalid", "the field is read-only")
+        fmt, _ = forms.field_specs(self.doc, w)
+        if w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+            try:
+                value = forms.keystroke(fmt, value)
+            except forms.FormError as e:
+                raise Refusal("invalid", str(e))
         self.begin(fitz.PDF_PERM_FORM)
         if w.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
             w.field_value = w.on_state() if value == "1" else "Off"
         elif w.field_type == fitz.PDF_WIDGET_TYPE_RADIOBUTTON:
             w.field_value = w.on_state() if value == "1" else "Off"
+        elif value == "" and w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+            forms.clear_value(self.doc, w)
         else:
             w.field_value = value
-        w.update()
+        if w.field_type == fitz.PDF_WIDGET_TYPE_TEXT and value != "":
+            forms.show_value(self.doc, w, fmt)
+        elif w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+            pass
+        else:
+            w.update()
+        forms.recalc(self.doc)
         self.changed()
         return self.state()
 
@@ -1371,6 +1453,192 @@ class Engine:
         self.doc.bake(annots=o.get("annots") == "1", widgets=o.get("forms", "1") == "1")
         for p in self.doc:
             self._restore_marks(p, marks.get(p.number, []))
+        self.changed()
+        return self.state()
+
+    # ---- Prepare Form: making and changing fields ---------------------------------------------------
+
+    def _widget(self, p, xref):
+        try:
+            x = int(xref)
+        except ValueError:
+            raise Refusal("invalid", "not a field")
+        w = next((w for w in p.widgets() if w.xref == x), None)
+        if w is None:
+            raise Refusal("range", "no such field")
+        return w
+
+    def addfield(self, n, kind, rect, *opts):
+        p = self.page(n)
+        o = kv(opts)
+        r = self.ui_rect(p, floats(rect, 4))
+        self.begin(fitz.PDF_PERM_FORM if self.allowed(fitz.PDF_PERM_FORM) and not self.allowed(fitz.PDF_PERM_MODIFY)
+                   else fitz.PDF_PERM_MODIFY)
+        try:
+            xref = forms.add_field(self.doc, p, kind, r, o)
+            forms.set_calc_order(self.doc)
+            forms.recalc(self.doc)
+        except forms.FormError as e:
+            self.reopen(self.undo.pop())
+            raise Refusal("invalid", str(e))
+        self.changed()
+        return self.state("xref=%d" % xref)
+
+    def fieldprops(self, n, xref):
+        p = self.page(n)
+        w = self._widget(p, xref)
+        props = forms.props_of(self.doc, p, w)
+        props["rect"] = fmt_rect(self.out_rect(p, w.rect))
+        data = ("".join("%s=%s\n" % (k, esc(v)) for k, v in props.items())).encode("utf-8")
+        return "OK n=%d bytes=%d" % (len(props), len(data)), data
+
+    def setfieldprops(self, n, xref, *opts):
+        p = self.page(n)
+        w = self._widget(p, xref)
+        o = kv(opts)
+        if "name" in o and o["name"].strip() != (w.field_name or "") and \
+                o["name"].strip() in {x.field_name for _, x in forms.all_widgets(self.doc)} and \
+                w.field_type != fitz.PDF_WIDGET_TYPE_RADIOBUTTON:
+            raise Refusal("invalid", "there is already a field called %s" % o["name"].strip())
+        self.begin(fitz.PDF_PERM_MODIFY)
+        try:
+            kind = forms.props_of(self.doc, p, w)["kind"]
+            forms.apply_props(self.doc, p, w, o, None)
+            fmt = forms.format_spec(w.script_format) if "format" in o else forms.field_specs(self.doc, w)[0]
+            if w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+                forms.show_value(self.doc, w, fmt)
+            else:
+                w.update()
+            forms._set_tooltip_align(self.doc, w.xref, o)
+            if kind == "radio" and o.get("export"):
+                forms._set_export(self.doc, w.xref, o["export"])
+            forms.set_calc_order(self.doc)
+            forms.recalc(self.doc)
+        except forms.FormError as e:
+            self.reopen(self.undo.pop())
+            raise Refusal("invalid", str(e))
+        self.changed()
+        return self.state()
+
+    def delfield(self, n, xref):
+        p = self.page(n)
+        self._widget(p, xref)
+        self.begin(fitz.PDF_PERM_MODIFY)
+        try:
+            forms.delete_field(self.doc, p, int(xref))
+            forms.recalc(self.doc)
+        except forms.FormError as e:
+            self.reopen(self.undo.pop())
+            raise Refusal("invalid", str(e))
+        self.changed()
+        return self.state()
+
+    def movefield(self, n, xref, rect):
+        p = self.page(n)
+        w = self._widget(p, xref)
+        r = self.ui_rect(p, floats(rect, 4))
+        if r.is_empty or r.width < 4 or r.height < 4:
+            raise Refusal("invalid", "the field is too small")
+        self.begin(fitz.PDF_PERM_MODIFY)
+        w.rect = r
+        fmt, _ = forms.field_specs(self.doc, w)
+        if w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+            forms.show_value(self.doc, w, fmt)
+        else:
+            w.update()
+        self.changed()
+        return self.state()
+
+    def formdetect(self, pages="", *opts):
+        """the fields the pages suggest; add=1 makes them"""
+        self.need_doc()
+        o = kv(opts)
+        sel = parse_pages(pages, self.doc.page_count) if pages else list(range(self.doc.page_count))
+        found = []
+        for i in sel:
+            p = self.doc[i]
+            for kind, r, name in forms.detect(p):
+                found.append((i, kind, r, name))
+        if o.get("add") == "1" and found:
+            self.begin(fitz.PDF_PERM_MODIFY)
+            for i, kind, r, name in found:
+                p = self.doc[i]
+                kind, _, dec = kind.partition(":")
+                nm = forms.unique_name(self.doc, name) if name else forms.auto_name(self.doc, kind)
+                try:
+                    forms.add_field(self.doc, p, kind, r, dict({"name": nm, "border": "0"}, **({"format": "number:" + dec} if dec else {})))
+                except forms.FormError:
+                    continue
+            self.changed()
+            head, data = self.state("found=%d" % len(found))
+            return head, data
+        out = ["%d\t%s\t%s\t%s" % (i, kind.split(":")[0], fmt_rect(self.out_rect(self.doc[i], r)), esc(name))
+               for i, kind, r, name in found]
+        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data)), data
+
+    def resetform(self):
+        self.need_doc()
+        self.begin(fitz.PDF_PERM_FORM)
+        for p, w in list(forms.all_widgets(self.doc)):
+            if w.field_type in (fitz.PDF_WIDGET_TYPE_CHECKBOX, fitz.PDF_WIDGET_TYPE_RADIOBUTTON):
+                w.field_value = "Off"
+            elif w.field_type in (fitz.PDF_WIDGET_TYPE_TEXT, fitz.PDF_WIDGET_TYPE_COMBOBOX,
+                                  fitz.PDF_WIDGET_TYPE_LISTBOX):
+                t, dv = self.doc.xref_get_key(w.xref, "DV")
+                if t == "string" and dv:
+                    w.field_value = dv
+                elif w.field_type == fitz.PDF_WIDGET_TYPE_TEXT:
+                    forms.clear_value(self.doc, w)
+                    continue
+                else:
+                    w.field_value = ""
+            else:
+                continue
+            w.update()
+        forms.recalc(self.doc)
+        self.changed()
+        return self.state()
+
+    # ---- Fill & Sign: marks anywhere ---------------------------------------------------------------
+
+    def fillmark(self, n, kind, rect, *opts):
+        """a check mark, cross, dot, line or box drawn on the page, as the familiar Fill & Sign does
+        on a form that has no fields"""
+        p = self.page(n)
+        o = kv(opts)
+        r = fitz.Rect(floats(rect, 4))       # as shown; each point is turned onto the page
+        if r.is_empty:
+            raise Refusal("invalid", "empty rectangle")
+        color = rgb(o.get("color"), (0, 0, 0))
+        self.begin()
+        sh = p.new_shape()
+        w = max(0.8, min(r.width, r.height) / 9)
+
+        def pt(x, y):
+            return self.ui_point(p, (x, y))
+        if kind == "check":
+            sh.draw_polyline([pt(r.x0 + r.width * 0.12, r.y0 + r.height * 0.55),
+                              pt(r.x0 + r.width * 0.40, r.y0 + r.height * 0.85),
+                              pt(r.x0 + r.width * 0.90, r.y0 + r.height * 0.15)])
+            sh.finish(color=color, width=w * 1.3, closePath=False, lineCap=1, lineJoin=1)
+        elif kind == "cross":
+            sh.draw_line(pt(r.x0 + r.width * .15, r.y0 + r.height * .15), pt(r.x1 - r.width * .15, r.y1 - r.height * .15))
+            sh.draw_line(pt(r.x1 - r.width * .15, r.y0 + r.height * .15), pt(r.x0 + r.width * .15, r.y1 - r.height * .15))
+            sh.finish(color=color, width=w * 1.2, lineCap=1)
+        elif kind == "dot":
+            sh.draw_circle(pt(r.x0 + r.width / 2, r.y0 + r.height / 2), min(r.width, r.height) * 0.3)
+            sh.finish(color=color, fill=color)
+        elif kind == "line":
+            sh.draw_line(pt(r.x0, (r.y0 + r.y1) / 2), pt(r.x1, (r.y0 + r.y1) / 2))
+            sh.finish(color=color, width=max(0.8, w / 2))
+        elif kind == "box":
+            sh.draw_rect(self.ui_rect(p, r))
+            sh.finish(color=color, width=max(0.8, w / 2))
+        else:
+            self.undo.pop()
+            raise Refusal("invalid", "unknown mark")
+        sh.commit()
         self.changed()
         return self.state()
 
@@ -1425,6 +1693,151 @@ class Engine:
             raise Refusal("invalid", "unknown signature kind")
         self.changed()
         return self.state()
+
+    # ---- certificate signatures ------------------------------------------------------------------------
+
+    def _sign_mod(self):
+        try:
+            import sgpdf_sign
+        except ImportError as e:
+            raise Refusal("failed", "certificate signatures need python3-asn1crypto and python3-cryptography (%s)" % e)
+        return sgpdf_sign
+
+    def certsign(self, out, pfx, password, *opts):
+        """sign with a digital ID and save as OUT: field=XREF (an empty signature field) or
+        page=N rect=X1 Y1 X2 Y2 (a new one); reason= location= contact= picture=PNG name="""
+        self.need_doc()
+        S = self._sign_mod()
+        o = kv(opts)
+        out, pfx, password = unesc(out), unesc(pfx), unesc(password)
+        if self.encrypted or (self.security and self.security[0] != "none"):
+            raise Refusal("invalid", "an encrypted document cannot be signed here; remove its security first")
+        if not self.allowed(fitz.PDF_PERM_FORM) and not self.allowed(fitz.PDF_PERM_MODIFY):
+            raise Refusal("secured", "the document's security does not allow signing")
+        field = o.get("field")
+        kw = {}
+        if field:
+            p = self.page(o.get("page", "0"))
+            w = self._widget(p, field)
+            if w.field_type != fitz.PDF_WIDGET_TYPE_SIGNATURE:
+                raise Refusal("invalid", "that is not a signature field")
+        else:
+            p = self.page(o.get("page", ""))
+            r = self.ui_rect(p, floats(o.get("rect", ""), 4))
+            kw = dict(page_no=p.number, rect=r, field_name=o.get("name") or "Signature")
+        # the bytes signed: the file as saved when nothing changed since (earlier signatures stay
+        # valid); otherwise the document as it is now
+        if not self.dirty and self.path and os.path.isfile(self.path):
+            with open(self.path, "rb") as f:
+                base = f.read()
+        else:
+            base = self.doc.tobytes(garbage=3, deflate=True, use_objstms=1)
+        if field:
+            # the field's number in the bytes signed
+            d2 = fitz.open("pdf", base)
+            name = w.field_name
+            hit = [x for x in d2[p.number].widgets() if x.field_name == name and
+                   x.field_type == fitz.PDF_WIDGET_TYPE_SIGNATURE]
+            if not hit:
+                raise Refusal("failed", "the signature field was not found in the saved document")
+            kw = dict(field_xref=hit[0].xref)
+        picture = o.get("picture")
+        png = None
+        if picture:
+            try:
+                png = fitz.Pixmap(picture).tobytes("png")
+            except Exception:
+                raise Refusal("invalid", "that file is not a picture this program can read")
+        try:
+            signer = S.sign_file(base, out, fitz, pfx=pfx, password=password, reason=o.get("reason", ""),
+                                 location=o.get("location", ""), contact=o.get("contact", ""),
+                                 picture_png=png, **kw)
+        except S.SignError as e:
+            raise Refusal("invalid", str(e))
+        except OSError as e:
+            raise Refusal("failed", "could not save: " + one_line(e.strerror or str(e)))
+        with open(out, "rb") as f:
+            self.reopen(f.read())
+        self.path = out
+        self.dirty = False
+        self.undo, self.redo = [], []
+        return self.state("signer=" + esc(signer).replace(" ", "\\s"))
+
+    def signatures(self):
+        """every signature field: PAGE XREF NAME STATUS COVERS RECT SIGNER TIME REASON DETAIL
+        (STATUS: unsigned, valid, unknown, invalid; checked on the file as saved)"""
+        self.need_doc()
+        S = self._sign_mod()
+        data = b""
+        if self.path and os.path.isfile(self.path):
+            with open(self.path, "rb") as f:
+                data = f.read()
+        out = []
+        for p in self.doc:
+            for w in p.widgets(types=[fitz.PDF_WIDGET_TYPE_SIGNATURE]):
+                t, v = self.doc.xref_get_key(w.xref, "V")
+                res = {"status": "unsigned", "signer": "", "time": "", "covers": "0", "detail": ""}
+                reason = ""
+                if t == "xref" and data:
+                    sx = int(v.split()[0])
+                    br = [int(x) for x in re.findall(r"-?\d+", self.doc.xref_get_key(sx, "ByteRange")[1])]
+                    reason = self.doc.xref_get_key(sx, "Reason")[1] if self.doc.xref_get_key(sx, "Reason")[0] == "string" else ""
+                    if len(br) == 4:
+                        res = S.check_signature(data, br)
+                    else:
+                        res["status"] = "invalid"
+                        res["detail"] = "the signature has no byte range"
+                    if self.dirty and res["status"] != "invalid":
+                        res["detail"] += "; the document has unsaved changes"
+                out.append("\t".join([str(p.number), str(w.xref), esc(w.field_name or ""), res["status"], res["covers"],
+                                      fmt_rect(self.out_rect(p, w.rect)), esc(res["signer"]), esc(res["time"]),
+                                      esc(reason), esc(res["detail"])]))
+        data_out = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data_out)), data_out
+
+    def makeid(self, path, password, *opts):
+        S = self._sign_mod()
+        o = kv(opts)
+        try:
+            cert = S.make_id(unesc(path), unesc(password), o.get("name", ""), o.get("email", ""), o.get("org", ""))
+        except S.SignError as e:
+            raise Refusal("invalid", str(e))
+        except OSError as e:
+            raise Refusal("failed", "could not save the digital ID: " + one_line(e.strerror or str(e)))
+        return "OK name=%s" % esc(S.id_name(cert)).replace(" ", "\\s"), b""
+
+    def idinfo(self, path, password):
+        """a digital ID's owner, issuer and validity -- the password checked"""
+        S = self._sign_mod()
+        try:
+            key, cert, chain = S.load_id(unesc(path), unesc(password))
+        except S.SignError as e:
+            raise Refusal("password" if "password" in str(e) else "invalid", str(e))
+        try:
+            na = cert.not_valid_after_utc
+        except AttributeError:
+            na = cert.not_valid_after
+        lines = ["name " + one_line(S.id_name(cert)), "issuer " + one_line(cert.issuer.rfc4514_string()),
+                 "expires " + na.strftime("%Y-%m-%d"), "selfsigned %d" % (cert.issuer == cert.subject)]
+        data = ("\n".join(lines) + "\n").encode("utf-8")
+        return "OK bytes=%d" % len(data), data
+
+    def trustsigner(self, n, xref):
+        S = self._sign_mod()
+        p = self.page(n)
+        w = self._widget(p, xref)
+        t, v = self.doc.xref_get_key(w.xref, "V")
+        if t != "xref" or not self.path:
+            raise Refusal("invalid", "the field is not signed")
+        sx = int(v.split()[0])
+        br = [int(x) for x in re.findall(r"-?\d+", self.doc.xref_get_key(sx, "ByteRange")[1])]
+        with open(self.path, "rb") as f:
+            data = f.read()
+        try:
+            S.trust_cert_of(data, br, w.field_name)
+        except (S.SignError, ValueError, OSError) as e:
+            raise Refusal("failed", str(e))
+        return "OK", b""
 
     # ---- Redact -------------------------------------------------------------------------------
 
@@ -1799,6 +2212,376 @@ class Engine:
         self._write_new(new, unesc(out))
         return "OK pages=%d" % new.page_count, b""
 
+    # ---- Create PDF ------------------------------------------------------------------------------------
+
+    def _adopt(self, doc):
+        """a new document made here becomes the open one: untitled until saved"""
+        self.doc = fitz.open("pdf", doc.tobytes(garbage=3, deflate=True))
+        self.path = None
+        self.password = None
+        self.perms = PERM_ALL
+        self.encrypted = False
+        self.security = None
+        self.undo, self.redo = [], []
+        self.dirty = True
+        self.objcache = {}
+        return self.state("untitled=1")
+
+    def new(self, w="612", h="792", n="1"):
+        try:
+            w, h, n = float(w), float(h), int(n)
+        except ValueError:
+            raise Refusal("invalid", "not a number")
+        if not (36 <= w <= 14400 and 36 <= h <= 14400 and 1 <= n <= 1000):
+            raise Refusal("invalid", "page size out of range")
+        doc = fitz.open()
+        for _ in range(n):
+            doc.new_page(width=w, height=h)
+        return self._adopt(doc)
+
+    def create(self, *paths):
+        work = tempfile.mkdtemp(prefix="sg-pdf-create-", dir=_workdir())
+        try:
+            doc = create_mod.document_from([unesc(p) for p in paths], work)
+        except create_mod.CreateError as e:
+            raise Refusal("open", str(e))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        return self._adopt(doc)
+
+    def scanners(self):
+        found = create_mod.scanners()
+        data = ("".join("%s\t%s\n" % (esc(d), esc(lb)) for d, lb in found)).encode("utf-8")
+        return "OK n=%d bytes=%d" % (len(found), len(data)), data
+
+    def scan(self, *opts):
+        """scan into a new document, or (at=N) into the open one at N"""
+        o = kv(opts)
+        work = tempfile.mkdtemp(prefix="sg-pdf-scan-", dir=_workdir())
+        try:
+            doc = create_mod.scan(o.get("device", ""), work, dpi=int(o.get("dpi") or 300), mode=o.get("mode") or "Color",
+                                  source=o.get("source", ""), pages=int(o.get("pages") or 1))
+        except create_mod.CreateError as e:
+            raise Refusal("failed", str(e))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        if o.get("ocr"):
+            work = tempfile.mkdtemp(prefix="sg-pdf-ocr-", dir=_workdir())
+            try:
+                doc = fitz.open("pdf", create_mod.ocr(doc.tobytes(), work, lang=o["ocr"]))
+            except create_mod.CreateError as e:
+                raise Refusal("failed", str(e))
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+        if o.get("at") not in (None, "") and self.doc:
+            at = int(o["at"])
+            self.begin(fitz.PDF_PERM_ASSEMBLE)
+            self.doc.insert_pdf(doc, start_at=at if at < self.doc.page_count else -1)
+            self.changed()
+            return self.state("inserted=%d" % doc.page_count)
+        return self._adopt(doc)
+
+    # ---- Recognize text ------------------------------------------------------------------------------
+
+    def ocrlangs(self):
+        langs = create_mod.ocr_languages()
+        data = ("\n".join(langs) + "\n").encode("utf-8") if langs else b""
+        return "OK n=%d bytes=%d" % (len(langs), len(data)), data
+
+    def ocr(self, *opts):
+        self.need_doc()
+        o = kv(opts)
+        if self.encrypted:
+            raise Refusal("invalid", "an encrypted document's text cannot be recognized; remove its security first")
+        pages = None
+        if o.get("pages"):
+            pages = ",".join(str(i + 1) for i in parse_pages(o["pages"], self.doc.page_count))
+        self.begin()
+        work = tempfile.mkdtemp(prefix="sg-pdf-ocr-", dir=_workdir())
+        try:
+            data = create_mod.ocr(self.doc.tobytes(garbage=1), work, lang=o.get("lang") or "eng", pages=pages,
+                                  deskew=o.get("deskew") == "1")
+        except create_mod.CreateError as e:
+            self.undo.pop()
+            raise Refusal("failed", str(e))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        self.reopen(data)
+        self.changed()
+        return self.state()
+
+    # ---- headers and footers, watermarks, Bates numbers, page numbers -----------------------------
+
+    def decorate(self, kind, *opts):
+        self.need_doc()
+        o = kv(opts)
+        pages = parse_pages(o["pages"], self.doc.page_count) if o.get("pages") else list(range(self.doc.page_count))
+        self.begin()
+        try:
+            create_mod.decorate(self.doc, pages, kind, o, rgb)
+        except create_mod.CreateError as e:
+            self.reopen(self.undo.pop())
+            raise Refusal("invalid", str(e))
+        except ValueError as e:
+            self.reopen(self.undo.pop())
+            raise Refusal("invalid", one_line(str(e)))
+        self.changed()
+        return self.state()
+
+    # ---- Optimize ------------------------------------------------------------------------------------
+
+    def optimize(self, *opts):
+        self.need_doc()
+        o = kv(opts)
+        before = create_mod.pdf_size(self.doc)
+        self.begin()
+        n = create_mod.optimize(self.doc, dpi=int(o.get("dpi") or 150), quality=int(o.get("quality") or 75))
+        if o.get("metadata") == "1":
+            self.doc.set_metadata({})
+            self.doc.del_xml_metadata()
+        after = create_mod.pdf_size(self.doc)
+        self.changed()
+        return self.state("images=%d before=%d after=%d" % (n, before, after))
+
+    # ---- attachments ---------------------------------------------------------------------------------
+
+    def attachments(self):
+        self.need_doc()
+        out = []
+        for name in self.doc.embfile_names():
+            info = self.doc.embfile_info(name)
+            out.append("%s\t%s\t%d\t%s" % (esc(name), esc(info.get("filename") or name), info.get("size") or 0,
+                                           esc(info.get("description") or "")))
+        # files attached as comments (FileAttachment annotations)
+        for p in self.doc:
+            for a in p.annots(types=[fitz.PDF_ANNOT_FILE_ATTACHMENT]):
+                fi = a.file_info
+                out.append("@%d.%d\t%s\t%d\t%s" % (p.number, a.xref, esc(fi.get("filename", "")), fi.get("size") or 0,
+                                                   esc(fi.get("description") or "")))
+        data = ("\n".join(out) + "\n").encode("utf-8") if out else b""
+        return "OK n=%d bytes=%d" % (len(out), len(data)), data
+
+    def getattachment(self, name, path):
+        self.need_doc()
+        name, path = unesc(name), unesc(path)
+        if not self.allowed(fitz.PDF_PERM_COPY):
+            raise Refusal("secured", "the document's security does not allow copying its content")
+        if name.startswith("@"):
+            pno, xref = name[1:].split(".")
+            a = self._load_annot(self.page(pno), xref)
+            data = a.get_file()
+        else:
+            if name not in self.doc.embfile_names():
+                raise Refusal("range", "no such attachment")
+            data = self.doc.embfile_get(name)
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            raise Refusal("failed", "could not save: " + one_line(e.strerror or str(e)))
+        return "OK size=%d" % len(data), b""
+
+    def addattachment(self, path, *opts):
+        self.need_doc()
+        o = kv(opts)
+        path = unesc(path)
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            raise Refusal("open", one_line(e.strerror or str(e)))
+        base = os.path.basename(path)
+        name, k = base, 2
+        while name in self.doc.embfile_names():
+            name = "%s (%d)" % (base, k)
+            k += 1
+        self.begin(fitz.PDF_PERM_MODIFY)
+        self.doc.embfile_add(name, data, filename=base, desc=o.get("description", ""))
+        self.changed()
+        return self.state()
+
+    def delattachment(self, name):
+        self.need_doc()
+        name = unesc(name)
+        self.begin(fitz.PDF_PERM_MODIFY)
+        if name.startswith("@"):
+            pno, xref = name[1:].split(".")
+            p = self.page(pno)
+            p.delete_annot(self._load_annot(p, xref))
+        else:
+            if name not in self.doc.embfile_names():
+                self.undo.pop()
+                raise Refusal("range", "no such attachment")
+            self.doc.embfile_del(name)
+        self.changed()
+        return self.state()
+
+    # ---- pages: replace -----------------------------------------------------------------------------
+
+    def replacepages(self, pages, path, start="1", pw=""):
+        """the pages PAGES replaced by as many pages of another document from its page START (1-based)"""
+        self.need_doc()
+        sel = parse_pages(pages, self.doc.page_count)
+        src = self._open_other(unesc(path), unesc(pw))
+        first = int(start or 1) - 1
+        if first < 0 or first + len(sel) > src.page_count:
+            raise Refusal("range", "the other document has not that many pages")
+        self.begin(fitz.PDF_PERM_ASSEMBLE)
+        for k, i in enumerate(sorted(sel)):
+            self.doc.insert_pdf(src, from_page=first + k, to_page=first + k, start_at=i)
+            self.doc.delete_page(i + 1)
+        self.changed()
+        return self.state("replaced=%d" % len(sel))
+
+    # ---- links and bookmarks ---------------------------------------------------------------------------
+
+    def addlink(self, n, rect, *opts):
+        p = self.page(n)
+        o = kv(opts)
+        r = self.ui_rect(p, floats(rect, 4))
+        if r.is_empty:
+            raise Refusal("invalid", "empty rectangle")
+        if o.get("uri"):
+            link = {"kind": fitz.LINK_URI, "from": r, "uri": o["uri"]}
+        elif o.get("page"):
+            tgt = int(o["page"])
+            if not 0 <= tgt < self.doc.page_count:
+                raise Refusal("range", "no such page")
+            link = {"kind": fitz.LINK_GOTO, "from": r, "page": tgt, "to": fitz.Point(0, float(o.get("top") or 0))}
+        else:
+            raise Refusal("invalid", "a link goes to a web address or a page")
+        self.begin()
+        p.insert_link(link)
+        self.changed()
+        return self.state()
+
+    def dellink(self, n, rect):
+        """the link whose box is nearest RECT"""
+        p = self.page(n)
+        want = self.ui_rect(p, floats(rect, 4))
+        best, bd = None, 1e9
+        for ln in p.get_links():
+            d = abs(ln["from"].x0 - want.x0) + abs(ln["from"].y0 - want.y0)
+            if d < bd:
+                best, bd = ln, d
+        if best is None or bd > 6:
+            raise Refusal("range", "no link there")
+        self.begin()
+        p.delete_link(best)
+        self.changed()
+        return self.state()
+
+    def setoutline(self, *opts):
+        """the bookmarks replaced: toc=LEVEL<TAB>TITLE<TAB>PAGE lines (escaped as one field)"""
+        self.need_doc()
+        o = kv(opts)
+        toc = []
+        for ln in (o.get("toc") or "").split("\n"):
+            if not ln.strip():
+                continue
+            f = ln.split("\t")
+            if len(f) < 3:
+                raise Refusal("invalid", "a bookmark needs a level, a title and a page")
+            lvl, title, pg = int(f[0]), f[1], int(f[2])
+            if not 0 <= pg < self.doc.page_count:
+                raise Refusal("range", "no such page")
+            toc.append([max(1, lvl + 1), title, pg + 1, float(f[3]) if len(f) > 3 and f[3] else 0.0])
+        # levels may only grow one at a time
+        prev = 0
+        for t in toc:
+            t[0] = min(t[0], prev + 1)
+            prev = t[0]
+        self.begin()
+        self.doc.set_toc([[t[0], t[1], t[2], {"kind": fitz.LINK_GOTO, "page": t[2] - 1,
+                                               "to": fitz.Point(0, t[3]), "zoom": 0}] for t in toc])
+        self.changed()
+        return self.state()
+
+    # ---- comments: replies, review status, stamps -------------------------------------------------
+
+    def reply(self, n, xref, text, *opts):
+        p = self.page(n)
+        a = self._load_annot(p, xref)
+        o = kv(opts)
+        self.begin(fitz.PDF_PERM_ANNOTATE)
+        r = a.rect
+        note = p.add_text_annot(fitz.Point(r.x1, r.y0), unesc(text), icon="Comment")
+        note.set_info(title=o.get("author") or self.author, content=unesc(text), modDate=fitz.get_pdf_now())
+        note.set_flags(fitz.PDF_ANNOT_IS_HIDDEN | fitz.PDF_ANNOT_IS_NO_VIEW)
+        note.update()
+        note.set_irt_xref(a.xref)
+        self.changed()
+        return self.state("xref=%d" % note.xref)
+
+    def setstatus(self, n, xref, state, *opts):
+        """review status (Accepted, Rejected, Cancelled, Completed, None) as the standard reply
+        carrying /State and /StateModel"""
+        p = self.page(n)
+        a = self._load_annot(p, xref)
+        o = kv(opts)
+        if state not in ("Accepted", "Rejected", "Cancelled", "Completed", "None"):
+            raise Refusal("invalid", "unknown status")
+        self.begin(fitz.PDF_PERM_ANNOTATE)
+        who = o.get("author") or self.author
+        note = p.add_text_annot(fitz.Point(a.rect.x1, a.rect.y0), "%s set the status to %s" % (who, state),
+                                icon="Comment")
+        note.set_info(title=who, content="%s set the status to %s" % (who, state), modDate=fitz.get_pdf_now())
+        note.set_flags(fitz.PDF_ANNOT_IS_HIDDEN | fitz.PDF_ANNOT_IS_NO_VIEW)
+        note.update()
+        note.set_irt_xref(a.xref)
+        self.doc.xref_set_key(note.xref, "State", fitz.get_pdf_str(state))
+        self.doc.xref_set_key(note.xref, "StateModel", fitz.get_pdf_str("Review"))
+        self.changed()
+        return self.state("xref=%d" % note.xref)
+
+    def thread(self, n, xref):
+        """an annotation's replies and status, oldest first: AUTHOR DATE STATE TEXT lines"""
+        p = self.page(n)
+        a = self._load_annot(p, xref)
+        out = []
+        for b in p.annots():
+            if b.irt_xref == a.xref:
+                st = self.doc.xref_get_key(b.xref, "State")
+                out.append((b.info.get("modDate") or b.info.get("creationDate") or "",
+                            "%s\t%s\t%s\t%s" % (esc(b.info.get("title", "")), esc(b.info.get("modDate", "")),
+                                                st[1] if st[0] == "string" else "", esc(b.info.get("content", "")))))
+        out.sort(key=lambda x: x[0])
+        lines = [x[1] for x in out]
+        data = ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
+        return "OK n=%d bytes=%d" % (len(lines), len(data)), data
+
+    # ---- Read Out Loud ------------------------------------------------------------------------------
+
+    def speak(self, text="", *opts):
+        """read TEXT out loud (espeak-ng, else speech-dispatcher's spd-say); no text: stop"""
+        o = kv(opts)
+        old = getattr(self, "speaker", None)
+        if old and old.poll() is None:
+            old.terminate()
+            try:
+                old.wait(2)
+            except subprocess.TimeoutExpired:
+                old.kill()
+        self.speaker = None
+        text = unesc(text).strip()
+        if not text:
+            return "OK speaking=0", b""
+        rate = str(max(80, min(400, int(o.get("rate") or 170))))
+        if shutil.which("espeak-ng"):
+            cmd = ["espeak-ng", "-s", rate, "--stdin"]
+        elif shutil.which("spd-say"):
+            cmd = ["spd-say", "-w", "-e"]
+        else:
+            raise Refusal("failed", "reading out loud needs a speech program (package espeak-ng)")
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p.stdin.write(text[:400000].encode("utf-8"))
+            p.stdin.close()
+        except OSError as e:
+            raise Refusal("failed", "could not start the speech program: " + one_line(e.strerror or str(e)))
+        self.speaker = p
+        return "OK speaking=1", b""
+
     # ---- Protect --------------------------------------------------------------------------------
 
     def protect(self, *opts):
@@ -1896,6 +2679,14 @@ def _quads(a):
     return [v[i:i + 4] for i in range(0, len(v) - 3, 4)]
 
 
+def _workdir():
+    """big scratch files go to /var/tmp (/tmp is a small tmpfs)"""
+    for d in (os.environ.get("SG_PDF_TMP"), "/var/tmp", tempfile.gettempdir()):
+        if d and os.path.isdir(d) and os.access(d, os.W_OK):
+            return d
+    return tempfile.gettempdir()
+
+
 def _umask():
     m = os.umask(0)
     os.umask(m)
@@ -1908,7 +2699,7 @@ def _html(s):
 
 # the protocol: request -> (method, least, most fields)
 COMMANDS = {
-    "open": ("open", 1, 2), "render": ("render", 3, 3), "text": ("text", 1, 1), "find": ("find", 1, 2),
+    "open": ("open", 1, 2), "render": ("render", 3, 7), "text": ("text", 1, 1), "find": ("find", 1, 2),
     "links": ("links", 1, 1), "outline": ("outline", 0, 0),
     "state": ("state", 0, 0), "save": ("save", 1, 9), "undo": ("undo_", 0, 0), "redo": ("redo_", 0, 0),
     "properties": ("properties", 0, 9),
@@ -1919,6 +2710,11 @@ COMMANDS = {
     "moveannot": ("moveannot", 3, 3), "setannot": ("setannot", 2, 8),
     "fields": ("fields", 0, 0), "setfield": ("setfield", 3, 3), "flatten": ("flatten", 0, 4),
     "signature": ("signature", 4, 4),
+    "addfield": ("addfield", 3, 24), "fieldprops": ("fieldprops", 2, 2), "setfieldprops": ("setfieldprops", 2, 24),
+    "delfield": ("delfield", 2, 2), "movefield": ("movefield", 3, 3), "formdetect": ("formdetect", 0, 3),
+    "resetform": ("resetform", 0, 0), "fillmark": ("fillmark", 3, 5),
+    "certsign": ("certsign", 3, 12), "signatures": ("signatures", 0, 0), "makeid": ("makeid", 2, 6),
+    "idinfo": ("idinfo", 2, 2), "trustsigner": ("trustsigner", 2, 2),
     "redactmark": ("redactmark", 1, 4), "redactfind": ("redactfind", 1, 3), "redactapply": ("redactapply", 0, 4),
     "sanitize": ("sanitize", 0, 16),
     "rotate": ("rotate", 2, 2), "delete": ("delete", 1, 1), "move": ("move", 2, 2),
@@ -1926,6 +2722,13 @@ COMMANDS = {
     "split": ("split", 3, 3), "combine": ("combine", 2, 200),
     "protect": ("protect", 1, 6), "unlock": ("unlock", 1, 1),
     "export": ("export", 2, 6),
+    "new": ("new", 0, 3), "create": ("create", 1, 200), "scanners": ("scanners", 0, 0), "scan": ("scan", 0, 8),
+    "ocrlangs": ("ocrlangs", 0, 0), "ocr": ("ocr", 0, 4), "decorate": ("decorate", 1, 20),
+    "optimize": ("optimize", 0, 4), "attachments": ("attachments", 0, 0),
+    "getattachment": ("getattachment", 2, 2), "addattachment": ("addattachment", 1, 2),
+    "delattachment": ("delattachment", 1, 1), "replacepages": ("replacepages", 2, 4),
+    "addlink": ("addlink", 3, 5), "dellink": ("dellink", 2, 2), "setoutline": ("setoutline", 1, 1),
+    "speak": ("speak", 0, 2), "reply": ("reply", 3, 4), "setstatus": ("setstatus", 3, 4), "thread": ("thread", 2, 2),
 }
 
 
