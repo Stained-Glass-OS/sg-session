@@ -1,3 +1,11 @@
+sg-session (0.1.0-147) unstable; urgency=medium
+
+  * debian/changelog: a stanza body left after 0.1.0-137's sign-off by a
+    rebase (the gates' own runtime directory, described under 0.1.0-140)
+    removed; dpkg-parsechangelog warned on it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 14:00:30 -0700
+
 sg-session (0.1.0-146) unstable; urgency=medium
 
   * debian/changelog repaired: 0.1.0-145's entry was committed with merge
@@ -155,14 +163,6 @@ sg-session (0.1.0-137) unstable; urgency=medium
     Test: test/windows-protected-test.sh (mutant SG_MUTANT_WINDOWS_WRITABLE).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:00:00 -0700
-  * Tests: scratch-home.sh gives every gate a runtime directory of its own
-    and unsets WAYLAND_DISPLAY and DISPLAY: Wine's Wayland driver connects
-    to $XDG_RUNTIME_DIR/wayland-0 even with WAYLAND_DISPLAY unset, and a
-    printing run reached the person's own desktop that way (2026-10-06).
-    SG_REAL_XDG_RUNTIME_DIR keeps theirs for a gate that must reach their
-    user services.
-
- -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 09:53:52 -0700
 
 sg-session (0.1.0-136) unstable; urgency=medium
 
