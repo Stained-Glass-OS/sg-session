@@ -56,9 +56,13 @@ esac
 exit 0
 EOS
 # a stand-in XSETTINGS manager: says when it starts and when it is told --
-# ready for SIGHUP before it says it started (a HUP before the trap ended it)
+# ready for SIGHUP before it says it started (a HUP before the trap ended it).
+# A shell cannot trap a signal ignored when it started, and a release runs
+# under nohup (HUP ignored: the check failed only there): it starts again
+# with HUP's default first, as the real xsettingsd sets its own handler.
 cat > "$T/bin/xsettingsd" <<'EOS'
 #!/bin/sh
+[ -n "${SG_XSD_HUP:-}" ] || SG_XSD_HUP=1 exec env --default-signal=HUP "$0" "$@"
 trap 'echo hup >> "$SG_T/xsd"' HUP
 echo "start $2" >> "$SG_T/xsd"
 i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done

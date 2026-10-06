@@ -1,3 +1,13 @@
+sg-session (0.1.0-128) unstable; urgency=medium
+
+  * Tests: display-scale-test's stand-in XSETTINGS manager starts with
+    SIGHUP's default action. A release runs under nohup, a shell cannot trap
+    a signal ignored when it started, so the live-scale check failed only in
+    the release's package build (s11, s12); the real xsettingsd sets its own
+    handler. Checked under nohup and without.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 23:40:20 -0700
+
 sg-session (0.1.0-127) unstable; urgency=medium
 
   * test/display-scale-test.sh: the check of a new scale while the session
