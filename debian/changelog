@@ -1,3 +1,19 @@
+sg-session (0.1.0-133) unstable; urgency=medium
+
+  * Print to PDF saves its PDF with AppArmor enforcing: Debian's profile for
+    cups-pdf lets it write only under home directories and its spool, and
+    sg-print-setup sends the PDF to the Windows profile's Documents -- the
+    job "finished" and no PDF appeared. AppArmor comes with a kernel update
+    (Debian's kernels recommend apparmor; the regression walk 2026-10-06
+    installed a newer kernel and Notepad's prints vanished). The local
+    include /etc/apparmor.d/local/usr.lib.cups.backend.cups-pdf lets the
+    owner write in C:\users\NAME\Documents (and read /etc/paperspecs);
+    the postinst reloads cupsd's profile where AppArmor already enforces
+    it. Gate: test/print-apparmor-test.sh (in make lint; --mutant without
+    the Documents rule fails). VM-verified on an upgraded machine.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 08:37:31 -0700
+
 sg-session (0.1.0-132) unstable; urgency=medium
 
   * Build-Depends: zstd. test/prefix-repair-test.sh (lint, so the package

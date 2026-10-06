@@ -153,6 +153,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-audit $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# The Print to PDF printer (sg-print-setup.service).
 	install -m 0755 bin/sg-print-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# ...whose PDFs (in the Windows profiles' Documents) AppArmor lets cups-pdf write.
+	install -D -m 0644 config/apparmor/usr.lib.cups.backend.cups-pdf $(DESTDIR)/etc/apparmor.d/local/usr.lib.cups.backend.cups-pdf
 	@# A DYMO LabelWriter 5xx's queue when it is plugged in (sg-dymo-queue.service, udev).
 	install -m 0755 bin/sg-dymo-queue $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# Windows' printers follow CUPS's (sg-printers-refresh.path).
@@ -282,6 +284,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh
+	@sh test/print-apparmor-test.sh || [ $$? -eq 77 ]
+	@! sh test/print-apparmor-test.sh --mutant >/dev/null
 	@sh test/dymo-queue-test.sh
 	@! sh test/dymo-queue-test.sh --mutant >/dev/null
 	@sh test/printers-refresh-test.sh

@@ -1,0 +1,10 @@
+# Stained Glass OS: the "Print to PDF" printer (sg-print-setup) saves each
+# PDF in the printing user's Windows Documents (cups-pdf.conf Out). Debian's
+# AppArmor profile for cups-pdf lets it write only under home directories
+# and its spool: with AppArmor enforcing -- installed with a kernel update,
+# which recommends it -- every job "finished" and no PDF appeared. Included
+# by /etc/apparmor.d/usr.sbin.cupsd's cups-pdf profile.
+/var/lib/stained-glass/prefix/drive_c/users/*/Documents/ r,
+owner /var/lib/stained-glass/prefix/drive_c/users/*/Documents/** rwk,
+# ghostscript reads the default paper size
+/etc/paperspecs r,
