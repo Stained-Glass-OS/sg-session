@@ -1,0 +1,9 @@
+[Unit]
+Description=Stained Glass: Windows printers made again from CUPS's
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+After=sg-wineserver.service cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/stained-glass/sg-printers-refresh
+TimeoutStartSec=150

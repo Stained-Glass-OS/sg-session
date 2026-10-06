@@ -155,6 +155,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-print-setup $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# A DYMO LabelWriter 5xx's queue when it is plugged in (sg-dymo-queue.service, udev).
 	install -m 0755 bin/sg-dymo-queue $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	@# Windows' printers follow CUPS's (sg-printers-refresh.path).
+	install -m 0755 bin/sg-printers-refresh $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-audit $(DESTDIR)$(PREFIX)/share/pam-configs/
 	@# Off until sg-domain-join turns it on: a domain user's local groups.
 	install -m 0644 config/pam-configs/stained-glass-domain-groups $(DESTDIR)$(PREFIX)/share/pam-configs/
@@ -206,7 +208,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service systemd/sg-hwsupport.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
-	    systemd/sg-print-setup.service systemd/sg-dymo-queue.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
+	    systemd/sg-print-setup.service systemd/sg-dymo-queue.service systemd/sg-printers-refresh.path systemd/sg-printers-refresh.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
 	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
@@ -271,6 +273,8 @@ lint:
 	@sh test/print-setup-test.sh
 	@sh test/dymo-queue-test.sh
 	@! sh test/dymo-queue-test.sh --mutant >/dev/null
+	@sh test/printers-refresh-test.sh
+	@! sh test/printers-refresh-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd

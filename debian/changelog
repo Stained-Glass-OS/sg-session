@@ -1,3 +1,17 @@
+sg-session (0.1.0-118) unstable; urgency=medium
+
+  * Windows' printers follow CUPS's during a session: a printer added
+    (David's LabelWriter 550, plugged in after sign-in: its queue made by
+    sg-dymo-queue) became a Windows printer for no one -- the user's
+    programs may not write HKLM (wine-sg 0873's reload there: "can't create
+    driver: 5"). sg-printers-refresh.path watches /etc/cups/ppd and
+    printers.conf; sg-printers-refresh has SYSTEM load winspool, which
+    makes them again for every user (a removed queue goes too). Tested on
+    the real 550 in a VM; test/printers-refresh-test.sh in make lint (and
+    its --mutant: not as SYSTEM, fails).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 17:37:00 -0700
+
 sg-session (0.1.0-117) unstable; urgency=medium
 
   * Surface touch screen and pen (David 2026-10-05, a Surface Pro 7): on a

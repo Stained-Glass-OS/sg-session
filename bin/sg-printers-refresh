@@ -1,0 +1,24 @@
+#!/bin/sh
+# Windows' printers made again from CUPS's, by the Windows system (SYSTEM),
+# when CUPS's printers change (sg-printers-refresh.path).
+#
+# The machine's printers are in HKLM, which a standard user may not write:
+# a printer added to CUPS during a session -- a DYMO LabelWriter plugged in,
+# its queue made by sg-dymo-queue -- became a Windows printer for no one
+# (wine-sg 0873 reloads them in the user's next program, and AddPrinter is
+# refused there: "can't create driver ...: 5"). Here SYSTEM loads winspool
+# (wmic over Win32_Printer); wine-sg sees that CUPS's printers changed since
+# SYSTEM last made them and makes them again, for every user. Nothing to do
+# while the machine's wineserver is not running: it loads them when it starts.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+sg_machine_wineserver_up || { echo "sg-printers-refresh: the machine wineserver is not running"; exit 0; }
+out=$(timeout 120 runuser -u "$SG_SYSTEM_USER" -- sh -c \
+    '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; unset DISPLAY WAYLAND_DISPLAY
+     WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d;explorer.exe=d" wine wmic path Win32_Printer get Name' 2>/dev/null | tr -d '\r')
+echo "sg-printers-refresh: printers now: $(printf '%s\n' "$out" | sed '1d; s/[[:space:]]*$//; /^$/d' | paste -sd, -)"
+exit 0

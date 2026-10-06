@@ -56,3 +56,5 @@ override_dh_installsystemd:
 	dh_installsystemd --no-start sg-firmware-retry.service
 	# The early drivers' firmware for the next boot: enabled, runs at boot.
 	dh_installsystemd --no-start sg-firmware-initrd.service
+	# Windows' printers follow CUPS's: the path unit enabled and started.
+	dh_installsystemd sg-printers-refresh.path

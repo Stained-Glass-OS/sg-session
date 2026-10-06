@@ -1,0 +1,13 @@
+[Unit]
+Description=Stained Glass: Windows printers follow CUPS's printers
+Documentation=https://github.com/Stained-Glass-OS/stained-glass
+# A queue added, changed or removed (lpadmin writes its PPD at once and
+# printers.conf soon after) makes SYSTEM bring Windows' printers up to date.
+
+[Path]
+PathChanged=/etc/cups/ppd
+PathChanged=/etc/cups/printers.conf
+Unit=sg-printers-refresh.service
+
+[Install]
+WantedBy=multi-user.target
