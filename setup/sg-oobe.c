@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../greeter/sg-smooth.h"
+#include "../greeter/sg-ease.h"
 
 enum page { P_REGION, P_KBD, P_KBD2, P_KBD2_PICK, P_NETWORK, P_ACCOUNT, P_PRIVACY, P_BROWSER, P_APPLY, P_DONE, P_FAILED };
 static const char *const page_names[] = { "region", "keyboard", "second-keyboard", "second-keyboard-pick", "network",
@@ -47,6 +48,7 @@ static const char *const page_names[] = { "region", "keyboard", "second-keyboard
 #define ID_PASS2     407
 #define ID_KEY       408
 #define ID_TOGGLE    410    /* 410..413 */
+#define ID_EASE      420
 
 #define WM_BRIDGE_LINE (WM_APP + 1)
 #define WM_BRIDGE_EOF  (WM_APP + 2)
@@ -1096,6 +1098,11 @@ static void draw_item( const DRAWITEMSTRUCT *d )
     char text[128];
 
     if (d->CtlType == ODT_LISTBOX) { draw_list_item( d ); return; }
+    if (d->CtlID == ID_EASE)
+    {
+        sg_ease_draw( d, COL_CARD, COL_LIST, COL_TEXT );
+        return;
+    }
     GetWindowTextA( d->hwndItem, text, sizeof(text) );
     SetBkMode( dc, TRANSPARENT );
     if (d->CtlID >= ID_TOGGLE && d->CtlID < ID_TOGGLE + 4)
@@ -1183,6 +1190,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         switch (LOWORD(wp))
         {
         case ID_PRIMARY: go_next(); break;
+        case ID_EASE: sg_ease_menu( hwnd, (HWND)lp ); break;
         case ID_SECONDARY: go_skip(); break;
         case ID_BACK: go_back(); break;
         case ID_LIST:
@@ -1324,6 +1332,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     g_secondary = child( "BUTTON", "Skip", style | BS_OWNERDRAW, 0, g_body.right - 272, g_body.bottom - 44, 128, 40, ID_SECONDARY );
     g_primary = child( "BUTTON", "Yes", style | BS_OWNERDRAW, 0, g_body.right - 128, g_body.bottom - 44, 128, 40, ID_PRIMARY );
     SendMessageA( g_list, WM_SETFONT, (WPARAM)g_font_list, TRUE );
+    /* Ease of Access, bottom right as on the login screen: a keyboard for a
+     * computer without one (sg-ease.h) */
+    sg_ease_button( g_main, sw - 72, sh - 72, 48, ID_EASE, inst );
 
     ShowWindow( g_main, SW_SHOW );
     set_page( P_REGION );
@@ -1331,6 +1342,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     CloseHandle( CreateThread( NULL, 0, reader_thread, g_main, 0, NULL ) );
     send_line( "HELLO" );
     send_line( "STATE" );
+    sg_ease_start();
 
     while (GetMessageA( &msg, NULL, 0, 0 ))
     {

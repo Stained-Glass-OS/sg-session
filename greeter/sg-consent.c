@@ -31,12 +31,14 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include "sg-ease.h"
 
 #define ID_YES    201
 #define ID_NO     202
 #define ID_USER   203
 #define ID_PASS   204
 #define ID_STATUS 205
+#define ID_EASE   206
 
 #define PANEL_W 560
 #define PANEL_H_ADMIN 310
@@ -202,7 +204,15 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         else SetTextColor( dc, COL_TEXT );
         return (LRESULT)g_panel;
     }
+    case WM_DRAWITEM:
+        if (wp == ID_EASE)
+        {
+            sg_ease_draw( (const DRAWITEMSTRUCT *)lp, COL_PANEL, RGB(0xD8, 0xD8, 0xD8), COL_TEXT );
+            return TRUE;
+        }
+        break;
     case WM_COMMAND:
+        if (LOWORD( wp ) == ID_EASE) { sg_ease_menu( hwnd, (HWND)lp ); return 0; }
         if (LOWORD( wp ) == ID_YES) submit_yes();
         else if (LOWORD( wp ) == ID_NO) finish_why( "DENY", "No button" );
         return 0;
@@ -365,8 +375,12 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
                             px + PANEL_W - 24 - 120, py + ph - 48, 120, 32, g_main, (HMENU)ID_NO, inst, NULL );
     SendMessageA( g_yes, WM_SETFONT, (WPARAM)g_font, TRUE );
     SendMessageA( g_no, WM_SETFONT, (WPARAM)g_font, TRUE );
+    /* Ease of Access, bottom left of the panel: a keyboard for a computer
+     * without one -- in this prompt's own X server and desktop (sg-ease.h) */
+    if (g_cred_mode) sg_ease_button( g_main, px + 20, py + ph - 52, 40, ID_EASE, inst );
 
     CreateThread( NULL, 0, reader_thread, g_main, 0, NULL );
+    if (g_cred_mode) sg_ease_start();
     g_shown_at = GetTickCount();
     SetForegroundWindow( g_main );
     /* Safe default: in the Yes/No prompt focus rests on No, so a stray Enter

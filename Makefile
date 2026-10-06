@@ -177,6 +177,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    install -m 0755 build/sg-greeter64.exe build/sg-greeter32.exe build/sg-consent64.exe \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# the touch keyboard's keys for a Linux program's window (XTEST)
+	@if [ -f build/sg-xtype ]; then install -m 0755 build/sg-xtype $(DESTDIR)$(PREFIX)/libexec/stained-glass/; fi
 	install -m 0755 $(LIBS) $(LIBDIR)
 	install -m 0755 lib/sg-fetch $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
@@ -321,6 +323,8 @@ lint:
 	@sh test/vdagent-test.sh
 	@sh test/windows-file-test.sh
 	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
+	@sh test/greeter-ease-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine, the PE builds or sg-shell's)
+	@sh test/xtype-test.sh || [ $$? -eq 77 ]
 	@sh test/greeter-lastuser-test.sh || [ $$? -eq 77 ]
 	@sh test/greeter-lastuser-ui-test.sh || [ $$? -eq 77 ]
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
@@ -408,7 +412,7 @@ clean:
 	rm -rf debian/sg-session debian/.debhelper debian/files debian/*.substvars debian/debhelper-build-stamp
 	rm -rf test/tmp
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
-	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub
+	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub build/sg-xtype
 	rm -f build/sg-setup64.exe build/sg-setup-bridge build/sg-setup.ico build/sg-setup-res.o build/sg-oobe64.exe
 
 # --- the D3D probe ---------------------------------------------------------
@@ -479,6 +483,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polimport greeter/sg-polimport.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-xtype greeter/sg-xtype.c -lX11 -lXtst
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-password-change greeter/sg-password-change.c -lpam
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-keyring-first greeter/sg-keyring-first.c

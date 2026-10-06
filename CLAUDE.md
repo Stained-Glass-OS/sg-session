@@ -439,6 +439,29 @@ has the curtain too, over the system's picture
   slide-up animation, no Windows Spotlight, no notifications on the curtain;
   a picture chosen before this existed is not published until chosen again.
 
+## A keyboard before sign-in: Ease of Access (greeter/sg-ease.h)
+
+A computer without a keyboard (a Surface without its Type Cover) must sign
+in, unlock, approve a consent prompt and run Setup. The login and lock
+screens (`sg-greeter`), the consent prompt asking for credentials
+(`sg-consent`), Setup and the first-run setup have an **Ease of Access
+button** beside the power button; its menu turns sg-shell's On-Screen
+Keyboard (`sg-osk64.exe`) and touch keyboard (`sg-touchkbd64.exe`) on and
+off, and the touch keyboard runs from the start (`/background`) to show
+itself when a text box is touched with no keyboard attached. The keyboards
+are started from the screen itself: in its own Wine, its own X server (the
+lock screen's and the consent prompt's private ones) and its own desktop
+(the consent prompt makes one), so their key presses reach that screen
+only; they log nothing, use no clipboard, and a job object
+(KILL_ON_JOB_CLOSE) ends them with the screen. `SG_SHELL_DIR` (Unix path,
+default `/usr/libexec/stained-glass/shell`); without sg-shell, no button.
+Gate: `test/greeter-ease-test.sh` (mutants `NO_EASE`, `EASE_OUTLIVES`).
+
+`sg-xtype` (`greeter/sg-xtype.c`, installed in libexec): the touch
+keyboard's keys for a Linux program's window, through XTEST on `DISPLAY`
+(`u:XXXX`, `k:KeysymName`, `ctrl+`); a character the layout lacks through a
+spare key code, mapped back after. Gate: `test/xtype-test.sh`.
+
 ## Run as administrator: the consent prompt
 
 `sg-brokerd` (ADR 0012) asks on the **secure surface**. It finds the

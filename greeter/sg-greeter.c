@@ -35,6 +35,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "sg-smooth.h"
+#include "sg-ease.h"
 
 #define ID_USER   101
 #define ID_SECRET 102
@@ -42,6 +43,7 @@
 #define ID_STATUS 104
 #define ID_PROMPT 105
 #define ID_POWER  106
+#define ID_EASE   108
 #define ID_OTHER  107
 #define ID_SAS_LOCK    110
 #define ID_SAS_SIGNOUT 111
@@ -605,6 +607,11 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     {
     case WM_DRAWITEM:
         if (wp == ID_POWER) { draw_power( (const DRAWITEMSTRUCT *)lp ); return TRUE; }
+        if (wp == ID_EASE)
+        {
+            sg_ease_draw( (const DRAWITEMSTRUCT *)lp, RGB(0x1A, 0x16, 0x40), RGB(0x40, 0x30, 0x70), RGB(0xFF, 0xFF, 0xFF) );
+            return TRUE;
+        }
         if ((wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) || wp == ID_OTHER) { draw_link( hwnd, (const DRAWITEMSTRUCT *)lp ); return TRUE; }
         break;
     case WM_CTLCOLORSTATIC:
@@ -649,6 +656,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_COMMAND:
         if (LOWORD(wp) == ID_SUBMIT) submit();
         else if (LOWORD(wp) == ID_POWER) power_menu( hwnd );
+        else if (LOWORD(wp) == ID_EASE) sg_ease_menu( hwnd, (HWND)lp );
         else if (LOWORD(wp) == ID_OTHER) last_user_mode( FALSE );
         else if (LOWORD(wp) == ID_SAS_LOCK) sas_choose( hwnd, "lock" );
         else if (LOWORD(wp) == ID_SAS_SIGNOUT) sas_choose( hwnd, "signout" );
@@ -793,6 +801,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 
     g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                      sw - 72, sh - 72, 48, 48, hwnd, (HMENU)ID_POWER, inst, NULL );
+    /* Ease of Access beside it, as on Windows: a keyboard for a computer
+     * without one (sg-ease.h) */
+    sg_ease_button( hwnd, sw - 132, sh - 72, 48, ID_EASE, inst );
     /* "Other user", bottom left as on Windows: shown with the last account */
     g_other = CreateWindowExA( 0, "BUTTON", "Other user", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
                      24, sh - 76, 220, 52, hwnd, (HMENU)ID_OTHER, inst, NULL );
@@ -823,6 +834,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     if (g_curtain) SetFocus( hwnd );
     CloseHandle( CreateThread( NULL, 0, reader_thread, hwnd, 0, NULL ) );
     send_line( "HELLO" );
+    /* the touch keyboard, to show itself for a touched text box with no
+     * keyboard attached */
+    sg_ease_start();
 
     /* Keys already down when this screen appeared -- the L of Win+L, still
      * held while the lock screen comes up -- are not typing: as on Windows,

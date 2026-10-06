@@ -43,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../greeter/sg-smooth.h"
+#include "../greeter/sg-ease.h"
 
 enum page { P_WELCOME, P_START, P_LICENSE, P_TYPE, P_ACCOUNT, P_DISK, P_READY, P_INSTALLING, P_DONE, P_FAILED };
 static const char *const page_names[] = { "welcome", "start", "license", "type", "account", "disk", "ready",
@@ -75,6 +76,7 @@ static const char *const page_names[] = { "welcome", "start", "license", "type",
 #define ID_CANCEL   325
 #define ID_CLOSE    326
 #define ID_POWER    327
+#define ID_EASE     328
 #define ID_DRIVERS  328
 
 #define WIN_W 800
@@ -1293,6 +1295,9 @@ static void draw_item( const DRAWITEMSTRUCT *d )
         SelectObject( dc, oldp ); DeleteObject( pen );
         break;
     }
+    case ID_EASE:
+        sg_ease_draw( d, RGB(0x1A, 0x16, 0x40), RGB(0x40, 0x30, 0x70), RGB(0xFF, 0xFF, 0xFF) );
+        break;
     case ID_POWER:
     {
         HPEN pen = CreatePen( PS_SOLID, 2, RGB(0xFF, 0xFF, 0xFF) ), oldp;
@@ -1399,6 +1404,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         case ID_CANCEL: if (g_new_mode) set_new_mode( FALSE ); break;
         case ID_CLOSE: cancel_setup(); break;
         case ID_POWER: shut_down(); break;
+        case ID_EASE: sg_ease_menu( hwnd, (HWND)lp ); break;
         }
         return 0;
     case WM_TIMER:
@@ -1657,6 +1663,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
         g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                    GetSystemMetrics( SM_CXSCREEN ) - 72, GetSystemMetrics( SM_CYSCREEN ) - 72,
                                    48, 48, g_main, (HMENU)(INT_PTR)ID_POWER, inst, NULL );
+        /* Ease of Access beside it: a keyboard for a computer without one */
+        sg_ease_button( g_main, GetSystemMetrics( SM_CXSCREEN ) - 132, GetSystemMetrics( SM_CYSCREEN ) - 72, 48,
+                        ID_EASE, inst );
     }
 
     ShowWindow( g_main, SW_SHOW );
@@ -1664,6 +1673,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     UpdateWindow( g_main );
     CloseHandle( CreateThread( NULL, 0, reader_thread, g_main, 0, NULL ) );
     send_line( "HELLO" );
+    if (!g_windowed) sg_ease_start();
 
     while (GetMessageA( &msg, NULL, 0, 0 ))
     {

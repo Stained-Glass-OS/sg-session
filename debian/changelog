@@ -1,3 +1,24 @@
+sg-session (0.1.0-149) unstable; urgency=medium
+
+  * A computer without a keyboard can sign in: the login and lock screens,
+    the consent prompt asking for credentials, Setup and the first-run
+    setup have an Ease of Access button (beside the power button) whose
+    menu turns the On-Screen Keyboard and the touch keyboard on and off
+    (sg-shell's sg-osk and sg-touchkbd), and the touch keyboard runs from
+    the start, showing itself when a text box is touched with no keyboard
+    attached (wine-sg 1150). The keyboards run in the screen's own Wine and
+    X server (the lock screen's and consent prompt's private ones, the
+    consent prompt's own desktop), log nothing, use no clipboard, and end
+    with the screen (a job object that kills them on close).
+  * sg-xtype: the touch keyboard's keys for a Linux program's window,
+    through XTEST on the session's X server (a character the layout lacks
+    through a spare key code, the map put back). Builds with libxtst-dev.
+  * Tests: greeter-ease-test (mutants SG_MUTANT_NO_EASE,
+    SG_MUTANT_EASE_OUTLIVES), xtype-test (mutant SG_MUTANT_XTYPE_NO_SPARE);
+    sg-image's boot-test (sign-in, lock, unlock) passes with it installed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 15:30:00 -0700
+
 sg-session (0.1.0-148) unstable; urgency=medium
 
   * Every session has a keyring (Secret Service, org.freedesktop.secrets),
