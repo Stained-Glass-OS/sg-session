@@ -1,0 +1,25 @@
+# This PC model's own hardware support (sg-drivers --install-platform): on a
+# Microsoft Surface, the linux-surface kernel, touch daemon (iptsd) and
+# libwacom that its touch screen, pen and buttons need. Every other PC skips
+# this unit outright (ConditionFirmware: not even started), so nothing
+# changes there. At every boot on a Surface: installs what is missing (once
+# the network is up; retried every 10 minutes while the archive cannot be
+# reached) and keeps only the running and newest Surface kernels. Not on a
+# live boot. /etc/stained-glass/hwsupport.off: the owner said no.
+[Unit]
+Description=Install this PC model's hardware support (Surface touch and pen)
+ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")
+ConditionKernelCommandLine=!systemd.volatile
+ConditionPathExists=!/etc/stained-glass/hwsupport.off
+Wants=network-online.target
+After=network-online.target sg-drivers.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-drivers --install-platform
+TimeoutStartSec=1h
+Restart=on-failure
+RestartSec=10min
+
+[Install]
+WantedBy=multi-user.target

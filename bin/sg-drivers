@@ -33,6 +33,25 @@
 #       asks for. With Secure Boot off, prints nothing and does nothing.
 #   sg-drivers --status
 #       STATUS pending|none and the drivers packages installed.
+#   sg-drivers --install-platform
+#       This PC model's own hardware support, on the models that need more
+#       than Debian has -- today Microsoft's Surface PCs (DMI sys_vendor
+#       "Microsoft Corporation", product name or family "Surface..."; not
+#       Hyper-V's "Virtual Machine"), whose touch screen and pen (Intel IPTS)
+#       and buttons need the linux-surface project's kernel and its touch
+#       daemon (iptsd), plus its libwacom (the pen's and screen's data).
+#       Their archive (pkg.surfacelinux.com) is added on such a PC only, its
+#       signing key pinned to it alone (Signed-By, the key sg-session ships)
+#       and apt pinned so that it can only ever provide those packages --
+#       nothing else, never a package Debian has. The stock kernel stays as
+#       the fallback: the Surface kernel's boot entry is the default (the
+#       newest kernel), with boot counting (kernel/90-sg-boot-tries.install),
+#       so if it fails to start three times the boot loader goes back to the
+#       stock one by itself. Later Surface kernels come with apt upgrades;
+#       the running and the newest Surface kernels are kept, older ones go.
+#       Run at every boot by sg-hwsupport.service on Surface PCs only
+#       (ConditionFirmware); elsewhere it does nothing and changes nothing.
+#       /etc/stained-glass/hwsupport.off: the owner said no.
 #
 # NVIDIA: Debian's nvidia-detect chooses the package from the device id
 # (nvidia-driver, the Tesla series, or nothing for a card no driver in this
@@ -44,7 +63,12 @@
 # SG_DRIVERS_NVIDIA_DETECT names the nvidia-detect to run; SG_SECUREBOOT=1|0
 # overrides the firmware's Secure Boot state; SG_DRIVERS_FIRMWARE_LOOKUP
 # names the missing-firmware lookup to run (isenkram-autoinstall-firmware
-# -l: the packages, on one line); SG_DRIVERS_ETC is /etc/stained-glass.
+# -l: the packages, on one line); SG_DRIVERS_ETC is /etc/stained-glass;
+# SG_DRIVERS_DMI is /sys/class/dmi/id (a directory of sys_vendor,
+# product_name, product_family files); SG_DRIVERS_APT is /etc/apt (where the
+# Surface archive's source and pin go); SG_DRIVERS_KEYRING is the Surface
+# archive key sg-session ships; SG_DRIVERS_BOOT the boot partition (for its
+# free space); SG_DRIVERS_UNAME the running kernel's version.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -eu
@@ -58,14 +82,14 @@ say() { printf 'sg-drivers: %s\n' "$*" >&2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --list|--recommended|--install-recommended|--secure-boot-enroll|--status) MODE=${1#--} ;;
+        --list|--recommended|--install-recommended|--install-platform|--secure-boot-enroll|--status) MODE=${1#--} ;;
         --root) ROOT=${2:?}; shift ;;
         --pending) PENDING=1 ;;
         *) die "unknown argument: $1" ;;
     esac
     shift
 done
-[ -n "$MODE" ] || die "usage: sg-drivers --list | --recommended | --install-recommended [--pending] | --secure-boot-enroll [--root DIR] | --status"
+[ -n "$MODE" ] || die "usage: sg-drivers --list | --recommended | --install-recommended [--pending] | --install-platform | --secure-boot-enroll [--root DIR] | --status"
 [ -z "$ROOT" ] || [ -d "$ROOT/etc" ] || die "$ROOT is not a system root"
 ETC=${SG_DRIVERS_ETC:-$ROOT/etc/stained-glass}
 PENDING_FILE="$ETC/drivers.pending"
@@ -132,6 +156,155 @@ survey() {
         [ -n "$what" ] || continue
         printf 'DEVICE %s\t%s:%s\t%s\t%s\t%s\n' "$slot" "$vendor" "$device" "$what" "${pkgs:--}" "$note"
     done
+    platform_survey
+}
+
+# --- this PC model: hardware support beyond Debian's ---------------------------
+DMI=${SG_DRIVERS_DMI:-/sys/class/dmi/id}
+APT_DIR=${SG_DRIVERS_APT:-$ROOT/etc/apt}
+SURFACE_KEYRING=${SG_DRIVERS_KEYRING:-/usr/share/stained-glass/keyrings/linux-surface.gpg}
+SURFACE_SOURCES="$APT_DIR/sources.list.d/sg-linux-surface.sources"
+SURFACE_PIN="$APT_DIR/preferences.d/sg-linux-surface.pref"
+# The archive's Release "Origin": the pin holds to it.
+SURFACE_ORIGIN=com.github.linux-surface.linux-surface
+# What that archive may provide; everything else of it is pinned to -1 (never).
+SURFACE_ALLOWED='/^(linux-(image|headers)-(surface|[0-9][0-9.]*-surface-[0-9]+)|iptsd|libwacom[0-9]*(-[a-z]+)?-surface)$/'
+# Room the boot partition needs for one more kernel and its initrd.
+BOOT_ROOM_MB=${SG_DRIVERS_BOOT_ROOM_MB:-250}
+KERNEL_ETC=${SG_DRIVERS_KERNEL_ETC:-$ROOT/etc/kernel}
+
+dmi() { tr -d '\n' < "$DMI/$1" 2>/dev/null || :; }
+
+# "surface<TAB>its product name" on a Surface PC; nothing elsewhere.
+platform() {
+    [ "$(dmi sys_vendor)" = "Microsoft Corporation" ] || return 0
+    name=$(dmi product_name)
+    case "$name" in
+        Surface*) ;;
+        *) case "$(dmi product_family)" in Surface*) ;; *) return 0 ;; esac ;;
+    esac
+    printf 'surface\t%s\n' "$name"
+}
+
+surface_packages() {
+    p="linux-image-surface iptsd libwacom-surface"
+    # a DKMS module (a driver chosen above) is built for the Surface kernel too
+    if installed dkms; then p="$p linux-headers-surface"; fi
+    printf '%s\n' "$p"
+}
+
+platform_survey() {
+    platform | while IFS="$(printf '\t')" read -r kind name; do
+        case "$name" in Microsoft*) ;; *) name="Microsoft $name" ;; esac
+        case "$kind" in surface)
+            printf 'DEVICE platform\tdmi:surface\t%s touch screen and pen\t%s\t%s\n' "$name" \
+                "$(surface_packages)" "the linux-surface project's kernel and touch daemon; the stock kernel stays as the fallback" ;;
+        esac
+    done
+}
+
+# The Surface archive: its source (its own key only) and the pin that keeps
+# it to the Surface packages. Written on a Surface PC only.
+surface_archive() {
+    [ -s "$SURFACE_KEYRING" ] || die "the Surface archive's key is missing ($SURFACE_KEYRING)"
+    mkdir -p "$APT_DIR/sources.list.d" "$APT_DIR/preferences.d"
+    cat > "$SURFACE_SOURCES.tmp" <<EOS
+# Microsoft Surface hardware support (sg-drivers, on Surface PCs only): the
+# linux-surface project's kernel, touch daemon and libwacom. Its key vouches
+# for this archive alone, and sg-linux-surface.pref lets it provide only
+# those packages.
+Types: deb
+URIs: https://pkg.surfacelinux.com/debian
+Suites: release
+Components: main
+Signed-By: $SURFACE_KEYRING
+EOS
+    cat > "$SURFACE_PIN.tmp" <<EOS
+# The linux-surface archive (sg-drivers) may provide its kernel, iptsd and
+# libwacom -- and nothing else, whatever it carries.
+Package: $SURFACE_ALLOWED
+Pin: release o=$SURFACE_ORIGIN
+Pin-Priority: 500
+
+Package: *
+Pin: release o=$SURFACE_ORIGIN
+Pin-Priority: -1
+EOS
+    mv -f "$SURFACE_PIN.tmp" "$SURFACE_PIN"
+    mv -f "$SURFACE_SOURCES.tmp" "$SURFACE_SOURCES"
+}
+
+boot_path() {
+    if [ -n "${SG_DRIVERS_BOOT:-}" ]; then echo "$SG_DRIVERS_BOOT"; return; fi
+    ls /boot /efi >/dev/null 2>&1 || :   # automounts
+    bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
+}
+
+# Older Surface kernels go: the running one and the newest stay.
+surface_kernels_tidy() {
+    running=${SG_DRIVERS_UNAME:-$(uname -r)}
+    # shellcheck disable=SC2016  # dpkg-query's fields
+    all=$(in_root dpkg-query -W -f '${Package} ${Status}\n' 'linux-image-*-surface-*' 2>/dev/null \
+        | awk '/install ok installed/ { sub(/^linux-image-/, "", $1); print $1 }' | sort -V)
+    newest=$(printf '%s\n' "$all" | tail -1)
+    old=""
+    for k in $all; do
+        [ "$k" = "$newest" ] || [ "$k" = "$running" ] || old="$old linux-image-$k"
+    done
+    # a Surface kernel that has started well (no longer counting its tries)
+    # gets its recovery-mode twin now (none while it was on trial)
+    if [ -x /usr/bin/sg-boot-splash ] && b=$(boot_path) && [ -d "$b/loader/entries" ]; then
+        for e in "$b"/loader/entries/*-surface-*.conf; do
+            case "$e" in *-recovery.conf|*+[0-9]*.conf) continue ;; esac
+            [ -f "$e" ] && [ ! -f "${e%.conf}-recovery.conf" ] && /usr/bin/sg-boot-splash recovery-entry "$e"
+        done
+    fi
+    [ -n "$old" ] || return 0
+    say "older Surface kernels removed:$old"
+    # shellcheck disable=SC2086  # package names
+    in_root apt-get -q -y -o DPkg::Lock::Timeout=600 purge $old >/dev/null || say "could not remove:$old"
+}
+
+install_platform() {
+    [ -z "$ROOT" ] || die "hardware support is installed on the running system, not into --root"
+    p=$(platform)
+    [ -n "$p" ] || exit 0
+    if [ -f "$ETC/hwsupport.off" ]; then say "this PC's hardware support was turned off ($ETC/hwsupport.off)"; exit 0; fi
+    want=""
+    for pkg in $(surface_packages); do installed "$pkg" || want="$want $pkg"; done
+    want=${want# }
+    if [ -z "$want" ]; then
+        surface_kernels_tidy
+        exit 0
+    fi
+    case " $want " in *" linux-image-surface "*)
+        b=$(boot_path || :)
+        if [ -n "$b" ] && [ -d "$b" ]; then
+            free=$(df -P -m "$b" | awk 'NR == 2 { print $4 }')
+            if [ "${free:-0}" -lt "$BOOT_ROOM_MB" ]; then
+                say "the boot partition $b has ${free} MB free; the Surface kernel needs ${BOOT_ROOM_MB} MB: not installed"
+                exit 0
+            fi
+        fi ;;
+    esac
+    surface_archive
+    # kernel-install must give the new kernel a boot entry of its own (the
+    # boot loader's layout, "bls"). It infers that from loader/entries.srel or
+    # a directory named after the entry token, and a machine Setup installed
+    # has neither: the kernel would be installed and never started.
+    kconf="$KERNEL_ETC/install.conf"
+    if ! grep -q '^layout=' "$kconf" 2>/dev/null; then
+        mkdir -p "$KERNEL_ETC"
+        printf '# sg-drivers: new kernels get boot entries (systemd-boot)\nlayout=bls\n' >> "$kconf"
+    fi
+    export DEBIAN_FRONTEND=noninteractive
+    in_root apt-get -q -o DPkg::Lock::Timeout=600 update >/dev/null || die "cannot reach the package archives"
+    say "installing this Surface's hardware support: $want"
+    # shellcheck disable=SC2086  # package names
+    in_root apt-get -q -y -o DPkg::Lock::Timeout=600 install $want || die "could not install: $want"
+    # the new kernel is used from the next start
+    { echo "*** System restart required: Surface touch and pen support ***" > /run/reboot-required; } 2>/dev/null || :
+    say "installed: $want (from the next restart)"
 }
 
 # The packages the kernel's missing firmware is in (isenkram), one per line.
@@ -143,7 +316,8 @@ firmware_packages() {
 
 # The packages still to install, one line.
 recommended() {
-    { survey | cut -f4 | tr ' ' '\n'; firmware_packages; } \
+    # (the PC model's own support has its own installer: --install-platform)
+    { survey | grep -v '^DEVICE platform' | cut -f4 | tr ' ' '\n'; firmware_packages; } \
         | grep -v '^-\?$' | sort -u | while read -r p; do
         installed "$p" || printf '%s\n' "$p"
     done | tr '\n' ' ' | sed 's/ $//'
@@ -200,6 +374,7 @@ keep_nouveau_away() {
 
 case "$MODE" in
 list) survey ;;
+install-platform) install_platform ;;
 recommended) recommended; echo ;;
 status)
     if [ -f "$PENDING_FILE" ]; then echo "STATUS pending"; else echo "STATUS none"; fi

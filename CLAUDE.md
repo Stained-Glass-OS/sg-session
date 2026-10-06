@@ -807,6 +807,68 @@ page** -- call it through the elevation broker, parse its lines:
   NVIDIA set against the archive, the forced Secure Boot enrollment, the
   first-boot service settling).
 
+### This PC model's own support: a Surface's touch screen and pen
+
+Microsoft's Surface PCs (Pro 4-9, Laptop, Book, Go, Studio; x86) drive their
+touch screen and pen through Intel IPTS (Precise Touch & Stylus, over the
+ME), which Debian's kernel does not support: the linux-surface project's
+kernel and its touch daemon (iptsd) do. `sg-drivers --install-platform`
+(root; `sg-hwsupport.service` at every boot) installs them **on a Surface
+only**:
+
+- **Which PCs**: DMI `sys_vendor` "Microsoft Corporation" and a product name
+  or family starting "Surface" (not Hyper-V's "Virtual Machine"). The unit
+  has `ConditionFirmware=smbios-field(sys_vendor = "Microsoft Corporation")`,
+  so on every other PC it is not even started; nothing is written there.
+  Not on live boots. `sg-drivers --list` shows it as
+  `DEVICE platform\tdmi:surface\t<model> touch screen and pen\t<packages>\t<note>`;
+  Setup names it on the type page ("installed as an update after
+  installation"); unchecking Setup's third-party drivers turns it off
+  (`/etc/stained-glass/hwsupport.off`, written by sg-install on a Surface only).
+- **Their archive, not a mirror**: `pkg.surfacelinux.com/debian release main`,
+  in `/etc/apt/sources.list.d/sg-linux-surface.sources` with `Signed-By:` the
+  key sg-session ships (`/usr/share/stained-glass/keyrings/linux-surface.gpg`,
+  fingerprint `87DE FA4A B94A 99A4 C8C3 1125 56C4 64BA AC42 1453`) -- that
+  key vouches for that archive alone -- and
+  `/etc/apt/preferences.d/sg-linux-surface.pref`: by Release origin
+  `com.github.linux-surface.linux-surface`, only `linux-image|headers-surface`,
+  their versioned kernels, `iptsd` and `libwacom*-surface` at 500, everything
+  else of it at -1 (never). Kernel updates then come with ordinary apt
+  upgrades (PackageKit offline updates read the same sources). Packages:
+  `linux-image-surface iptsd libwacom-surface` (+ `linux-headers-surface`
+  when DKMS is installed). `libwacom9-surface` replaces Debian's `libwacom9`
+  (Provides/Conflicts; libinput is satisfied).
+- **Boot**: `/etc/kernel/install.conf` gets `layout=bls` first: kernel-install
+  infers the layout from `loader/entries.srel` or a directory named after the
+  entry token, and a Setup-installed machine has neither, so a new kernel got
+  **no boot entry at all** (layout "other") -- true of Debian's own kernel
+  updates on every installed machine too (reported, not changed here).
+  `kernel/90-sg-boot-tries.install` renames a `*-surface-*` kernel's entry to
+  `ENTRY+3.conf` (boot counting): the newest kernel with a sort key is
+  systemd-boot's default (`default debian-*`), and after three failed starts
+  the entry sorts last, so the stock kernel boots again by itself;
+  systemd-bless-boot drops the counter after a good start. While on trial
+  the entry has **no recovery-mode twin** (sg-boot-splash skips counted
+  entries): the uncounted twin sorted before it, was the default, and stayed
+  the default after its failures. sg-hwsupport makes the twin once the
+  kernel has started well. The stock kernel's entries are never removed. Room: 250 MB free in the boot
+  partition, else nothing is installed (it says so).
+- **Each boot afterwards**: the running and the newest Surface kernels stay,
+  older ones are purged. iptsd needs no enabling: its udev rule starts
+  `iptsd@<hidraw>.service` for the IPTS device. The new kernel takes effect
+  at the next restart (`/run/reboot-required`).
+- **Touch reaches programs**: libinput -> sg-compositor (wl_touch, and a
+  focus click) -> Xwayland -> Wine with pointer emulation (wine-sg 0783).
+- Test inputs: `SG_DRIVERS_DMI`, `SG_DRIVERS_APT`, `SG_DRIVERS_KEYRING`,
+  `SG_DRIVERS_BOOT`, `SG_DRIVERS_BOOT_ROOM_MB`, `SG_DRIVERS_KERNEL_ETC`,
+  `SG_DRIVERS_UNAME`. Gate: `test/surface-test.sh` (lint block; mutants
+  `dmi pin key tries twin`): fake DMI surveys (Surface Pro 7, Surface Go, ThinkPad,
+  Hyper-V), the install with apt stood in, the real apt verifying the real
+  archive's signed index (`test/fixtures/linux-surface`) with our key and
+  the pin, the real kernel-install and bootctl on a scratch ESP (default
+  entry, fallback after three failures), the unit's condition. Setup's
+  `test/setup-e2e.sh` checks the type page on a fake Surface and a ThinkPad.
+
 ## Network settings: sg-netctl and sg-netd
 
 The image runs **NetworkManager** (wired DHCP out of the box, Wi-Fi), feeding

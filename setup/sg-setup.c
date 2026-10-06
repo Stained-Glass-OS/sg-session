@@ -858,6 +858,10 @@ static void handle_line( char *line )
         size_t n = strlen( g_found );
         if (split_tabs( line + 7, f, 5 ) >= 5 && n < sizeof(g_found) - 80)
             snprintf( g_found + n, sizeof(g_found) - n, "%s%s (%s)", n ? ", " : "", f[2],
+                      /* the PC model's own support (a Surface's touch screen and pen) */
+#ifndef SG_MUTANT_SURFACE_LABEL
+                      !strcmp( f[0], "platform" ) ? "installed as an update after installation" :
+#endif
                       !strcmp( f[3], "-" ) ? "open-source driver" : strstr( f[3], "nvidia-" ) || strstr( f[3], "broadcom-sta" )
                       ? "the manufacturer's driver" : "firmware" );
         return;

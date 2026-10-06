@@ -21,6 +21,9 @@
 #   - progress is shown, then "Restart now" asks for a restart
 #   - "Try Stained Glass OS" closes Setup and leaves the answer for the
 #     login screen
+#   - the installation type page names what the drivers survey found: on a
+#     Surface (fake DMI, the real sg-drivers) its touch screen and pen,
+#     installed as an update after installation; on a ThinkPad nothing new
 #
 # Needs xvfb-run, xdotool, python3, wine and the built wizard and bridge.
 set -u
@@ -88,12 +91,22 @@ case " $* " in *" --drivers "*) echo "MOKPASSWORD 12345678" ;; esac
 for p in 85 95; do echo "PROGRESS $p step $p"; sleep 0.3; done
 echo "PROGRESS 100 Installed."
 EOS
+# The drivers survey: an NVIDIA card (stood in), and the real sg-drivers'
+# PC-model row from fake DMI tables -- a Surface Pro 7 for the installation,
+# a ThinkPad for a second look at the type page (nothing new there).
 cat > "$T/sg-drivers" <<'EOS'
 #!/bin/sh
-[ "$1" = --list ] && printf 'DEVICE 0000:01:00.0\t10de:1c82\tNVIDIA graphics\tnvidia-driver firmware-misc-nonfree\tNVIDIA driver\n'
-exit 0
+[ "$1" = --list ] || exit 0
+printf 'DEVICE 0000:01:00.0\t10de:1c82\tNVIDIA graphics\tnvidia-driver firmware-misc-nonfree\tNVIDIA driver\n'
+: > "$SG_T/no-pci"
+SG_DRIVERS_DMI="$SG_T/dmi" SG_DRIVERS_PCI="$SG_T/no-pci" sh "$SG_HERE/bin/sg-drivers" --list
 EOS
 chmod +x "$T/sg-drivers"
+for m in surface:"Microsoft Corporation":"Surface Pro 7" thinkpad:LENOVO:20XWCTO1WW; do
+    d="$T/dmi-${m%%:*}"; mkdir -p "$d"; rest=${m#*:}
+    printf '%s\n' "${rest%%:*}" > "$d/sys_vendor"; printf '%s\n' "${rest#*:}" > "$d/product_name"; : > "$d/product_family"
+done
+ln -sfn "$T/dmi-surface" "$T/dmi"
 cat > "$T/systemctl" <<'EOS'
 #!/bin/sh
 echo "$@" >> "$SG_T/systemctl.log"
@@ -102,7 +115,7 @@ chmod +x "$T/sg-install" "$T/systemctl"
 
 # sg-installd behind a socket, one instance per connection, as systemd would.
 SOCK="$T/installd.sock"
-SG_T=$T SG_INSTALL="$T/sg-install" SG_DRIVERS="$T/sg-drivers" SG_SYSTEMCTL="$T/systemctl" SG_INSTALLD_TEST=1 SG_INSTALLD_LOCK="$T/lock" \
+SG_T=$T SG_HERE=$HERE SG_INSTALL="$T/sg-install" SG_DRIVERS="$T/sg-drivers" SG_SYSTEMCTL="$T/systemctl" SG_INSTALLD_TEST=1 SG_INSTALLD_LOCK="$T/lock" \
 python3 - "$SOCK" "$HERE/setup/sg-installd" 2>"$T/installd.log" <<'EOS' &
 import os, socket, subprocess, sys
 s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(4)
@@ -215,6 +228,19 @@ SG_SETUP_RESULT="$T/result2" SG_INSTALLD_SOCK="$SOCK" "$BRIDGE" "wine $EXE" 2>"$
 B=$!
 page welcome; sleep 1; shot dark-welcome
 kill $B 2>/dev/null; wait $B 2>/dev/null
+# A PC that is not a Surface: the type page as before, nothing new.
+mv "$T/bridge.log" "$T/bridge-dark.log"
+ln -sfn "$T/dmi-thinkpad" "$T/dmi"
+SG_SETUP_RESULT="$T/result3" SG_INSTALLD_SOCK="$SOCK" "$BRIDGE" "wine $EXE" 2>"$T/bridge.log" &
+B=$!
+page welcome; k Return
+page start; k Return
+page license; k shift+Tab; k Tab; k space; k Return
+page type
+w=0; until grep -q 'sg-setup: drivers' "$T/bridge.log" || [ "$w" -gt 30 ]; do sleep 0.3; w=$((w + 1)); done
+sleep 0.5; shot type-thinkpad
+kill $B 2>/dev/null; wait $B 2>/dev/null
+mv "$T/bridge.log" "$T/bridge-thinkpad.log"
 EOS
 chmod +x "$T/drive.sh"
 export T SOCK BRIDGE="$BUILD/sg-setup-bridge" EXE="$BUILD/sg-setup64.exe"
@@ -262,9 +288,12 @@ else
 fi
 if [ "$(cat "$T/result" 2>/dev/null)" = try ]; then pass "'Try Stained Glass OS' closes Setup and asks for the live session"
 else fail "Try: '$(cat "$T/result" 2>/dev/null)'"; fi
-if grep -q 'sg-setup: drivers NVIDIA graphics (the manufacturer.s driver)' "$T/bridge-install.log"; then
-    pass "the installation type page shows what the drivers survey found"
+if grep -q 'sg-setup: drivers NVIDIA graphics (the manufacturer.s driver), Microsoft Surface Pro 7 touch screen and pen (installed as an update after installation)$' "$T/bridge-install.log"; then
+    pass "the installation type page shows what the drivers survey found, a Surface's touch screen and pen too"
 else fail "drivers survey: $(grep 'sg-setup: drivers' "$T/bridge-install.log")"; fi
+if grep -q 'sg-setup: drivers NVIDIA graphics (the manufacturer.s driver)$' "$T/bridge-thinkpad.log"; then
+    pass "on a PC that is not a Surface the type page shows nothing new"
+else fail "the ThinkPad's type page: $(grep 'sg-setup: drivers' "$T/bridge-thinkpad.log" 2>/dev/null)"; fi
 if ! grep -q reboot "$T/systemctl-before" 2>/dev/null; then pass "with a Secure Boot password to note, Setup does not restart by itself"
 else fail "Setup restarted by itself while showing the Secure Boot password"; fi
 if grep -q 12345678 "$T/bridge-install.log" "$T/installd.log"; then fail "the Secure Boot password was logged"

@@ -1,0 +1,23 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): a kernel from outside Debian -- a
+# Surface PC's linux-surface kernel (sg-drivers --install-platform) -- gets
+# boot counting. Its entry becomes ENTRY+3.conf: systemd-boot takes a try
+# off at each start and systemd-bless-boot drops the counter once the system
+# is up; a kernel that fails to start three times is sorted last, so the boot
+# loader's default (the first entry its pattern matches) is the stock kernel
+# again, without anyone at the keyboard. Debian's own kernels are left alone.
+# Runs after 90-loaderentry (which writes the entry), before 91-sg-recovery.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+COMMAND=${1:-}
+KERNEL_VERSION=${2:-}
+TRIES=${SG_BOOT_TRIES:-3}
+[ "$COMMAND" = add ] || exit 0
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+[ -n "${KERNEL_INSTALL_BOOT_ROOT:-}" ] && [ -n "${KERNEL_INSTALL_ENTRY_TOKEN:-}" ] || exit 0
+case "$KERNEL_VERSION" in *-surface-*|*-surface) ;; *) exit 0 ;; esac
+e="$KERNEL_INSTALL_BOOT_ROOT/loader/entries/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"
+[ -f "$e.conf" ] || exit 0       # /etc/kernel/tries already counts (ENTRY+N.conf)
+# a new entry (a new initrd, the kernel again): counting starts afresh
+for old in "$e"+*.conf; do [ -f "$old" ] && rm -f "$old"; done
+mv -f "$e.conf" "$e+$TRIES.conf"
+exit 0

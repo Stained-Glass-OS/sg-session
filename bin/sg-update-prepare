@@ -116,7 +116,9 @@ repair_dpkg() {
 repair_dpkg
 
 log "refreshing package lists"
-pk refresh
+# One archive out of reach (a Surface PC's linux-surface archive, say) must
+# not hold back every other update: its old list stays, the rest refresh.
+pk refresh || log "not every package list could be refreshed; going on with the lists here"
 
 make_plan
 echo downloading | publish state

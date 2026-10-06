@@ -188,6 +188,10 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 systemd/system.conf.d/60-sg-quiet-reboot.conf $(DESTDIR)$(PREFIX)/lib/systemd/system.conf.d/60-sg-quiet-reboot.conf
 	install -D -m 0644 config/portal/stainedglass-portals.conf $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/stainedglass-portals.conf
 	install -D -m 0644 config/portal/wlr/config $(DESTDIR)/etc/xdg/xdg-desktop-portal-wlr/config
+	@# A Surface kernel's boot entry counts its tries (sg-drivers --install-platform).
+	install -D -m 0755 kernel/90-sg-boot-tries.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/90-sg-boot-tries.install
+	@# The linux-surface archive's key: used (Signed-By) on Surface PCs only.
+	install -D -m 0644 config/keyrings/linux-surface.gpg $(DESTDIR)$(PREFIX)/share/stained-glass/keyrings/linux-surface.gpg
 	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
 	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
 	install -m 0644 systemd/sg-brokerd.service \
@@ -199,7 +203,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
 	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service systemd/sg-devices-apply.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
-	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service \
+	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service systemd/sg-hwsupport.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
 	    systemd/sg-print-setup.service systemd/sg-dymo-queue.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
@@ -288,6 +292,8 @@ lint:
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
+	@sh test/surface-test.sh
+	@for m in dmi pin key tries twin; do ! sh test/surface-test.sh --mutant $$m >/dev/null 2>&1 || { echo "surface-test: mutant $$m passed"; exit 1; }; done
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/oobe-user-test.sh
 	@sh test/media-test.sh

@@ -1,3 +1,30 @@
+sg-session (0.1.0-117) unstable; urgency=medium
+
+  * Surface touch screen and pen (David 2026-10-05, a Surface Pro 7): on a
+    Microsoft Surface only (DMI; ConditionFirmware, so no other PC even runs
+    it), sg-hwsupport.service (sg-drivers --install-platform) adds the
+    linux-surface archive -- signed by its own key, which sg-session ships,
+    and pinned so it can only provide its kernel, iptsd and libwacom -- and
+    installs linux-image-surface, iptsd and libwacom-surface. kernel-install
+    is set to write boot entries (layout=bls: Setup's machines had neither
+    mark it infers that from); the Surface kernel's entry counts its tries
+    (90-sg-boot-tries.install), so it is the default and, failing to start
+    three times, the stock kernel is again. Older Surface kernels are
+    removed, the running and newest kept. Setup's type page names it
+    ("installed as an update after installation"); unchecking third-party
+    drivers turns it off (hwsupport.off). sg-update-prepare goes on when one
+    archive cannot be refreshed. A boot entry on trial (boot counting) gets
+    its recovery-mode twin only once it has started well: the uncounted twin
+    sorted first and was the default (seen in a VM). Gates:
+    test/surface-test.sh (mutants dmi, pin, key, tries, twin), setup-e2e
+    (fake Surface and ThinkPad type pages, mutant SG_MUTANT_SURFACE_LABEL);
+    in a VM with a Surface Pro 7's DMI, an installed disk updated to this
+    package installed the real linux-surface 6.19.8 kernel at the next boot,
+    booted it (blessed), and fell back to the stock kernel with its tries
+    used up; with QEMU's own DMI the unit did not run and nothing changed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 16:50:59 -0700
+
 sg-session (0.1.0-116) unstable; urgency=medium
 
   * Setup: Tab and Shift+Tab move in and out of the license text; it kept

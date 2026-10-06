@@ -61,6 +61,11 @@ recovery_entry() {
     e=$1
     case "$e" in *-recovery.conf|*-live.conf) return 0 ;; esac
     [ -f "$e" ] || return 0
+    # An entry on trial (ENTRY+LEFT[-DONE].conf, boot counting: a Surface
+    # kernel, kernel/90-sg-boot-tries) has no twin until it has started
+    # well: the twin, uncounted, would sort before it and be the boot
+    # loader's default -- and be the default again after its failures.
+    if printf '%s\n' "$e" | grep -q '+[0-9][0-9]*\(-[0-9][0-9]*\)\{0,1\}\.conf$'; then return 0; fi
     twin="${e%.conf}-recovery.conf"
     opts=$(sed -n 's/^options[[:space:]]*//p' "$e" | head -1)
     {

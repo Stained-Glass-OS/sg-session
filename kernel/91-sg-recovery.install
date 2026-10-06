@@ -11,7 +11,7 @@ dir="$KERNEL_INSTALL_BOOT_ROOT/loader/entries"
 case "$COMMAND" in
 add)
     for e in "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION.conf" "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"+*.conf; do
-        [ -f "$e" ] && /usr/bin/sg-boot-splash recovery-entry "$e"
+        [ -f "$e" ] && "${SG_BOOT_SPLASH:-/usr/bin/sg-boot-splash}" recovery-entry "$e"
     done ;;
 remove)
     rm -f "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION-recovery.conf" "$dir/$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"+*-recovery.conf ;;

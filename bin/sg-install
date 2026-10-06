@@ -23,7 +23,9 @@
 #       Install: into an existing partition (formatted), into unallocated space
 #       (partitions made there), or over a whole disk (erased). The password is
 #       read from stdin, one line. --drivers: install the third-party
-#       drivers this PC needs (sg-drivers) at its first boot; with Secure Boot
+#       drivers this PC needs (sg-drivers) at its first boot -- and, on a
+#       Surface, its touch screen and pen support (without --drivers it is
+#       turned off: /etc/stained-glass/hwsupport.off); with Secure Boot
 #       on, make its module signing key now and ask the firmware to enroll it,
 #       printing "MOKPASSWORD <password>" for Setup to show.
 #
@@ -613,6 +615,11 @@ if [ "$DRIVERS" = 1 ]; then
     printf 'recommended\n' > "$R/etc/stained-glass/drivers.pending"
     sg-drivers --secure-boot-enroll --root "$R" \
         || echo "sg-install: Secure Boot module signing was not set up; drivers built by DKMS will not load until it is" >&2
+elif "${SG_DRIVERS:-sg-drivers}" --list 2>/dev/null | grep -q '^DEVICE platform'; then
+    # Not chosen: this PC model's own support from outside Debian (a
+    # Surface's touch screen and pen, sg-hwsupport.service) is not installed
+    # either. Without this mark it is installed at the first boot.
+    printf 'Setup: third-party drivers were not chosen\n' > "$R/etc/stained-glass/hwsupport.off"
 fi
 
 # --- 4. the owner ------------------------------------------------------------

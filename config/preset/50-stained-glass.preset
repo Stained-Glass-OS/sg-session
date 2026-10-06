@@ -12,6 +12,8 @@ enable sg-live.service
 enable sg-shared-home.service
 # Runs only while Setup's third-party drivers request is pending.
 enable sg-drivers.service
+# A Surface's touch and pen support: runs on Surface PCs only (ConditionFirmware).
+enable sg-hwsupport.service
 # Voice typing's model installer: the socket everywhere, a service per request.
 enable sg-speechd.socket
 # The first-run setup's service: its socket exists only while it is pending
