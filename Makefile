@@ -279,6 +279,7 @@ lint:
 	@! sh test/dymo-queue-test.sh --mutant >/dev/null
 	@sh test/printers-refresh-test.sh
 	@! sh test/printers-refresh-test.sh --mutant >/dev/null
+	@! sh test/printers-refresh-test.sh --mutant-session >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd

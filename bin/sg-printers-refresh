@@ -16,6 +16,17 @@ set -u
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
 . "$SG_LIB/sg-common.sh"
+# Only while someone is signed in: never on a live boot (Setup), before the
+# first-boot setup is done, or with only the login screen up -- a SYSTEM
+# Windows program then took the keys from Setup and the first-boot setup
+# (0.1.0-118). Printers present at boot are loaded by the Windows system as
+# it starts; this is for those added during a session.
+OOBE_PENDING="${SG_OOBE_PENDING:-/etc/stained-glass/oobe.pending}"
+CMDLINE="${SG_PROC_CMDLINE:-/proc/cmdline}"
+RUN_USER="${SG_RUN_USER:-/run/user}"
+[ -e "$OOBE_PENDING" ] && { echo "sg-printers-refresh: first-boot setup pending"; exit 0; }
+grep -q 'systemd.volatile=overlay' "$CMDLINE" 2>/dev/null && { echo "sg-printers-refresh: live boot"; exit 0; }
+ls "$RUN_USER"/*/sg-session.env >/dev/null 2>&1 || { echo "sg-printers-refresh: no one is signed in"; exit 0; }
 sg_machine_wineserver_up || { echo "sg-printers-refresh: the machine wineserver is not running"; exit 0; }
 out=$(timeout 120 runuser -u "$SG_SYSTEM_USER" -- sh -c \
     '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; unset DISPLAY WAYLAND_DISPLAY

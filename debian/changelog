@@ -1,3 +1,16 @@
+sg-session (0.1.0-122) unstable; urgency=medium
+
+  * sg-printers-refresh runs only while someone is signed in, never on a
+    live boot (Setup) and not before the first-boot setup is done: at boot,
+    CUPS writing its printers started it, and the SYSTEM Windows program it
+    runs took the keys from Setup and the first-boot setup (keys lost, the
+    live session never started; found by the install gates on -118..-121).
+    Printers present at boot are the Windows system's as it starts. Unit
+    conditions too. test/printers-refresh-test.sh (and its new
+    --mutant-session).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 19:25:32 -0700
+
 sg-session (0.1.0-121) unstable; urgency=medium
 
   * /boot on the root file system (all installed machines): /boot was the

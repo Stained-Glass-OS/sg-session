@@ -2,6 +2,9 @@
 Description=Stained Glass: Windows printers made again from CUPS's
 Documentation=https://github.com/Stained-Glass-OS/stained-glass
 After=sg-wineserver.service cups.service
+# never on a live boot (Setup) or before the first-boot setup is done
+ConditionKernelCommandLine=!systemd.volatile=overlay
+ConditionPathExists=!/etc/stained-glass/oobe.pending
 
 [Service]
 Type=oneshot

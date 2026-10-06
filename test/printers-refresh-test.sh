@@ -4,8 +4,9 @@
 # Win32_Printer), which makes Windows' printers again from CUPS's (a standard
 # user may not write them to HKLM); with it down it does nothing; and the
 # path unit starts it when CUPS's ppd directory or printers.conf changes.
-#   sh test/printers-refresh-test.sh [--mutant]   (--mutant: run as the
-#     caller instead of SYSTEM -- must fail)
+#   sh test/printers-refresh-test.sh [--mutant|--mutant-session]
+#     (--mutant: run as the caller instead of SYSTEM; --mutant-session: the
+#     signed-in check left out -- both must fail)
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -18,6 +19,8 @@ trap 'rm -rf "$T"' EXIT INT TERM
 TOOL="$HERE/../bin/sg-printers-refresh"
 if [ "${1:-}" = --mutant ]; then
     sed 's|runuser -u "\$SG_SYSTEM_USER" -- ||' "$TOOL" > "$T/tool"; TOOL="$T/tool"
+elif [ "${1:-}" = --mutant-session ]; then
+    sed '/sg-session.env/d; /oobe.pending.*exit/d; /live boot.*exit/d' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 fi
 mkdir -p "$T/lib" "$T/bin"
 cat > "$T/lib/sg-common.sh" <<'S'
@@ -34,8 +37,21 @@ cat > "$T/bin/sh" <<'S'
 echo "sh $*" >> "$STATE/calls"
 S
 chmod +x "$T/bin/runuser" "$T/bin/sh"
-run() { env STATE="$T" SG_LIB="$T/lib" PATH="$T/bin:$PATH" /bin/sh "$TOOL" 2>&1; }
+mkdir -p "$T/run/1000"
+echo "BOOT_IMAGE=/vmlinuz root=/dev/sda2" > "$T/cmdline"
+run() { env STATE="$T" SG_LIB="$T/lib" PATH="$T/bin:$PATH" SG_OOBE_PENDING="$T/oobe.pending" SG_PROC_CMDLINE="$T/cmdline" \
+    SG_RUN_USER="$T/run" /bin/sh "$TOOL" 2>&1; }
 
+touch "$T/up"
+out=$(run)
+[ ! -s "$T/calls" ] && pass "no one signed in (login screen): nothing done" || fail "ran with no session: $(cat "$T/calls")"
+touch "$T/run/1000/sg-session.env" "$T/oobe.pending"
+out=$(run)
+[ ! -s "$T/calls" ] && pass "first-boot setup pending: nothing done" || fail "ran during first-boot setup: $(cat "$T/calls")"
+rm -f "$T/oobe.pending"; echo "BOOT_IMAGE=/vmlinuz systemd.volatile=overlay" > "$T/cmdline"
+out=$(run)
+[ ! -s "$T/calls" ] && pass "live boot (Setup): nothing done" || fail "ran on a live boot: $(cat "$T/calls")"
+echo "BOOT_IMAGE=/vmlinuz root=/dev/sda2" > "$T/cmdline"; rm -f "$T/up"
 out=$(run)
 [ ! -s "$T/calls" ] && pass "the Windows system not running: nothing done" || fail "ran without the wineserver: $(cat "$T/calls")"
 touch "$T/up"
@@ -48,4 +64,7 @@ U="$HERE/../systemd/sg-printers-refresh.path"
 grep -qx 'PathChanged=/etc/cups/ppd' "$U" && grep -qx 'PathChanged=/etc/cups/printers.conf' "$U" \
     && grep -qx 'enable sg-printers-refresh.path' "$HERE/../config/preset/50-stained-glass.preset" \
     && pass "the path unit watches CUPS's ppd directory and printers.conf, and is enabled" || fail "path unit: $(grep -v '^#' "$U")"
+S="$HERE/../systemd/sg-printers-refresh.service"
+grep -qx 'ConditionKernelCommandLine=!systemd.volatile=overlay' "$S" && grep -qx 'ConditionPathExists=!/etc/stained-glass/oobe.pending' "$S" \
+    && pass "the service never runs on a live boot or before the first-boot setup is done" || fail "service conditions"
 exit $RC
