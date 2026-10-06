@@ -1,3 +1,11 @@
+sg-session (0.1.0-132) unstable; urgency=medium
+
+  * Build-Depends: zstd. test/prefix-repair-test.sh (lint, so the package
+    build) packs a stand-in prefix seed with zstd; CI's clean build had none
+    and failed (sg-session and sg-image CI red since 0.1.0-124).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 06:53:15 -0700
+
 sg-session (0.1.0-131) unstable; urgency=medium
 
   * sgwindrv: a Linux program's job is printed through the maker's driver
