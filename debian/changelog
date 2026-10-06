@@ -1,3 +1,11 @@
+sg-session (0.1.0-140) unstable; urgency=medium
+
+  * debian/changelog: 0.1.0-137's note on the gates' own runtime directory
+    (lost when two 0.1.0-137 entries met) is back, beside the C:\windows
+    protection's.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:22:00 -0700
+
 sg-session (0.1.0-139) unstable; urgency=medium
 
   * SG PDF's engine (sg-pdf) grows the professional tools: Prepare Form
