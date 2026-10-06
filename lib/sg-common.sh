@@ -58,11 +58,11 @@ sg_desktop_follow() {
         # for the new size, unless the user picked one)
         [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
         _df_last=$_df_now
-        # Linux programs started from now on, and the work area above the
+        # Linux programs (running ones too), and the work area above the
         # taskbar, at the scale now in use
         _df_lp=$(sg_reg_dword 'HKCU\Control Panel\Desktop' LogPixels)
         SG_SCALE=$(( ${_df_lp:-96} * 100 / 96 ))
-        sg_x_resources "$SG_SCALE"
+        sg_linux_scale "$SG_SCALE"
         sg_x11_workarea "${_df_now%x*}" "${_df_now#*x}"
     done
 }
@@ -529,47 +529,130 @@ sg_taskbar_h() {
     echo $(( (40 * _tb8 + 4) / 8 ))
 }
 
-# Linux programs at the display scale (Xwayland draws them 1:1; the
+# Linux programs at the display scale, and at a new one while they run
+# (David 2026-10-05: "it'd be nice if we could do so while logged in
+# without having to restart the session"). Xwayland draws them 1:1 (the
 # compositor's outputs stay at scale 1, or Xwayland -- Wine -- would be
-# stretched): GTK by whole steps (GDK_SCALE: 2 from 150%) and its text by
-# Xft.dpi, the whole step taken back from the text (GDK_DPI_SCALE 1/2, GTK
-# 3: its text is then exactly the scale); Qt by the scale itself
-# (QT_SCALE_FACTOR); Xft and Xlib programs (xterm), Chromium and Electron
-# by Xft.dpi; the X pointer by XCURSOR_SIZE and Xcursor.size (24 px at
-# 100%). Set in this environment --
-# what the shell starts inherits it -- and the user's systemd manager's and
-# D-Bus activation's. At 100% nothing is set: as before.
-#   sg_linux_scale_env PERCENT
+# stretched), so each toolkit scales itself, told by an XSETTINGS manager
+# (xsettingsd) that the session runs on its X display, and by the X
+# resources:
+#   - GTK 3 and 4: Gdk/WindowScalingFactor (whole steps: 2 from 150%) and
+#     Gdk/UnscaledDPI (the text's DPI at that step, so the text is exactly
+#     the scale); they follow a change at once. No GDK_SCALE: GTK ignores
+#     XSETTINGS' scale when it is set.
+#   - Qt 5 and 6: Xft/DPI, with QT_ENABLE_HIGHDPI_SCALING=1 and
+#     QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough -- the exact scale
+#     (1.75, not 2), followed at once. No QT_SCALE_FACTOR: Qt multiplies
+#     it with the one Xft/DPI gives (Qt 6 drew 175% at 306%; Qt 5's text
+#     was 175% twice).
+#   - Xft and Xlib programs (xterm), Chromium and Electron: Xft.dpi in the
+#     X resources (read at their start); the X pointer: Xcursor.size there,
+#     Gtk/CursorThemeSize for GTK (24 px at 100%).
+# At 100% the values are 96 DPI and scale 1, which is what everything
+# assumes without them (a 1080p session as before).
+#   sg_linux_scale_env PERCENT     (the session's start: environment and all)
+#   sg_linux_scale PERCENT         (a change while the session runs)
+SG_SCALE_ENV_GONE="GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR XCURSOR_SIZE"
 sg_linux_scale_env() {
-    [ "${1:-100}" -gt 100 ] 2>/dev/null || return 0
-    _ls_g=$(( ($1 + 50) / 100 ))
-    GDK_SCALE=$_ls_g
-    GDK_DPI_SCALE=$(awk -v g="$_ls_g" 'BEGIN { printf "%.4g", 1 / g }')
-    QT_SCALE_FACTOR=$(awk -v p="$1" 'BEGIN { printf "%.4g", p / 100 }')
-    QT_AUTO_SCREEN_SCALE_FACTOR=0
-    XCURSOR_SIZE=$(( 24 * $1 / 100 ))
-    export GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR XCURSOR_SIZE
-    _ls_names="GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR XCURSOR_SIZE"
+    # (an older session, or the user's systemd manager, may still carry
+    # the fixed values that kept toolkits from following a change)
+    # shellcheck disable=SC2086  # the names, split
+    unset $SG_SCALE_ENV_GONE
+    # shellcheck disable=SC2086
+    systemctl --user unset-environment $SG_SCALE_ENV_GONE >/dev/null 2>&1 || true
+    QT_ENABLE_HIGHDPI_SCALING=1
+    QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+    export QT_ENABLE_HIGHDPI_SCALING QT_SCALE_FACTOR_ROUNDING_POLICY
+    _ls_names="QT_ENABLE_HIGHDPI_SCALING QT_SCALE_FACTOR_ROUNDING_POLICY"
     # shellcheck disable=SC2086  # the names, split
     systemctl --user import-environment $_ls_names >/dev/null 2>&1 || true
     if command -v dbus-update-activation-environment >/dev/null 2>&1; then
         # shellcheck disable=SC2086
         dbus-update-activation-environment $_ls_names >/dev/null 2>&1 || true
     fi
-    sg_x_resources "$1"
+    sg_linux_scale "${1:-100}"
+}
+
+# The values Linux programs are told at PERCENT, one per line, as
+# xsettingsd reads them (DPI in 1024ths).   sg_xsettings_conf PERCENT
+sg_xsettings_conf() {
+    _xc_p=${1:-100}
+    case "$_xc_p" in ''|*[!0-9]*) _xc_p=100 ;; esac
+    [ "$_xc_p" -lt 100 ] && _xc_p=100
+    _xc_dpi=$(( 96 * _xc_p / 100 ))           # LogPixels: 168 at 175%
+    _xc_g=$(( (_xc_p + 50) / 100 ))           # GTK's whole step: 2 from 150%
+    printf 'Xft/DPI %d\n' $(( _xc_dpi * 1024 ))
+    printf 'Gdk/WindowScalingFactor %d\n' "$_xc_g"
+    printf 'Gdk/UnscaledDPI %d\n' $(( _xc_dpi * 1024 / _xc_g ))
+    printf 'Gtk/CursorThemeSize %d\n' $(( 24 * _xc_p / 100 ))
+}
+
+# Linux programs at PERCENT, at once: the XSETTINGS manager of this X
+# display ($DISPLAY) started or told (SIGHUP: it reads its file again and
+# tells every program), and the X resources.   sg_linux_scale PERCENT
+sg_linux_scale() {
+    sg_x_resources "${1:-100}"
+    command -v xsettingsd >/dev/null 2>&1 || return 0
+    [ -n "${DISPLAY:-}" ] || return 0
+    _xs_dir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+    _xs_d=$(echo "$DISPLAY" | tr -c 'A-Za-z0-9.\n' '_')
+    _xs_conf="$_xs_dir/sg-xsettings$_xs_d.conf"
+    _xs_pid="$_xs_dir/sg-xsettings$_xs_d.pid"
+    sg_xsettings_conf "${1:-100}" > "$_xs_conf.new" 2>/dev/null && mv -f "$_xs_conf.new" "$_xs_conf" || return 0
+    _xs_p=$(cat "$_xs_pid" 2>/dev/null || :)   # (none yet: set -e callers go on)
+    if [ -n "$_xs_p" ] && kill -0 "$_xs_p" 2>/dev/null && grep -q xsettingsd "/proc/$_xs_p/cmdline" 2>/dev/null; then
+        kill -HUP "$_xs_p" 2>/dev/null && return 0
+    fi
+    # its own: ends with the X server; quiet (it logs every reload)
+    xsettingsd -c "$_xs_conf" </dev/null >/dev/null 2>&1 &
+    echo $! > "$_xs_pid" 2>/dev/null || :
+    return 0
+}
+
+# The scale this X display's Linux programs were last told (the XSETTINGS
+# manager's file), in percent; nothing when there is none.
+sg_linux_scale_now() {
+    _xn_d=$(echo "${DISPLAY:-}" | tr -c 'A-Za-z0-9.\n' '_')
+    awk '$1 == "Xft/DPI" { printf "%d\n", $2 / 1024 * 100 / 96 + 0.5 }' \
+        "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sg-xsettings$_xn_d.conf" 2>/dev/null || :
+}
+
+# Qt windows at a new scale: Qt (5 and 6) takes a new Xft/DPI at once but
+# leaves its windows their old size in pixels -- at 175% from 100% a
+# 400x300 window stayed 400x300 pixels with 700x525 of contents. Each
+# visible window of a Qt program on this display ($DISPLAY) is given its
+# size times NEW/OLD (its frame follows, as for a program that resizes
+# itself). GTK resizes its own; others (Xlib, Electron) take the new scale
+# at their next start.
+#   sg_qt_windows_rescale OLD NEW   (percent)
+sg_qt_windows_rescale() {
+    command -v xdotool >/dev/null 2>&1 || return 0
+    [ "$1" -gt 0 ] 2>/dev/null && [ "$2" -gt 0 ] 2>/dev/null || return 0
+    sleep "${SG_QT_RESCALE_WAIT:-1}"   # Qt's own change first
+    for _qw in $(xdotool search --onlyvisible --name '' 2>/dev/null); do
+        _qp=$(xdotool getwindowpid "$_qw" 2>/dev/null) || continue
+        grep -q -E 'libQt[56]Gui\.so' "/proc/$_qp/maps" 2>/dev/null || continue
+        _qg=$(xdotool getwindowgeometry "$_qw" 2>/dev/null | awk '/Geometry:/ { print $2 }')
+        _qx=${_qg%x*} _qy=${_qg#*x}
+        case "$_qx$_qy" in ''|*[!0-9]*) continue ;; esac
+        if [ "$_qx" -le 20 ] || [ "$_qy" -le 20 ]; then continue; fi
+        xdotool windowsize "$_qw" $(( (_qx * $2 + $1 / 2) / $1 )) $(( (_qy * $2 + $1 / 2) / $1 )) 2>/dev/null || :
+    done
+    return 0
 }
 
 # Xft.dpi and Xcursor.size in the X server's resources (xrdb): read by Xft
-# and Xlib programs, Chromium and Electron, libXcursor; changed while the
-# session runs too (the screen changed, a new scale). At 100% they are
-# taken back to 96 and 24 only where an earlier scale set them.
+# and Xlib programs, Chromium and Electron, libXcursor, at their start;
+# set while the session runs too (a new scale, the screen changed). Always
+# set, 96 and 24 at 100%: Qt, told to scale (above), would otherwise take
+# the panel's own DPI.
 #   sg_x_resources PERCENT
 sg_x_resources() {
     command -v xrdb >/dev/null 2>&1 || return 0
-    if [ "${1:-100}" -le 100 ] 2>/dev/null; then
-        xrdb -query 2>/dev/null | grep -q '^Xft\.dpi:' || return 0
-    fi
-    printf 'Xft.dpi: %s\nXcursor.size: %s\n' $(( 96 * $1 / 100 )) $(( 24 * $1 / 100 )) | xrdb -merge 2>/dev/null || :
+    _xr_p=${1:-100}
+    case "$_xr_p" in ''|*[!0-9]*) _xr_p=100 ;; esac
+    [ "$_xr_p" -lt 100 ] && _xr_p=100
+    printf 'Xft.dpi: %s\nXcursor.size: %s\n' $(( 96 * _xr_p / 100 )) $(( 24 * _xr_p / 100 )) | xrdb -nocpp -merge 2>/dev/null || :
 }
 
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).

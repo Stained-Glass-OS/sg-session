@@ -11,15 +11,23 @@
 #     automatic scale wrote) is adopted as the user's; the automatic one
 #     follows the screen
 #   - sg_taskbar_h: explorer's bar (wine-sg 0832), 40 px at 100%, 70 at 175%
-#   - sg_linux_scale_env: GTK, Qt, Xcursor and Xft.dpi at 175% and 150%;
-#     nothing at all at 100% (a 1080p session as before)
+#   - sg_linux_scale_env: the XSETTINGS GTK, Qt and the pointer follow
+#     (xsettingsd's file: Xft/DPI, Gdk/WindowScalingFactor, Gdk/UnscaledDPI,
+#     Gtk/CursorThemeSize) and Xft.dpi/Xcursor.size at 175%, 150%, 125%;
+#     96 DPI and scale 1 at 100% (a 1080p session as before); none of the
+#     fixed variables (GDK_SCALE, QT_SCALE_FACTOR ...) that stop GTK and Qt
+#     following a change, and Qt told to take the exact scale
+#   - sg_linux_scale: a new scale while the session runs -- the manager
+#     started once, then told (SIGHUP) with the new values
 #   - sg_ui_scale: the login screen's scale in its environment
 #     (SG_LOGPIXELS), the size from the kernel, no Wine or X run before it;
 #     nothing at 1080p
 # Mutants (sed on a copy of the library): NO_STICK (the pick ignored),
 # LINUX_NO_SCALE (Linux programs left at 100%), UI_REGISTRY (the scale
 # written with wine reg first, as 0.1.0-120 did), UI_XSIZE (the size from
-# the X server, starting Xwayland), RECOMMEND_100.
+# the X server, starting Xwayland), RECOMMEND_100, LIVE_NO_HUP (a change not
+# told to the running manager), QT_TWICE (QT_SCALE_FACTOR set as well: Qt
+# scaled twice).
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -47,8 +55,16 @@ delete) grep -v -F "$key|" "$store" > "$store.n"; mv "$store.n" "$store" ;;
 esac
 exit 0
 EOS
+# a stand-in XSETTINGS manager: says when it starts and when it is told
+cat > "$T/bin/xsettingsd" <<'EOS'
+#!/bin/sh
+echo "start $2" >> "$SG_T/xsd"
+trap 'echo hup >> "$SG_T/xsd"' HUP
+i=0; while [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+EOS
+chmod +x "$T/bin/xsettingsd"
 for c in systemctl dbus-update-activation-environment xrdb; do
-    printf '#!/bin/sh\n[ "$1" = -merge ] && cat >> "%s/xrdb"\n[ "$1" = -query ] && cat "%s/xrdb" 2>/dev/null\nexit 0\n' "$T" "$T" > "$T/bin/$c"
+    printf '#!/bin/sh\ncase " $* " in *" -merge "*) cat >> "%s/xrdb" ;; *" -query "*) cat "%s/xrdb" 2>/dev/null ;; esac\nexit 0\n' "$T" "$T" > "$T/bin/$c"
     chmod +x "$T/bin/$c"
 done
 chmod +x "$T/bin/wine"
@@ -60,7 +76,11 @@ run() {   # LIB CODE: the code run with the library loaded, in a clean environme
 }
 lp() { awk -F'|' '$2 == "LogPixels" { print $3 }' "$T/reg" 2>/dev/null; }
 chosen() { awk -F'|' '$2 == "ScaleChosen" { print $3 }' "$T/reg" 2>/dev/null; }
-fresh() { rm -f "$T/reg" "$T/calls" "$T/xrdb"; }
+fresh() {
+    _fp=$(cat "$T/sg-xsettings_sg_test.pid" 2>/dev/null)
+    [ -n "$_fp" ] && kill "$_fp" 2>/dev/null && sleep 0.3
+    rm -f "$T/reg" "$T/calls" "$T/xrdb" "$T/xsd" "$T"/sg-xsettings_sg_test.*
+}
 setlp() { echo "HKCU\\Control Panel\\Desktop|LogPixels|$1" >> "$T/reg"; }
 
 table() {   # LIB: "" when the table holds, else what differs
@@ -106,22 +126,40 @@ w=$(stick "$LIB")
     && pass "the taskbar's height for the work area: 40 px at 100%, 70 at 175%, 80 at 200%" \
     || fail "sg_taskbar_h: $(run "$LIB" "sg_taskbar_h 100") $(run "$LIB" "sg_taskbar_h 175") $(run "$LIB" "sg_taskbar_h 200")"
 
-linux() {   # LIB PERCENT: the environment and resources set
+linux() {   # LIB PERCENT: the environment, the XSETTINGS and the resources set
     fresh
-    run "$1" "sg_linux_scale_env $2; env" | grep -E '^(GDK_SCALE|GDK_DPI_SCALE|QT_SCALE_FACTOR|XCURSOR_SIZE)=' | sort | tr '\n' ' '
+    # (under set -eu, as sg-run-explorer runs it: a failing step there ended the session)
+    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T GDK_SCALE=2 QT_SCALE_FACTOR=2 XCURSOR_SIZE=48; sg_linux_scale_env $2; env" |
+        grep -E '^(GDK_SCALE|GDK_DPI_SCALE|QT_SCALE_FACTOR|QT_AUTO_SCREEN_SCALE_FACTOR|XCURSOR_SIZE|QT_ENABLE_HIGHDPI_SCALING|QT_SCALE_FACTOR_ROUNDING_POLICY)=' | sort | tr '\n' ' '
+    tr '\n' ' ' 2>/dev/null < "$T/sg-xsettings_sg_test.conf"
     tr '\n' ' ' 2>/dev/null < "$T/xrdb"
+    kill "$(cat "$T/sg-xsettings_sg_test.pid" 2>/dev/null)" 2>/dev/null
 }
+QT="QT_ENABLE_HIGHDPI_SCALING=1 QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough"
 l=$(linux "$LIB" 175)
-[ "$l" = "GDK_DPI_SCALE=0.5 GDK_SCALE=2 QT_SCALE_FACTOR=1.75 XCURSOR_SIZE=42 Xft.dpi: 168 Xcursor.size: 42 " ] \
+[ "$l" = "$QT Xft/DPI 172032 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 86016 Gtk/CursorThemeSize 42 Xft.dpi: 168 Xcursor.size: 42 " ] \
     && pass "Linux programs at 175%: $l" || fail "Linux programs at 175%: '$l'"
 l=$(linux "$LIB" 150)
-[ "$l" = "GDK_DPI_SCALE=0.5 GDK_SCALE=2 QT_SCALE_FACTOR=1.5 XCURSOR_SIZE=36 Xft.dpi: 144 Xcursor.size: 36 " ] \
+[ "$l" = "$QT Xft/DPI 147456 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 73728 Gtk/CursorThemeSize 36 Xft.dpi: 144 Xcursor.size: 36 " ] \
     && pass "Linux programs at 150%: $l" || fail "Linux programs at 150%: '$l'"
 l=$(linux "$LIB" 125)
-[ "$l" = "GDK_DPI_SCALE=1 GDK_SCALE=1 QT_SCALE_FACTOR=1.25 XCURSOR_SIZE=30 Xft.dpi: 120 Xcursor.size: 30 " ] \
+[ "$l" = "$QT Xft/DPI 122880 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 122880 Gtk/CursorThemeSize 30 Xft.dpi: 120 Xcursor.size: 30 " ] \
     && pass "Linux programs at 125%: $l" || fail "Linux programs at 125%: '$l'"
 l=$(linux "$LIB" 100)
-[ -z "$l" ] && pass "at 100% nothing is set: a 1080p session's Linux programs as before" || fail "at 100%: '$l'"
+[ "$l" = "$QT Xft/DPI 98304 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 98304 Gtk/CursorThemeSize 24 Xft.dpi: 96 Xcursor.size: 24 " ] \
+    && pass "at 100%: 96 DPI, scale 1 (a 1080p session's Linux programs as before): $l" || fail "at 100%: '$l'"
+
+live() {   # LIB: the manager's life over 100% -> 175% -> 125%: "start CONF hup hup" and the file's last values
+    fresh; rm -f "$T/xsd"
+    run "$1" "set -eu; export DISPLAY=:sg-test XDG_RUNTIME_DIR=$T; sg_linux_scale_env 100; sleep 0.3; sg_linux_scale 175; sleep 0.3; sg_linux_scale 125; sleep 0.3"
+    sed "s|$T/||" "$T/xsd" 2>/dev/null | tr '\n' ' '
+    grep -E '^(Xft/DPI|Gdk/WindowScalingFactor)' "$T/sg-xsettings_sg_test.conf" 2>/dev/null | tr '\n' ' '
+    kill "$(cat "$T/sg-xsettings_sg_test.pid" 2>/dev/null)" 2>/dev/null
+}
+l=$(live "$LIB")
+[ "$l" = "start sg-xsettings_sg_test.conf hup hup Xft/DPI 122880 Gdk/WindowScalingFactor 1 " ] \
+    && pass "a new scale while the session runs: the XSETTINGS manager started once, then told: $l" \
+    || fail "a new scale while the session runs: '$l'"
 
 # sg_ui_scale (the login screen, Setup, the first-run setup): the scale in
 # the program's environment, the screen's size from the kernel (a stand-in
@@ -157,11 +195,15 @@ mutant() {   # NAME SED CHECK
 }
 mutant NO_STICK 's/if \[ "\${_as_chosen:-0}" != 0 \]; then/if false; then/; s/elif \[ -n "\$_as_lp" \] && \[ "\$_as_lp" != 96 \]/elif false/' \
     '[ -n "$(stick "$T/mut.sh")" ]'
-mutant LINUX_NO_SCALE 's/\[ "\${1:-100}" -gt 100 \] 2>\/dev\/null || return 0/return 0/' \
+mutant LINUX_NO_SCALE 's/^    sg_linux_scale "\${1:-100}"$/    :/' \
     '[ "$(linux "$T/mut.sh" 175)" != "$(linux "$LIB" 175)" ]'
 mutant UI_REGISTRY 's/^    SG_LOGPIXELS=\$(( _us_pc \* 96 \/ 100 ))$/    sg_auto_scale "${_us_size%x*}" "${_us_size#*x}" >\/dev\/null; return 0/' \
     '[ "$(ui "$T/mut.sh" 2736x1824 | tr "\n" " ")" != "168 " ]'
 mutant UI_XSIZE 's/^    _us_size=\$(sg_drm_size)$/    _us_size=$(sg_x_size)/' \
     '[ "$(ui "$T/mut.sh" 2736x1824 | tr "\n" " ")" != "168 " ]'
 mutant RECOMMEND_100 's/echo \$(( _sq \* 25 ))/echo 100/' '[ -n "$(table "$T/mut.sh")" ]'
+mutant LIVE_NO_HUP 's/kill -HUP "\$_xs_p" 2>\/dev\/null \&\& return 0/return 0/' \
+    '[ "$(live "$T/mut.sh")" != "$(live "$LIB")" ]'
+mutant QT_TWICE 's/^    QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough$/    QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough QT_SCALE_FACTOR=1.75; export QT_SCALE_FACTOR/' \
+    '[ "$(linux "$T/mut.sh" 175)" != "$(linux "$LIB" 175)" ]'
 exit $RC

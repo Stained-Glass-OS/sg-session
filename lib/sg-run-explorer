@@ -149,10 +149,11 @@ reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 
 # The display scale: the recommended one for this screen unless the user
 # picked one (sg-common.sh sg_auto_scale; David 2026-10-05, a Surface Pro 7
-# at 2736x1824: "everything is tiny"). Set before the shell starts, as
-# Windows programs read it at their start; Linux programs take it from the
-# environment the shell hands them (sg_linux_scale_env). At 1080p and below
-# it is 100% and nothing changes.
+# at 2736x1824: "everything is tiny"). Set before the shell starts; Windows
+# programs follow a later change too (wine-sg 0890). Linux programs are told
+# by the XSETTINGS manager started here and the X resources, and follow a
+# change while they run (sg_linux_scale_env; Settings runs
+# sg-display-scale). At 1080p and below it is 100%, as before.
 SG_SCALE=$(sg_auto_scale "${GEOM%x*}" "${GEOM#*x}")
 export SG_SCALE
 sg_linux_scale_env "$SG_SCALE"

@@ -11,15 +11,17 @@
 #      1080p (600 of 1080 lines, within 8%), and the backdrop reaches the
 #      screen's bottom (a 1042-line screen was left a black band)
 #   2. the first-run setup (sg-oobe) likewise: its card 640/1080 of the height
-#   3. a GTK 3 program and a GTK 4 one (zenity) with the session's
-#      environment at 175% (sg_linux_scale_env) are drawn larger: 1.6 to 2.1
-#      times their size at 100%
+#   3. a GTK 3 program, a GTK 4 one (zenity) and a Qt one (if the system's
+#      Python has PyQt6 or PyQt5) started at 100% (sg_linux_scale_env)
+#      follow Settings' change to 175% while they run (sg-display-scale,
+#      the session's XSETTINGS manager): GTK 1.6 to 2.1 times their width,
+#      Qt exactly 1.75 times
 # Xvfb runs with -noreset, as Xwayland keeps its resources (its window
 # manager stays connected). Needs Xvfb, xwininfo, ImageMagick (import), python3 with PIL, wine and
 # 'make greeter'. SG_WINE_DIR: another Wine (its bin/ goes first in PATH).
 # Mutants: sg-ui-scale doing nothing (a copy of the library whose
 # sg_ui_scale returns at once), SG_MUTANT_BACKDROP_SHORT (Setup built with
-# it: MUTANT_SETUP=<exe>), LINUX_NO_SCALE (sg_linux_scale_env doing nothing).
+# it: MUTANT_SETUP=<exe>), LINUX_NOT_LIVE (sg_linux_scale doing nothing).
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD="$HERE/build"
@@ -28,7 +30,7 @@ SETUP="${MUTANT_SETUP:-$BUILD/sg-setup64.exe}"
 RC=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
-for t in Xvfb xwininfo xrdb import wine python3 cc; do command -v "$t" >/dev/null || { echo "SKIP: $t missing"; exit 77; }; done
+for t in Xvfb xwininfo xrdb xsettingsd import wine python3 cc; do command -v "$t" >/dev/null || { echo "SKIP: $t missing"; exit 77; }; done
 python3 -c 'import PIL' 2>/dev/null || { echo "SKIP: python3 PIL missing"; exit 77; }
 [ -f "$SETUP" ] && [ -f "$BUILD/sg-oobe64.exe" ] || { echo "SKIP: run 'make greeter' first"; exit 77; }
 
@@ -122,28 +124,54 @@ share "$h" 1824 640 1080 && pass "the first-run setup at 2736x1824: its card $h 
 size() {   # NAME: WIDTHxHEIGHT of the window called NAME
     xwininfo -name "$1" 2>/dev/null | awk '/Width:/ {w=$2} /Height:/ {h=$2} END {print w "x" h}'
 }
-linux_ratio() {   # LIB PERCENT: the GTK 3 and GTK 4 windows' widths at PERCENT over theirs at 100%
-    for pc in 100 "$2"; do
-        xrdb -remove 2>/dev/null
-        env -i PATH="$PATH" HOME="$HOME" DISPLAY="$DISPLAY" XDG_RUNTIME_DIR="$T/run" GDK_BACKEND=x11 SG_LIB="$1" \
-            sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env "$1"; exec "$2"' sh "$pc" "$T/gtk3probe" >/dev/null 2>&1 &
-        q=$!; sleep 3; s3=$(size sg-gtk3-probe); kill $q 2>/dev/null
-        s4=""
-        if command -v zenity >/dev/null 2>&1; then
-            env -i PATH="$PATH" HOME="$HOME" DISPLAY="$DISPLAY" XDG_RUNTIME_DIR="$T/run" GDK_BACKEND=x11 SG_LIB="$1" \
-                sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env "$1"; exec zenity --info --title=sg-zen --text="Stained Glass OS"' sh "$pc" >/dev/null 2>&1 &
-            q=$!; sleep 4; s4=$(size sg-zen); kill $q 2>/dev/null
-        fi
-        eval "g3_$pc=\${s3%x*} g4_$pc=\${s4%x*}"
-    done
-    eval "echo \$g3_100 \$g3_$2 \${g4_100:-0} \${g4_$2:-0}"
+# a Qt window of 400x300 (Qt 6, else 5, through the system's Python), if there is one
+QTPY=""
+for q in PyQt6 PyQt5; do
+    /usr/bin/python3 -c "import $q.QtWidgets" 2>/dev/null && { QTPY=$q; break; }
+done
+cat > "$T/qtprobe.py" <<EOS
+import sys
+from $QTPY import QtWidgets, QtCore
+app = QtWidgets.QApplication(sys.argv)
+w = QtWidgets.QWidget(); w.resize(400, 300); w.setWindowTitle("sg-qt-probe"); w.show()
+QtCore.QTimer.singleShot(30000, app.quit)
+(app.exec if hasattr(app, "exec") else app.exec_)()
+EOS
+# LIB PERCENT: the session started at 100% (sg_linux_scale_env), the GTK 3,
+# GTK 4 (zenity) and Qt windows measured; then Settings' change to PERCENT
+# while they run (sg-display-scale) and the same windows measured again.
+# Prints: gtk3 before after, gtk4 before after, qt before after (widths; 0: none)
+linux_live() {
+    xrdb -remove 2>/dev/null
+    rm -f "$T/run"/sg-xsettings*
+    E="env -i PATH=$PATH HOME=$HOME DISPLAY=$DISPLAY XDG_RUNTIME_DIR=$T/run GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SG_LIB=$1 SG_LOG_DIR=$T"
+    $E sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env 100' >/dev/null 2>&1
+    sleep 1
+    pids=""
+    $E sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env 100; exec "$1"' sh "$T/gtk3probe" >/dev/null 2>&1 & pids="$pids $!"
+    command -v zenity >/dev/null 2>&1 && { $E sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env 100; exec zenity --info --title=sg-zen --text="Stained Glass OS"' >/dev/null 2>&1 & pids="$pids $!"; }
+    [ -n "$QTPY" ] && { $E sh -c '. "$SG_LIB/sg-common.sh" >/dev/null 2>&1; sg_linux_scale_env 100; exec /usr/bin/python3 "$1"' sh "$T/qtprobe.py" >/dev/null 2>&1 & pids="$pids $!"; }
+    sleep 5
+    a3=$(size sg-gtk3-probe); a4=$(size sg-zen); aq=$(size sg-qt-probe)
+    $E sh "$1/sg-display-scale" "$2" >/dev/null 2>&1
+    sleep 4
+    b3=$(size sg-gtk3-probe); b4=$(size sg-zen); bq=$(size sg-qt-probe)
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null
+    pkill -P $$ zenity 2>/dev/null
+    k=$(cat "$T"/run/sg-xsettings*.pid 2>/dev/null); [ -n "$k" ] && kill "$k" 2>/dev/null
+    echo "${a3%x*} ${b3%x*} ${a4%x*} ${b4%x*} ${aq%x*} ${bq%x*}" | sed 's/  */ /g; s/^ //' | awk '{for (i = 1; i <= 6; i++) printf "%s ", ($i == "" ? 0 : $i); print ""}'
 }
-ratio_ok() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a > 0 && b / a >= 1.6 && b / a <= 2.1) }'; }
-set -- $(linux_ratio "$HERE/lib" 175)
-if ratio_ok "${1:-0}" "${2:-0}" && { [ "${3:-0}" = 0 ] || ratio_ok "$3" "$4"; }; then
-    pass "Linux programs at 175%: GTK 3 ${1} -> ${2} px wide, GTK 4 (zenity) ${3} -> ${4}"
+ratio_in() { awk -v a="$1" -v b="$2" -v lo="$3" -v hi="$4" 'BEGIN { exit !(a > 0 && b / a >= lo && b / a <= hi) }'; }
+set -- $(linux_live "$HERE/lib" 175)
+ok=1
+ratio_in "$1" "$2" 1.6 2.1 || ok=0
+[ "$3" = 0 ] || ratio_in "$3" "$4" 1.6 2.1 || ok=0
+[ "$5" = 0 ] || ratio_in "$5" "$6" 1.73 1.77 || ok=0
+if [ $ok = 1 ]; then
+    pass "Linux programs follow 100% -> 175% while they run: GTK 3 $1 -> $2 px wide, GTK 4 (zenity) $3 -> $4, Qt ($QTPY) $5 -> $6 (exactly 1.75 times)"
 else
-    fail "Linux programs at 175%: GTK 3 ${1:-?} -> ${2:-?}, GTK 4 ${3:-?} -> ${4:-?} (want 1.6 to 2.1 times)"
+    fail "Linux programs, 100% -> 175% while they run: GTK 3 $1 -> $2, GTK 4 $3 -> $4 (want 1.6 to 2.1 times), Qt $5 -> $6 (want 1.75 times)"
 fi
 
 # --- mutants: each must fail what it breaks ------------------------------------------------
@@ -152,9 +180,10 @@ cp "$T/lib/sg-ui-scale" "$T/mut/"
 sed 's/^sg_ui_scale() {$/sg_ui_scale() { return 0/' "$T/lib/sg-common.sh" > "$T/mut/sg-common.sh"
 h=$(setup_h "$T/mut" "$SETUP")
 share "$h" 1824 600 1080 && fail "MUTANT UI_NO_SCALE not caught ($h px)" || pass "MUTANT UI_NO_SCALE caught: Setup $h px tall ($(pct "$h" 1824))"
-sed 's/^sg_linux_scale_env() {$/sg_linux_scale_env() { return 0/' "$T/lib/sg-common.sh" > "$T/mut/sg-common.sh"
-set -- $(linux_ratio "$T/mut" 175)
-ratio_ok "${1:-0}" "${2:-0}" && fail "MUTANT LINUX_NO_SCALE not caught" || pass "MUTANT LINUX_NO_SCALE caught: GTK 3 ${1:-?} -> ${2:-?}"
+sed 's/^sg_linux_scale() {$/sg_linux_scale() { return 0/' "$T/lib/sg-common.sh" > "$T/mut/sg-common.sh"
+cp "$HERE/lib/sg-display-scale" "$T/mut/"
+set -- $(linux_live "$T/mut" 175)
+ratio_in "${1:-0}" "${2:-0}" 1.6 2.1 && fail "MUTANT LINUX_NOT_LIVE not caught" || pass "MUTANT LINUX_NOT_LIVE caught: GTK 3 ${1:-?} -> ${2:-?}"
 
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"
