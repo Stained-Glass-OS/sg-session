@@ -1386,6 +1386,13 @@ annot PAGE stamp rect= stamp=Approved|Draft|.. | reply PAGE XREF TEXT | setstatu
 speak [TEXT [rate=]]              read out loud (espeak-ng, else spd-say); no text: stop
 ```
 
+- **An engine a document.** A request "@N<TAB>..." goes to engine process
+  N (`sg-pdf --serve`, started by the bridge when first named, at most 32;
+  "@N<TAB>quit" ends it; all end with the bridge). SG PDF gives each tab one,
+  so a document's memory goes with its tab and a crash takes only it; an
+  idle engine sleeps in read (about 60 MB resident, mostly shared). Without
+  "@N" the bridge's own engine answers, as before. Gate: pdf-pro-test.py's
+  last section; mutant ENGINES (SG_PDF_MUTANT_ONE_ENGINE=1 routes all to one).
 - **Forms.** Fields are standard AcroForm fields; formats and
   calculations are the standard scripts (AFNumber_Format, AFDate_FormatEx,
   AFSpecial_Format, AFSimple_Calculate, simplified field notation between

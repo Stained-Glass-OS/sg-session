@@ -38,5 +38,11 @@ mutant CHECK sgpdf_sign.py '            if md != digest:' '            if False:
 mutant OCR sgpdf_create.py '    with open(out, "rb") as f:\n        return f.read()\n\n\n# ---- headers' '    return data\n\n\n# ---- headers'
 mutant DECORATE sgpdf_create.py '    count = doc.page_count\n    size =' '    return 0\n    size ='
 mutant ATTACH sgpdf.py '                f.write(data)\n        except OSError as e:\n            raise Refusal("failed", "could not save: "' '                f.write(data[:-1])\n        except OSError as e:\n            raise Refusal("failed", "could not save: "'
+# every document in one engine (the bridge's routing undone)
+if SG_PDF_MUTANT_ONE_ENGINE=1 timeout 900 $PY "$HERE/test/pdf-pro-test.py" > "$T/ENGINES.log" 2>&1; then
+    echo "FAIL  mutant ENGINES survived: the gate passed with it"; RC=1
+else
+    echo "PASS  mutant ENGINES killed ($(grep -c '^FAIL' "$T/ENGINES.log") checks failed)"
+fi
 [ $RC = 0 ] && echo "pdf-pro-mutants: every mutant killed"
 exit $RC

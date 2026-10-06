@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 sg-session (0.1.0-144) unstable; urgency=medium
 
   * The first-run setup takes input only once its first page is on the
@@ -12,6 +13,18 @@ sg-session (0.1.0-144) unstable; urgency=medium
     compositor and of the Windows system's server left one line each.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 13:41:50 -0700
+=======
+sg-session (0.1.0-@V@) unstable; urgency=medium
+
+  * sg-pdf: an engine process a document. A request "@N<TAB>..." goes to
+    document N's own `sg-pdf --serve` (started when first named, ended by
+    "@N<TAB>quit" or with the bridge), for SG PDF's tabs: a document's memory
+    goes with its tab, a crash takes only it, an idle one sleeps.
+  * Gate: pdf-pro-test.py checks two documents in two engines (a change to
+    one leaves the other; closing one leaves the other open); mutant ENGINES.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 13:32:25 -0700
+>>>>>>> Stashed changes
 
 sg-session (0.1.0-143) unstable; urgency=medium
 

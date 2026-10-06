@@ -35,6 +35,10 @@
 #   outline                   the document's bookmarks
 #   quit
 #
+# A request may start "@N<TAB>": it goes to document N's own engine process
+# (started when first named; "@N<TAB>quit" ends it). SG PDF opens each
+# document -- each tab -- in an engine of its own.
+#
 # Every answer is one line, "OK key=value ..." or "ERR kind message" (kind:
 # invalid, open, password, notopen, range, toolarge, failed). An OK line with
 # bytes=N is followed by exactly N bytes:
@@ -126,10 +130,87 @@ def new_engine():
     return sgpdf.Engine() if HAVE_ENGINE else None
 
 
+MAX_ENGINES = 32
+
+
+class Engines:
+    """One engine process a document: a request "@N<TAB>..." goes to engine N
+    (`sg-pdf --serve`, started the first time it is named), "@N<TAB>quit" ends
+    it. Each document is then its own process -- its memory is given back when
+    its tab closes, a crash takes only it -- and an idle one costs nothing but
+    its pages of memory (it sleeps in read). A request without "@N" is this
+    process's own engine, as before."""
+
+    def __init__(self):
+        self.procs = {}
+
+    def ask(self, n, line):
+        p = self.procs.get(n)
+        if line.split("\t")[0] == "quit":
+            if p:
+                self.stop(n)
+            return "OK", b""
+        if p is None:
+            if len(self.procs) >= MAX_ENGINES:
+                return "ERR toolarge too many documents are open", b""
+            try:
+                p = subprocess.Popen([sys.executable, os.path.realpath(__file__), "--serve"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
+            except OSError as e:
+                return "ERR failed could not start the document's engine: " + " ".join(str(e).split()), b""
+            self.procs[n] = p
+        try:
+            p.stdin.write(line.encode("utf-8") + b"\n")
+            p.stdin.flush()
+            head = p.stdout.readline()
+            if not head:
+                raise BrokenPipeError()
+            head = head.decode("utf-8", "replace").rstrip("\n")
+            m = head.rsplit("bytes=", 1)
+            data = b""
+            if len(m) == 2 and (m[0] == "" or m[0].endswith(" ")) and m[1].isdigit():
+                want = int(m[1])
+                while len(data) < want:
+                    chunk = p.stdout.read(want - len(data))
+                    if not chunk:
+                        raise BrokenPipeError()
+                    data += chunk
+            return head, data
+        except (BrokenPipeError, OSError):
+            self.stop(n)
+            return "ERR failed the document's engine stopped", b""
+
+    def stop(self, n):
+        p = self.procs.pop(n, None)
+        if not p:
+            return
+        try:
+            p.stdin.close()
+        except OSError:
+            pass
+        try:
+            p.wait(5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+
+    def stop_all(self):
+        for n in list(self.procs):
+            self.stop(n)
+
+
 def serve(fd_in, out, alive=None):
     """Answer requests from fd_in on out (a binary file) until quit or EOF.
     `alive` is polled while idle: the bridge's child may exit while a process
     it started (wineserver) still holds the pipe open."""
+    engines = Engines()
+    try:
+        return _serve(fd_in, out, alive, engines)
+    finally:
+        engines.stop_all()
+
+
+def _serve(fd_in, out, alive, engines):
     doc = new_engine()
     pending = b""
     while True:
@@ -150,11 +231,20 @@ def serve(fd_in, out, alive=None):
             line = raw.decode("utf-8", "replace").strip("\r")
             if not line:
                 continue
+            engine = None
+            if line.startswith("@") and "\t" in line:
+                tag, rest = line.split("\t", 1)
+                if tag[1:].isdigit():
+                    engine, line = int(tag[1:]), rest
             if TRACE:
                 secret = line.startswith(("protect", "unlock", "certsign", "makeid", "idinfo")) or (line.startswith("open\t") and line.count("\t") >= 2)
                 with open(TRACE, "a") as t:
-                    t.write((line.split("\t")[0] + "\t(passwords not logged)" if secret else line[:2000]) + "\n")
-            ans = handle(doc, line)
+                    t.write(("@%d " % engine if engine is not None else "") +
+                            (line.split("\t")[0] + "\t(passwords not logged)" if secret else line[:2000]) + "\n")
+            # the gate's mutant: every document in one engine (test/pdf-pro-mutants.sh ENGINES)
+            if engine is not None and os.environ.get("SG_PDF_MUTANT_ONE_ENGINE"):
+                engine = 1
+            ans = engines.ask(engine, line) if engine is not None else handle(doc, line)
             if TRACE and ans:
                 with open(TRACE, "a") as t:
                     t.write("  -> " + ans[0][:300] + "\n")
