@@ -53,6 +53,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <pwd.h>
 #include <resolv.h>
 #include <stdarg.h>
@@ -170,6 +172,33 @@ static int resolve(const char *server, char *host, size_t hlen, char *ip, size_t
     return 1;
 }
 
+/* Whether a file server answers at ip (SMB, TCP 445) within a few seconds.
+ * A server that is not there -- a mistyped name, a PC switched off, nothing
+ * listening -- made every mount fail, and every failure was "access denied":
+ * NET USE said "System error 5 has occurred. Access denied." and, with a
+ * password, "The user name or password is incorrect." Windows says "The
+ * network path was not found." (53): EHOSTUNREACH, as for a name that does
+ * not resolve. SG_NETMOUNTD_SMB_PORT moves the port for the gate. */
+static int __attribute__((unused)) smb_reachable(const char *ip)
+{
+    struct sockaddr_in sa = { .sin_family = AF_INET };
+    struct pollfd pfd;
+    const char *port = getenv("SG_NETMOUNTD_SMB_PORT");
+    int fd, ok = 0, err = 0;
+    socklen_t len = sizeof(err);
+
+    sa.sin_port = htons(port && atoi(port) > 0 ? (unsigned short)atoi(port) : 445);
+    if (inet_pton(AF_INET, ip, &sa.sin_addr) != 1) return 1;   /* not ours to judge */
+    if ((fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0)) < 0) return 1;
+    if (!connect(fd, (struct sockaddr *)&sa, sizeof(sa))) ok = 1;
+    else if (errno == EINPROGRESS) {
+        pfd.fd = fd; pfd.events = POLLOUT;
+        if (poll(&pfd, 1, 5000) == 1 && !getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) && !err) ok = 1;
+    }
+    close(fd);
+    return ok;
+}
+
 static int is_mounted(const char *path)
 {
     char line[4096], mp[4096];
@@ -261,6 +290,9 @@ static int do_mount(uid_t uid, char *server, char *share, char *path, size_t ple
     snprintf(path, plen, "%s/%s/%s", UNC_ROOT, server, share);
     if (is_mounted(path)) return 0;
     if (!resolve(server, host, sizeof(host), ip, sizeof(ip))) { errno = EHOSTUNREACH; return -1; }
+#ifndef SG_MUTANT_NO_REACH_CHECK
+    if (!smb_reachable(ip)) { errno = EHOSTUNREACH; return -1; }
+#endif
     if (mkdirs(path, 0755)) return -1;
 
     snprintf(unc, sizeof(unc), "//%s/%s", host, share);
@@ -308,6 +340,9 @@ static int do_logon(uid_t uid, char *server, char *share, const char *user, cons
     user_path(uid, server, share, path, plen);
     if (is_mounted(path)) umount2(path, MNT_DETACH);
     if (!resolve(server, host, sizeof(host), ip, sizeof(ip))) { errno = EHOSTUNREACH; return -1; }
+#ifndef SG_MUTANT_NO_REACH_CHECK
+    if (!smb_reachable(ip)) { errno = EHOSTUNREACH; return -1; }
+#endif
 
     /* users/ anyone may pass; users/<uid> is theirs alone */
     snprintf(dir, sizeof(dir), "%s/%u", USER_ROOT, (unsigned)uid);

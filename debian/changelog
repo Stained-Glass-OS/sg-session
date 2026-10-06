@@ -1,3 +1,18 @@
+sg-session (0.1.0-134) unstable; urgency=medium
+
+  * A network drive whose server is not there says so: with nothing
+    answering for SMB at the server's address (a mistyped name that still
+    resolves, a PC switched off) every mount failure was "access denied" --
+    NET USE printed "System error 5 has occurred. Access denied." and, with
+    a password, "The user name or password is incorrect." sg-netmountd now
+    tries the server's SMB port first (5 s) and answers EHOSTUNREACH, which
+    Wine reports as ERROR_BAD_NETPATH: "System error 53 has occurred. The
+    network path was not found." (wine-sg 1101's text), as Windows does.
+    Gate: test/netmount-unreachable-test.sh (root, cifs-utils; mutant
+    SG_MUTANT_NO_REACH_CHECK fails it). Regression walk 2026-10-06.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 08:47:44 -0700
+
 sg-session (0.1.0-133) unstable; urgency=medium
 
   * Print to PDF saves its PDF with AppArmor enforcing: Debian's profile for
