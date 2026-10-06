@@ -250,6 +250,8 @@ lint:
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh
 	@sh test/prefix-current-test.sh
+	@sh test/prefix-repair-test.sh
+	@! sh test/prefix-repair-test.sh --mutant >/dev/null
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh

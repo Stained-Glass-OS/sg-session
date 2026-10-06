@@ -113,6 +113,51 @@ import_defaults() {
     [ "$_any" = 0 ] || sg_wineserver_wait 120
 }
 
+# Windows' own programs and libraries cut to nothing. A first boot cut short
+# (power off, a VM quit) right after the seed was unpacked left 581 of them
+# empty -- explorer.exe, notepad.exe, most of syswow64 -- the unpack's data
+# never reached the disk, only the names did, and nothing on that machine
+# worked again. An empty .exe or .dll is never right, and Wine's prefix update
+# will not replace one (it leaves files it does not recognise as its own), so
+# look for them on every boot -- a find over C:\windows, a few milliseconds --
+# and put them back: from the seed when it has them, otherwise by deleting
+# them and letting Wine's prefix update make them again.
+empty_system_files() {
+    [ -d "$SG_PREFIX/drive_c/windows" ] || return 0
+    find "$SG_PREFIX/drive_c/windows" -xdev -type f -size 0 \( -iname '*.exe' -o -iname '*.dll' \
+        -o -iname '*.sys' -o -iname '*.drv' -o -iname '*.ocx' -o -iname '*.cpl' -o -iname '*.acm' \
+        -o -iname '*.ax' -o -iname '*.tlb' -o -iname '*.com' \) 2>/dev/null
+}
+repair_empty_system_files() {
+    [ "${SG_MUTANT_NO_EMPTY_REPAIR:-}" = 1 ] && return 0
+    _empty=$(empty_system_files)
+    [ -n "$_empty" ] || return 0
+    sg_log "WARNING: $(printf '%s\n' "$_empty" | wc -l) empty system files in C:\\windows (a cut-short first boot?); repairing"
+    _list=$(mktemp) || return 0
+    printf '%s\n' "$_empty" | while IFS= read -r _f; do
+        printf './%s\n' "${_f#"$SG_ROOT"/}"
+    done > "$_list"
+    if [ -f "$SEED" ]; then
+        printf '%s\n' "$_empty" | while IFS= read -r _f; do rm -f "$_f"; done
+        # Names the seed lacks make tar complain; what it has is restored.
+        zstd -dc "$SEED" | tar -x -C "$SG_ROOT" --no-same-owner --preserve-permissions -T "$_list" 2>/dev/null || true
+        sync -f "$SG_PREFIX" 2>/dev/null || true
+    fi
+    _still=$(empty_system_files)
+    _missing=0
+    while IFS= read -r _m; do
+        [ -e "$SG_ROOT/${_m#./}" ] || _missing=$((_missing + 1))
+    done < "$_list"
+    rm -f "$_list"
+    if [ -n "$_still" ] || [ "$_missing" -gt 0 ]; then
+        printf '%s\n' "$_still" | while IFS= read -r _f; do if [ -n "$_f" ]; then rm -f "$_f"; fi; done
+        sg_log "the seed did not have them all; Wine's prefix update will make the rest"
+        rm -f "$SG_PREFIX/.update-timestamp"   # prefix_current fails: the update below runs
+    else
+        sg_log "empty system files restored from the seed"
+    fi
+}
+
 # A prefix built when the image was (sg-image's mkosi.postinst.chroot runs this
 # script there, as the SYSTEM account, and packs the result): extracting it
 # takes seconds, where building one takes a minute or more -- on every boot of
@@ -124,6 +169,9 @@ if [ ! -e "$STAMP" ] && [ -f "$SEED" ] && [ -z "$(ls -A "$SG_PREFIX" 2>/dev/null
     sg_log "unpacking the prefix built with the image ($SEED)"
     mkdir -p "$SG_ROOT"
     if zstd -dc "$SEED" | tar -x -C "$SG_ROOT" --no-same-owner --preserve-permissions; then
+        # On the disk before anything else happens: a boot cut short soon
+        # after left the names with no data (empty explorer.exe and the rest).
+        sync -f "$SG_PREFIX" 2>/dev/null || sync
         sg_log "prefix unpacked"
     else
         sg_log "WARNING: could not unpack $SEED; building the prefix instead"
@@ -133,6 +181,7 @@ fi
 
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
+    repair_empty_system_files
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
     # whatever process starts it first. Start one here -- at boot, as the
     # machine account, with the Mono/Gecko prompts suppressed -- rather than

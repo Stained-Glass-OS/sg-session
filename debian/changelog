@@ -1,3 +1,25 @@
+sg-session (0.1.0-124) unstable; urgency=medium
+
+  * sg-prefix-init repairs Windows' own programs and libraries left empty:
+    a first boot cut short (the regression walk's VM, quit soon after
+    Setup) left 581 zero-length .exe/.dll files in C:\windows --
+    explorer.exe, notepad.exe, most of syswow64 -- and nothing worked on
+    that machine again. The unpacked seed is now synced to the disk before
+    anything else happens, and every boot looks for empty .exe, .dll,
+    .sys, .drv, .ocx, .cpl and the like under C:\windows (a find, a few
+    milliseconds): they are taken from the prefix seed again, and any the
+    seed does not have are removed and Wine's prefix update makes them
+    (it would not replace a file it does not recognise as its own).
+    Test: test/prefix-repair-test.sh (a healthy prefix untouched; four
+    empty binaries restored from the seed; one the seed lacks remade by
+    the update; a truncated seed: nothing left empty); --mutant (repair
+    off) fails it. VM: the regression walk's installed disk with five
+    binaries cut to nothing (explorer.exe, user32.dll x2, rundll32.exe,
+    notepad.exe) repaired at boot ("restored from the seed", 4 s) and the
+    boot test passes.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 21:06:21 -0700
+
 sg-session (0.1.0-123) unstable; urgency=medium
 
   * sg-printers-refresh also runs in the services' window station, as the
