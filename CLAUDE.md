@@ -807,6 +807,32 @@ page** -- call it through the elevation broker, parse its lines:
   NVIDIA set against the archive, the forced Secure Boot enrollment, the
   first-boot service settling).
 
+### Later kernels: boot entries and boot counting (sg-kernel-entries)
+
+kernel-install (run by Debian's kernel packages through systemd-boot's hook)
+infers its layout from `loader/entries.srel` or a directory named after the
+entry token in the boot partition; a machine Setup installed has neither, so
+until 0.1.0-119 **every kernel update got no boot entry** (layout "other"):
+installed, never started. `bin/sg-kernel-entries`:
+
+- `--configure [--root DIR]` (sg-install, every new system): `/etc/kernel/
+  install.conf` `layout=bls` and `/etc/kernel/tries` `3`.
+- `--apply` (the postinst, installed machines): skipped on a live boot
+  (`systemd.volatile=`/`sg.live=`), when `install.conf` already names a
+  layout, without `/etc/kernel/entry-token` or a systemd-boot entries
+  directory. Otherwise the same configuration, then each installed kernel
+  (`/boot/vmlinuz-*`) newer than the running one with no entry gets one
+  (`kernel-install add`, with its initrd). Nothing is removed.
+- Boot counting: a new entry is `ENTRY+3.conf`; systemd-boot takes a try off
+  per start, systemd-bless-boot drops the counter at a good boot, and an entry
+  with no tries left sorts last -- the previous kernel is the default again.
+  A counted entry has no recovery twin (it would sort first); the drop-in
+  `systemd-bless-boot.service.d/50-sg-recovery.conf` runs `sg-boot-splash
+  entries` after the blessing, which makes it.
+- Gate: `test/kernel-entries-test.sh` (lint block; mutants `layout tries
+  configured newer platformoff`; the last is sg-install's Surface
+  `hwsupport.off` through `sg-drivers --platform-off --root`).
+
 ### This PC model's own support: a Surface's touch screen and pen
 
 Microsoft's Surface PCs (Pro 4-9, Laptop, Book, Go, Studio; x86) drive their
@@ -842,7 +868,8 @@ only**:
   infers the layout from `loader/entries.srel` or a directory named after the
   entry token, and a Setup-installed machine has neither, so a new kernel got
   **no boot entry at all** (layout "other") -- true of Debian's own kernel
-  updates on every installed machine too (reported, not changed here).
+  updates on every installed machine too, fixed since 0.1.0-119 (below:
+  sg-kernel-entries, which sg-drivers now calls for this).
   `kernel/90-sg-boot-tries.install` renames a `*-surface-*` kernel's entry to
   `ENTRY+3.conf` (boot counting): the newest kernel with a sort key is
   systemd-boot's default (`default debian-*`), and after three failed starts

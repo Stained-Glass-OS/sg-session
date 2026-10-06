@@ -1,3 +1,28 @@
+sg-session (0.1.0-119) unstable; urgency=medium
+
+  * Kernel updates start (all installed machines): a machine Setup
+    installed had no loader/entries.srel and no directory named after its
+    entry token, so kernel-install chose layout "other" and Debian's kernel
+    updates -- security updates too -- got no boot entry: installed, never
+    started. sg-kernel-entries: sg-install writes /etc/kernel/install.conf
+    layout=bls and /etc/kernel/tries 3 into every new system; the postinst
+    does the same on installed machines (not live boots, not one whose
+    layout is set already, only with systemd-boot) and gives an installed
+    kernel newer than the running one that has no entry its entry. Every
+    new kernel's entry is on trial: after three failed starts the previous
+    kernel is the default again by itself. A kernel on trial gets its
+    recovery-mode twin once it has started well (a drop-in on
+    systemd-bless-boot runs sg-boot-splash entries). sg-install's Surface
+    hwsupport.off is now sg-drivers --platform-off. Gate:
+    test/kernel-entries-test.sh (real kernel-install and bootctl on a
+    scratch boot partition; mutants layout, tries, configured, newer,
+    platformoff). In a VM (an installed disk updated to this package): the
+    configuration written, a kernel-install entry on trial was the default,
+    booted with initramfs-tools' initrd, was blessed and got its recovery
+    twin from the drop-in; the desktop came up.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 17:34:58 -0700
+
 sg-session (0.1.0-118) unstable; urgency=medium
 
   * Windows' printers follow CUPS's during a session: a printer added

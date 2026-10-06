@@ -18,7 +18,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
-               bin/sg-update-prepare bin/sg-boot-splash bin/sg-file-access-check \
+               bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser
@@ -191,6 +191,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 config/portal/stainedglass-portals.conf $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/stainedglass-portals.conf
 	install -D -m 0644 config/portal/wlr/config $(DESTDIR)/etc/xdg/xdg-desktop-portal-wlr/config
 	@# A Surface kernel's boot entry counts its tries (sg-drivers --install-platform).
+	install -D -m 0644 systemd/systemd-bless-boot.service.d/50-sg-recovery.conf $(UNITDIR)/systemd-bless-boot.service.d/50-sg-recovery.conf
 	install -D -m 0755 kernel/90-sg-boot-tries.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/90-sg-boot-tries.install
 	@# The linux-surface archive's key: used (Signed-By) on Surface PCs only.
 	install -D -m 0644 config/keyrings/linux-surface.gpg $(DESTDIR)$(PREFIX)/share/stained-glass/keyrings/linux-surface.gpg
@@ -296,6 +297,8 @@ lint:
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
+	@sh test/kernel-entries-test.sh
+	@for m in layout tries configured newer platformoff; do ! sh test/kernel-entries-test.sh --mutant $$m >/dev/null 2>&1 || { echo "kernel-entries-test: mutant $$m passed"; exit 1; }; done
 	@sh test/surface-test.sh
 	@for m in dmi pin key tries twin; do ! sh test/surface-test.sh --mutant $$m >/dev/null 2>&1 || { echo "surface-test: mutant $$m passed"; exit 1; }; done
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]

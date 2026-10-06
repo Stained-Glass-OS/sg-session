@@ -105,7 +105,8 @@ inst() {   # MACHINE [env...]: a fresh /etc and apt log, then --install-platform
     m=$1; shift
     rm -rf "$T/etc" "$T/apt" "$T/kernel"; mkdir -p "$T/etc" "$T/apt" "$T/kernel"; : > "$T/apt.log"
     env SG_T="$T" PATH="$T/bin:$PATH" SG_DRIVERS_DMI="$T/dmi/$m" SG_DRIVERS_ETC="$T/etc" SG_DRIVERS_APT="$T/apt" \
-        SG_DRIVERS_KEYRING="$KEY" SG_DRIVERS_BOOT="$T/boot" SG_DRIVERS_KERNEL_ETC="$T/kernel" "$@" \
+        SG_DRIVERS_KEYRING="$KEY" SG_DRIVERS_BOOT="$T/boot" SG_DRIVERS_KERNEL_ETC="$T/kernel" \
+        SG_DRIVERS_KERNEL_ENTRIES="$HERE/bin/sg-kernel-entries" "$@" \
         sh "$D" --install-platform 2> "$T/inst.err"
 }
 : > "$T/installed"
@@ -116,7 +117,8 @@ if [ -f "$src" ] && grep -qx 'URIs: https://pkg.surfacelinux.com/debian' "$src" 
     pass "on the Surface: the archive's source, with our key only, and its pin"
 else fail "the Surface archive's source or pin: $(cat "$src" "$pin" 2>&1) $(cat "$T/inst.err")"; fi
 cp "$src" "$T/written.sources" 2>/dev/null; cp "$pin" "$T/written.pref" 2>/dev/null
-grep -qx 'layout=bls' "$T/kernel/install.conf" 2>/dev/null && pass "new kernels get boot entries (kernel-install layout=bls)" \
+grep -qx 'layout=bls' "$T/kernel/install.conf" 2>/dev/null && grep -qx 3 "$T/kernel/tries" 2>/dev/null \
+    && pass "new kernels get boot entries (kernel-install layout=bls), with 3 tries" \
     || fail "no layout=bls for kernel-install"
 if grep -q 'update$' "$T/apt.log" && grep -q "install $want\$" "$T/apt.log"; then pass "apt installs $want"
 else fail "apt: $(cat "$T/apt.log") $(cat "$T/inst.err")"; fi

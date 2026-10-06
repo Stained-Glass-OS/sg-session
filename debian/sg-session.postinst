@@ -170,6 +170,9 @@ case "$1" in
 
         # The quiet boot (the splash, no Linux text) and its recovery-mode
         # entries, on machines installed before they came (sg-boot-splash).
+        # Later kernels (Debian's updates) get boot entries, with boot
+        # counting; one installed since without an entry gets it now.
+        /usr/bin/sg-kernel-entries --apply || true
         /usr/bin/sg-boot-splash apply || true
         ;;
     triggered)

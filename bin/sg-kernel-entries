@@ -1,0 +1,94 @@
+#!/bin/sh
+# sg-kernel-entries -- new kernels get boot entries, and a bad one falls back.
+#
+#   sg-kernel-entries --configure [--root DIR]   (sg-install, a new system)
+#   sg-kernel-entries --apply                    (sg-session's postinst)
+#
+# kernel-install (Debian's kernel packages run it through systemd-boot's
+# hook) decides the layout from loader/entries.srel or a directory named after
+# the entry token in the boot partition. A machine Setup installed has
+# neither, so it chose "other" and wrote no boot entry at all: every kernel
+# update -- security updates too -- was installed and never started.
+#
+# --configure: /etc/kernel/install.conf "layout=bls" and /etc/kernel/tries
+# "3" (boot counting: a new kernel's entry is ENTRY+3.conf; systemd-boot takes
+# a try off at each start and systemd-bless-boot drops the counter once the
+# system is up; with its tries used up the entry sorts last and the previous
+# kernel is the default again, by itself).
+#
+# --apply, on an installed machine (never a live boot, never one whose
+# install.conf already names a layout, never without systemd-boot): the same
+# configuration, then each installed kernel newer than the running one that
+# has no boot entry gets one (kernel-install add, so with its tries). Nothing
+# is removed: the running kernel's entry stays as it is.
+#
+# For the gate: SG_KE_ETC (/etc/kernel), SG_KE_BOOT (the boot partition),
+# SG_KE_FILES (/boot: vmlinuz-VER, initrd.img-VER), SG_KE_UNAME, SG_KE_CMDLINE
+# (/proc/cmdline), SG_KE_KERNEL_INSTALL (kernel-install).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+PATH="$PATH:/usr/sbin:/sbin"
+TRIES=3
+MODE="" ROOT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --configure|--apply) MODE=${1#--} ;;
+        --root) ROOT=${2:?}; shift ;;
+        *) echo "usage: sg-kernel-entries --configure [--root DIR] | --apply" >&2; exit 2 ;;
+    esac
+    shift
+done
+[ -n "$MODE" ] || { echo "usage: sg-kernel-entries --configure [--root DIR] | --apply" >&2; exit 2; }
+ETC=${SG_KE_ETC:-$ROOT/etc/kernel}
+say() { printf 'sg-kernel-entries: %s\n' "$*" >&2; }
+
+configure() {
+    mkdir -p "$ETC" || return 1
+    if ! grep -q '^layout=' "$ETC/install.conf" 2>/dev/null; then
+        printf '# Stained Glass OS: new kernels get boot entries (systemd-boot)\nlayout=bls\n' >> "$ETC/install.conf"
+    fi
+    [ -s "$ETC/tries" ] || printf '%s\n' "$TRIES" > "$ETC/tries"
+}
+
+boot_path() {
+    if [ -n "${SG_KE_BOOT:-}" ]; then echo "$SG_KE_BOOT"; return; fi
+    ls /boot /efi >/dev/null 2>&1 || :   # automounts
+    bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
+}
+
+apply() {
+    cmdline=$(cat "${SG_KE_CMDLINE:-/proc/cmdline}" 2>/dev/null)
+    case " $cmdline " in *" systemd.volatile="*|*" sg.live="*) return 0 ;; esac   # the live medium
+    grep -q '^layout=' "$ETC/install.conf" 2>/dev/null && return 0                 # set already: not ours to change
+    [ -f "$ETC/entry-token" ] || return 0                                           # not a machine Setup installed
+    B=$(boot_path) || return 0
+    [ -n "$B" ] && [ -d "$B/loader/entries" ] || return 0                           # not systemd-boot
+    configure || return 0
+    token=$(cat "$ETC/entry-token")
+    files=${SG_KE_FILES:-/boot}
+    running=${SG_KE_UNAME:-$(uname -r)}
+    for k in $(for f in "$files"/vmlinuz-*; do [ -f "$f" ] && printf '%s\n' "${f##*/vmlinuz-}"; done | sort -V); do
+        # newer than the running kernel only
+        [ "$k" != "$running" ] || continue
+        [ "$(printf '%s\n%s\n' "$running" "$k" | sort -V | tail -1)" = "$k" ] || continue
+        # an entry already (any token, counted or not, not a recovery twin)
+        have=0
+        for e in "$B"/loader/entries/*.conf; do
+            case "$e" in *-recovery.conf|*-live.conf) continue ;; esac
+            case "$e" in *"-$k.conf"|*"-$k+"*.conf) [ -f "$e" ] && have=1 ;; esac
+        done
+        [ "$have" = 0 ] || continue
+        say "kernel $k has no boot entry: adding it (on trial: $TRIES tries)"
+        set -- "$files/vmlinuz-$k"
+        [ -f "$files/initrd.img-$k" ] && set -- "$@" "$files/initrd.img-$k"
+        ${SG_KE_KERNEL_INSTALL:-kernel-install} add "$k" "$@" >&2 || say "kernel-install could not add $k ($token)"
+    done
+    return 0
+}
+
+case "$MODE" in
+configure) configure ;;
+apply) apply ;;
+esac
+exit 0

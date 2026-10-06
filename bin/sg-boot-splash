@@ -6,6 +6,9 @@
 #   sg-boot-splash apply                 (sg-session's postinst)
 #   sg-boot-splash recovery-entry FILE   make FILE's recovery twin (the
 #                                        kernel-install plugin, a new kernel)
+#   sg-boot-splash entries               the entries' part of apply alone:
+#                                        after a kernel on trial (boot
+#                                        counting) started well, its twin
 #
 # apply: Plymouth's theme is ours (plymouthd.conf: Theme, shown at once);
 # /etc/kernel/cmdline and each boot entry get the quiet-boot arguments
@@ -93,7 +96,16 @@ apply() {
         [ "$new" = "$(cat "$CMDLINE")" ] || printf '%s\n' "$new" > "$CMDLINE"
     fi
 
-    # --- the boot entries: quiet, each with its recovery twin -------------------
+    entries
+
+    # --- the initrds: the theme in them is the one installed -------------------
+    initrds
+    return 0
+}
+
+# --- the boot entries: quiet, each with its recovery twin -----------------------
+# (also after a kernel on trial has started well: systemd-bless-boot's drop-in)
+entries() {
     if E=$(esp) && [ -d "$E/loader/entries" ]; then
         for e in "$E"/loader/entries/*.conf; do
             [ -f "$e" ] || continue
@@ -110,9 +122,10 @@ apply() {
             [ -f "$t" ] && [ ! -f "${t%-recovery.conf}.conf" ] && rm -f "$t"
         done
     fi
+}
 
-    # --- the initrds: the theme in them is the one installed -------------------
-    # (not in an image build's chroot: the image makes its own)
+# (not in an image build's chroot: the image makes its own)
+initrds() {
     if [ "${SG_NO_INITRD:-0}" != 1 ] && ! systemd-detect-virt -q --chroot 2>/dev/null && [ -f "$THEME_DIR/stained-glass.script" ] && command -v update-initramfs >/dev/null 2>&1; then
         stamp=/var/lib/stained-glass/splash-initrd.sum
         sum=$(cat "$THEME_DIR"/* "$CONF" 2>/dev/null | md5sum | cut -d' ' -f1)
@@ -129,7 +142,8 @@ apply() {
 
 case "${1:-}" in
 apply) apply ;;
+entries) entries ;;
 recovery-entry) [ $# -eq 2 ] && recovery_entry "$2" ;;
-*) echo "usage: sg-boot-splash apply | recovery-entry FILE" >&2; exit 2 ;;
+*) echo "usage: sg-boot-splash apply | entries | recovery-entry FILE" >&2; exit 2 ;;
 esac
 exit 0

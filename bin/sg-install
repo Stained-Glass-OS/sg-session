@@ -536,6 +536,10 @@ done
 mkdir -p "$R/etc/kernel"
 printf '%s\n' "$opts" > "$R/etc/kernel/cmdline"
 printf '%s\n' "$TOKEN" > "$R/etc/kernel/entry-token"
+# kernel-install must give later kernels (Debian's updates) boot entries --
+# it cannot tell the layout from this boot partition -- with boot counting,
+# so a new kernel that cannot start gives way to the previous one by itself.
+sg-kernel-entries --configure --root "$R" || die "cannot set up boot entries for later kernels"
 
 # The boot loader. Another system's loaders are never replaced: the firmware's
 # fallback path is ours only where nothing is there yet.
@@ -615,11 +619,12 @@ if [ "$DRIVERS" = 1 ]; then
     printf 'recommended\n' > "$R/etc/stained-glass/drivers.pending"
     sg-drivers --secure-boot-enroll --root "$R" \
         || echo "sg-install: Secure Boot module signing was not set up; drivers built by DKMS will not load until it is" >&2
-elif "${SG_DRIVERS:-sg-drivers}" --list 2>/dev/null | grep -q '^DEVICE platform'; then
+else
     # Not chosen: this PC model's own support from outside Debian (a
     # Surface's touch screen and pen, sg-hwsupport.service) is not installed
-    # either. Without this mark it is installed at the first boot.
-    printf 'Setup: third-party drivers were not chosen\n' > "$R/etc/stained-glass/hwsupport.off"
+    # either (hwsupport.off, on such a PC only). Without the mark it is
+    # installed at the first boot.
+    sg-drivers --platform-off --root "$R" || :
 fi
 
 # --- 4. the owner ------------------------------------------------------------

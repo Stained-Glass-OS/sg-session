@@ -52,6 +52,9 @@
 #       Run at every boot by sg-hwsupport.service on Surface PCs only
 #       (ConditionFirmware); elsewhere it does nothing and changes nothing.
 #       /etc/stained-glass/hwsupport.off: the owner said no.
+#   sg-drivers --platform-off [--root DIR]
+#       On such a PC, write hwsupport.off (Setup's third-party drivers not
+#       chosen; sg-install runs it into the new system). Elsewhere nothing.
 #
 # NVIDIA: Debian's nvidia-detect chooses the package from the device id
 # (nvidia-driver, the Tesla series, or nothing for a card no driver in this
@@ -82,7 +85,7 @@ say() { printf 'sg-drivers: %s\n' "$*" >&2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --list|--recommended|--install-recommended|--install-platform|--secure-boot-enroll|--status) MODE=${1#--} ;;
+        --list|--recommended|--install-recommended|--install-platform|--platform-off|--secure-boot-enroll|--status) MODE=${1#--} ;;
         --root) ROOT=${2:?}; shift ;;
         --pending) PENDING=1 ;;
         *) die "unknown argument: $1" ;;
@@ -251,14 +254,6 @@ surface_kernels_tidy() {
     for k in $all; do
         [ "$k" = "$newest" ] || [ "$k" = "$running" ] || old="$old linux-image-$k"
     done
-    # a Surface kernel that has started well (no longer counting its tries)
-    # gets its recovery-mode twin now (none while it was on trial)
-    if [ -x /usr/bin/sg-boot-splash ] && b=$(boot_path) && [ -d "$b/loader/entries" ]; then
-        for e in "$b"/loader/entries/*-surface-*.conf; do
-            case "$e" in *-recovery.conf|*+[0-9]*.conf) continue ;; esac
-            [ -f "$e" ] && [ ! -f "${e%.conf}-recovery.conf" ] && /usr/bin/sg-boot-splash recovery-entry "$e"
-        done
-    fi
     [ -n "$old" ] || return 0
     say "older Surface kernels removed:$old"
     # shellcheck disable=SC2086  # package names
@@ -292,11 +287,9 @@ install_platform() {
     # boot loader's layout, "bls"). It infers that from loader/entries.srel or
     # a directory named after the entry token, and a machine Setup installed
     # has neither: the kernel would be installed and never started.
-    kconf="$KERNEL_ETC/install.conf"
-    if ! grep -q '^layout=' "$kconf" 2>/dev/null; then
-        mkdir -p "$KERNEL_ETC"
-        printf '# sg-drivers: new kernels get boot entries (systemd-boot)\nlayout=bls\n' >> "$kconf"
-    fi
+    # (and its tries: sg-kernel-entries, as on every machine since 0.1.0-119)
+    SG_KE_ETC="$KERNEL_ETC" "${SG_DRIVERS_KERNEL_ENTRIES:-/usr/bin/sg-kernel-entries}" --configure \
+        || die "cannot set up kernel-install for boot entries"
     export DEBIAN_FRONTEND=noninteractive
     in_root apt-get -q -o DPkg::Lock::Timeout=600 update >/dev/null || die "cannot reach the package archives"
     say "installing this Surface's hardware support: $want"
@@ -375,6 +368,12 @@ keep_nouveau_away() {
 case "$MODE" in
 list) survey ;;
 install-platform) install_platform ;;
+platform-off)
+    # Setup's third-party drivers not chosen: on a PC with its own support
+    # (a Surface), that support is off too (sg-install, into --root)
+    [ -n "$(platform)" ] || exit 0
+    mkdir -p "$ETC"
+    printf 'Setup: third-party drivers were not chosen\n' > "$ETC/hwsupport.off" ;;
 recommended) recommended; echo ;;
 status)
     if [ -f "$PENDING_FILE" ]; then echo "STATUS pending"; else echo "STATUS none"; fi
