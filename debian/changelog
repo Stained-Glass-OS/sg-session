@@ -1,3 +1,27 @@
+sg-session (0.1.0-143) unstable; urgency=medium
+
+  * VPN kill switches work: sg-session depends on nftables and iptables.
+    Eddie (AirVPN's VPN client) builds its Network Lock from a root helper
+    with nft, or iptables/ip6tables and their -save/-restore; the image
+    had none of them, so Eddie refused to connect with "There is no
+    available or enabled Network Lock mode" (David's X1, 2026-10-06).
+    Installed machines get both with apt upgrade. Neither starts a
+    firewall on its own (nftables.service stays disabled).
+  * sg-netlock-check (new guest gate, root; sg-image SG_GUEST_CHECK=netlock):
+    the tools are on a system service's PATH; from a system service a
+    lock table (drop all but loopback) goes up, is listed and comes down
+    with nft, and an iptables/ip6tables chain is added, saved, restored
+    (--test) and removed; a desktop user cannot change the firewall
+    without elevation; nftables.service is not enabled.
+  * Test: test/netlock-deps-test.sh (in make lint; the two left out of
+    Depends fail it). sg-netlock-check passes in a VM of the image with
+    the packages and fails with them removed, and with nftables.service
+    enabled. Eddie 2.26.2 itself (official .deb) in that VM: 'eddie-cli
+    --netlock' said "There is no available or enabled Network Lock mode"
+    before, "Activation of Network Lock - Linux nftables" after.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 12:59:23 -0700
+
 sg-session (0.1.0-142) unstable; urgency=medium
 
   * The lock screen at the user's display scale (David 2026-10-06: "lock

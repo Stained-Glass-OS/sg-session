@@ -19,7 +19,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-boot-layout bin/sg-file-access-check \
-               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
+               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale
 
@@ -287,6 +287,8 @@ lint:
 	@sh test/restart-notify-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
+	@sh test/netlock-deps-test.sh
+	@! sh test/netlock-deps-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
 	@sh test/print-setup-test.sh

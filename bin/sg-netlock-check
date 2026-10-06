@@ -1,0 +1,94 @@
+#!/bin/sh
+# Guest gate (run as root; sg-image: SG_GUEST_CHECK=netlock): a VPN client's
+# kill switch works here. VPN clients such as Eddie (AirVPN) block all
+# traffic outside the tunnel ("Network Lock") from a root helper -- a system
+# service the desktop program talks to, or pkexec -- with nft, or with
+# iptables/ip6tables and their -save/-restore. Without those programs Eddie
+# says "There is no available or enabled Network Lock mode" (2026-10-06,
+# X1). This does what such a helper does, without any VPN client:
+#   1. nft, iptables, ip6tables and the -save/-restore pairs are on the
+#      PATH a system service gets
+#   2. inside a system service (systemd-run, as root): nf_tables loads,
+#      'nft list ruleset' succeeds with nothing on stderr (Eddie's own
+#      availability test), a lock table (drop everything but loopback) is
+#      added, listed and removed
+#   3. the same with iptables/ip6tables: a chain added and removed, the
+#      rules saved and restored (--test)
+#   4. a desktop user without elevation is refused (the lock needs root)
+#   5. the image starts no firewall of its own (nftables.service disabled)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+USER_NAME=${1:-}
+
+SVC_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+missing=""
+for t in nft iptables ip6tables iptables-save iptables-restore ip6tables-save ip6tables-restore; do
+    PATH=$SVC_PATH command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+done
+if [ -z "$missing" ]; then pass "firewall tools installed (nft, iptables, ip6tables, -save/-restore)"
+else fail "firewall tools missing:$missing"; fi
+
+# what the root helper does, as a system service
+cat > /run/sg-netlock-probe.sh <<'EOF'
+#!/bin/sh
+set -u
+r=0
+modprobe nf_tables 2>/dev/null
+err=$(nft list ruleset 2>&1 >/dev/null) || { echo "FAIL  nft list ruleset failed: $err"; r=1; }
+[ -z "$err" ] || { echo "FAIL  nft list ruleset wrote to stderr: $err"; r=1; }
+nft -f - <<'R' || { echo "FAIL  nft could not load a lock table"; r=1; }
+table inet sg_netlock_probe {
+    chain output {
+        type filter hook output priority 0; policy drop;
+        oifname "lo" accept
+    }
+}
+R
+if nft list table inet sg_netlock_probe 2>/dev/null | grep -q 'policy drop'; then
+    echo "PASS  nft lock table added (output policy drop, loopback allowed)"
+else echo "FAIL  nft lock table not listed"; r=1; fi
+nft delete table inet sg_netlock_probe || { echo "FAIL  nft could not remove the lock table"; r=1; }
+nft list table inet sg_netlock_probe >/dev/null 2>&1 && { echo "FAIL  lock table still present"; r=1; }
+for ipt in iptables ip6tables; do
+    if $ipt -w -N SG_NETLOCK_PROBE && $ipt -w -A SG_NETLOCK_PROBE -o lo -j ACCEPT &&
+       $ipt -w -L SG_NETLOCK_PROBE -n | grep -q ACCEPT &&
+       $ipt-save > /run/sg-netlock-$ipt.save && $ipt-restore --test < /run/sg-netlock-$ipt.save &&
+       $ipt -w -F SG_NETLOCK_PROBE && $ipt -w -X SG_NETLOCK_PROBE; then
+        echo "PASS  $ipt: chain added, saved, restored (--test), removed"
+    else
+        echo "FAIL  $ipt could not add/save/restore/remove a chain"; r=1
+        $ipt -w -F SG_NETLOCK_PROBE 2>/dev/null; $ipt -w -X SG_NETLOCK_PROBE 2>/dev/null
+    fi
+    rm -f /run/sg-netlock-$ipt.save
+done
+exit $r
+EOF
+chmod 0700 /run/sg-netlock-probe.sh
+if out=$(systemd-run --quiet --wait --pipe --collect --unit=sg-netlock-probe \
+        -p Type=oneshot -p User=root /run/sg-netlock-probe.sh 2>&1); then
+    printf '%s\n' "$out"
+    pass "the lock goes up and down from a system service"
+else
+    printf '%s\n' "$out"
+    fail "the lock does not work from a system service"
+fi
+rm -f /run/sg-netlock-probe.sh
+
+if [ -n "$USER_NAME" ] && id "$USER_NAME" >/dev/null 2>&1; then
+    if runuser -u "$USER_NAME" -- sh -c 'PATH=/usr/sbin:/usr/bin:/sbin:/bin nft add table inet sg_netlock_user' >/dev/null 2>&1; then
+        fail "$USER_NAME changed the firewall without elevation"
+        nft delete table inet sg_netlock_user 2>/dev/null
+    else pass "$USER_NAME cannot change the firewall without elevation"; fi
+fi
+
+case "$(systemctl is-enabled nftables.service 2>/dev/null)" in
+    enabled|enabled-runtime) fail "nftables.service is enabled: the image would load a firewall of its own at boot" ;;
+    *) pass "no firewall of the image's own at boot (nftables.service not enabled)" ;;
+esac
+
+[ "$RC" = 0 ] && echo "sg-netlock-check: PASS" || echo "sg-netlock-check: FAIL"
+exit "$RC"
