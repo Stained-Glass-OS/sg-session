@@ -10,7 +10,14 @@
 # now", "Later") is shown once per boot -- remembered by the boot's id -- and
 # never again until the next boot, if the person says Later.
 #
-#   SG_REBOOT_REQUIRED  SG_RESTART_SEEN  SG_BOOT_ID  SG_RESTART_NOTICE_CMD   for the test
+# Not while the session is locked: shown then, it timed out behind the lock
+# screen and was not shown again that boot (s14 regression walk,
+# 2026-10-06, an idle lock as the kernel update finished). It waits for the
+# unlock; and a notice still up when the session locks, which ends locked
+# (its 30 s ran out behind the lock screen), is shown again after it.
+#
+#   SG_REBOOT_REQUIRED  SG_RESTART_SEEN  SG_BOOT_ID  SG_RESTART_NOTICE_CMD
+#   SG_LOCK_STATUS_CMD   for the test
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -21,10 +28,22 @@ boot=$(cat "${SG_BOOT_ID:-/proc/sys/kernel/random/boot_id}" 2>/dev/null)
 [ -n "$boot" ] || exit 0
 mkdir -p "$(dirname "$SEEN")" 2>/dev/null
 [ "$(cat "$SEEN" 2>/dev/null)" = "$boot" ] && exit 0
+# the session locked (the compositor's control socket says so)?
+locked() {
+    _st=$(${SG_LOCK_STATUS_CMD:-${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-lockctl STATUS} 2>/dev/null)
+    case "$_st" in *locked*|*secure*) case "$_st" in *unlocked*) return 1 ;; esac; return 0 ;; esac
+    return 1
+}
+locked && exit 0
 printf '%s\n' "$boot" > "$SEEN" 2>/dev/null || exit 0
-if [ -n "${SG_RESTART_NOTICE_CMD:-}" ]; then
-    $SG_RESTART_NOTICE_CMD &
-else
-    wine "${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-restart-notice64.exe" >/dev/null 2>&1 &
-fi
+(
+    if [ -n "${SG_RESTART_NOTICE_CMD:-}" ]; then
+        $SG_RESTART_NOTICE_CMD
+    else
+        wine "${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-restart-notice64.exe" >/dev/null 2>&1
+    fi
+    # gone while the session is locked: its time ran out unseen -- again
+    # after the unlock
+    if locked; then rm -f "$SEEN"; fi
+) &
 exit 0

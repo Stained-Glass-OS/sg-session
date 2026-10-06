@@ -13,9 +13,11 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
 printf '#!/bin/sh\necho shown >> "%s/shown"\n' "$T" > "$T/show"; chmod +x "$T/show"
 echo boot-1 > "$T/boot_id"
+echo "OK unlocked" > "$T/lockstate"
+printf '#!/bin/sh\ncat "%s/lockstate"\n' "$T" > "$T/status"; chmod +x "$T/status"
 run() {
     SG_REBOOT_REQUIRED="$T/reboot-required" SG_RESTART_SEEN="$T/state/seen" SG_BOOT_ID="$T/boot_id" \
-        SG_RESTART_NOTICE_CMD="$T/show" sh "${1:-$HERE/lib/sg-restart-notify}"
+        SG_RESTART_NOTICE_CMD="$T/show" SG_LOCK_STATUS_CMD="$T/status" sh "${1:-$HERE/lib/sg-restart-notify}"
     sleep 0.3
 }
 n() { if [ -f "$T/shown" ]; then wc -l < "$T/shown"; else echo 0; fi; }
@@ -26,6 +28,24 @@ run; run
 [ "$(n)" = 1 ] && pass "a restart is needed: shown, once this boot" || fail "shown $(n) times"
 echo boot-2 > "$T/boot_id"; run
 [ "$(n)" = 2 ] && pass "...and again the next boot, if it is still needed" || fail "next boot: shown $(n) times"
+# not while locked; after the unlock
+echo boot-3 > "$T/boot_id"; echo "OK locked" > "$T/lockstate"; run; run
+[ "$(n)" = 2 ] && pass "locked: not shown behind the lock screen" || fail "locked: shown ($(n))"
+echo "OK unlocked" > "$T/lockstate"; run
+[ "$(n)" = 3 ] && pass "...and shown once unlocked" || fail "after the unlock: shown $(n) times"
+# a notice that ends while the session is locked (timed out behind the lock screen): again after the unlock
+printf '#!/bin/sh\necho shown >> "%s/shown"\necho "OK locked" > "%s/lockstate"\n' "$T" "$T" > "$T/show"
+echo boot-4 > "$T/boot_id"; run; sleep 0.5; run
+[ "$(n)" = 4 ] && pass "a notice that ran out behind the lock screen is not shown again while locked" || fail "locked after: shown $(n) times"
+printf '#!/bin/sh\necho shown >> "%s/shown"\n' "$T" > "$T/show"
+echo "OK unlocked" > "$T/lockstate"; run
+[ "$(n)" = 5 ] && pass "...and is shown again after the unlock" || fail "after the unlock: shown $(n) times"
+# mutant: shown while locked
+sed 's/^locked \&\& exit 0$/:/' "$HERE/lib/sg-restart-notify" > "$T/mutlock"
+cmp -s "$T/mutlock" "$HERE/lib/sg-restart-notify" && fail "the lock mutant did not change anything"
+echo boot-5 > "$T/boot_id"; echo "OK locked" > "$T/lockstate"; run "$T/mutlock"
+[ "$(n)" = 6 ] && pass "MUTANT SHOWN-WHILE-LOCKED caught" || fail "MUTANT SHOWN-WHILE-LOCKED not caught"
+echo "OK unlocked" > "$T/lockstate"
 # the kernel-install plugin
 P="$HERE/kernel/93-sg-reboot-required.install"
 rm -f "$T/rr"

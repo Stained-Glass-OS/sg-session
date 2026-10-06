@@ -1,3 +1,16 @@
+sg-session (0.1.0-138) unstable; urgency=medium
+
+  * Restart to finish updating is not lost behind the lock screen: shown
+    while the session was locked (an idle lock as the kernel update
+    finished, s14 regression walk 2026-10-06), it timed out unseen and was
+    not shown again that boot. sg-restart-notify asks the compositor
+    (sg-lockctl STATUS) and waits for the unlock; a notice that ends while
+    the session is locked (its time ran out behind the lock screen) is
+    shown again after the unlock. Test: test/restart-notify-test.sh
+    (mutant SHOWN-WHILE-LOCKED).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 10:12:10 -0700
+
 sg-session (0.1.0-137) unstable; urgency=medium
 
   * C:\windows is the system's (sg_windows_protected, every boot): users
