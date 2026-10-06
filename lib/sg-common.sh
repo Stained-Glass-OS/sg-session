@@ -54,8 +54,16 @@ sg_desktop_follow() {
         _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
         if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi
         sg_log "the output is now $_df_now (was $_df_last): the desktop follows"
+        # (sg-settings --set desktop also sets the recommended display scale
+        # for the new size, unless the user picked one)
         [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
         _df_last=$_df_now
+        # Linux programs started from now on, and the work area above the
+        # taskbar, at the scale now in use
+        _df_lp=$(sg_reg_dword 'HKCU\Control Panel\Desktop' LogPixels)
+        SG_SCALE=$(( ${_df_lp:-96} * 100 / 96 ))
+        sg_x_resources "$SG_SCALE"
+        sg_x11_workarea "${_df_now%x*}" "${_df_now#*x}"
     done
 }
 
@@ -403,6 +411,149 @@ sg_linux_app_env() {
     fi
 }
 
+# ---- the display scale (high-resolution screens) ------------------------------
+# David 2026-10-05, a Surface Pro 7 (2736x1824, 12.3"): "everything is tiny";
+# "the taskbar will take up the same % of screen as on a 1080p screen does".
+# The scale (Windows' LogPixels, HKCU\Control Panel\Desktop) is the
+# recommended one for the screen until the user picks one in Settings >
+# Display: the shorter side over 1080, to the nearest of Windows' 25% steps,
+# never below 100% (1080p and smaller stay exactly as they were), at most
+# 400% -- 1440 lines 125%, 1824 175%, 2160 200%. Windows weighs the panel's
+# physical size (EDID) too; here the screen's lines alone decide, so a
+# picture takes the same share of every screen. The same rule is sg-shell's
+# scale_for_screen (Settings, --set scale auto|metrics|desktop): keep them
+# in step (test/display-scale-test.sh and sg-shell's test/hidpi-check.sh
+# check the same table).
+#   sg_scale_for W H   -> percent
+sg_scale_for() {
+    _ss=$1
+    [ "$2" -lt "$_ss" ] 2>/dev/null && _ss=$2
+    case "$_ss" in ''|*[!0-9]*) echo 100; return 0 ;; esac
+    _sq=$(( (_ss * 4 + 540) / 1080 ))
+    [ "$_sq" -lt 4 ] && _sq=4
+    [ "$_sq" -gt 16 ] && _sq=16
+    echo $(( _sq * 25 ))
+}
+
+# A REG_DWORD of the current account's (wine reg query), in decimal; empty
+# when there is none.   sg_reg_dword KEY NAME
+sg_reg_dword() {
+    _rd=$(wine reg query "$1" /v "$2" 2>/dev/null | tr -d '\r' | awk -v n="$2" '$1 == n && $2 == "REG_DWORD" { print $3; exit }')
+    [ -n "$_rd" ] && printf '%d\n' "$_rd"
+    return 0
+}
+
+# The automatic scale for this account on a WxH screen, before its Windows
+# programs start (they read LogPixels once, at their start): the
+# recommended one, unless the user picked one -- sg-shell's scale_auto,
+# whose registry values these are (Software\Stained Glass\Display:
+# ScaleChosen, the pick sticks; AutoLogPixels, what this last wrote; a
+# LogPixels other than that and 96 was picked before this existed, and is
+# the user's). Prints the scale in use, in percent. Needs sg_wine_env.
+#   sg_auto_scale W H
+sg_auto_scale() {
+    _as_want=$(( $(sg_scale_for "$1" "$2") * 96 / 100 ))
+    _as_lp=$(sg_reg_dword 'HKCU\Control Panel\Desktop' LogPixels)
+    _as_key='HKCU\Software\Stained Glass\Display'
+    # both of the key's values in one wine start (sign-in waits on this)
+    _as_vals=$(wine reg query "$_as_key" 2>/dev/null | tr -d '\r')
+    _as_chosen=$(echo "$_as_vals" | awk '$1 == "ScaleChosen" && $2 == "REG_DWORD" { print $3 }')
+    _as_auto=$(echo "$_as_vals" | awk '$1 == "AutoLogPixels" && $2 == "REG_DWORD" { print $3 }')
+    [ -n "$_as_chosen" ] && _as_chosen=$(printf '%d' "$_as_chosen")
+    [ -n "$_as_auto" ] && _as_auto=$(printf '%d' "$_as_auto")
+    if [ "${_as_chosen:-0}" != 0 ]; then
+        :
+    elif [ -n "$_as_lp" ] && [ "$_as_lp" != 96 ] && [ "$_as_lp" != "${_as_auto:-}" ]; then
+        wine reg add "$_as_key" /v ScaleChosen /t REG_DWORD /d 1 /f >/dev/null 2>&1
+    elif [ "${_as_lp:-96}" != "$_as_want" ]; then
+        if wine reg add 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$_as_want" /f >/dev/null 2>&1; then
+            wine reg add "$_as_key" /v AutoLogPixels /t REG_DWORD /d "$_as_want" /f >/dev/null 2>&1
+            sg_log "display scale: $(( _as_want * 100 / 96 ))% for the ${1}x$2 screen (LogPixels $_as_want)"
+            _as_lp=$_as_want
+        fi
+    fi
+    echo $(( ${_as_lp:-96} * 100 / 96 ))
+}
+
+# The screen's size, from the X server ($DISPLAY): WxH, or nothing.
+sg_x_size() {
+    xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}'
+}
+
+# The login screen, Setup, the first-run setup, the lock screen and the
+# consent prompt are Windows programs that do not scale themselves: Wine
+# draws them at their account's display scale. Their accounts (the
+# greeter's, the machine's) never pick one, so it is the screen's
+# recommended one; set before the program starts, once per screen size and
+# boot (a note in the runtime directory keeps the next start quick).
+#   sg_ui_scale        (needs sg_wine_env and DISPLAY)
+sg_ui_scale() {
+    _us_size=""
+    _us_i=0
+    while [ -z "$_us_size" ] && [ "$_us_i" -lt 20 ]; do
+        _us_size=$(sg_x_size)
+        [ -n "$_us_size" ] || { sleep 0.25; _us_i=$((_us_i + 1)); }
+    done
+    [ -n "$_us_size" ] || return 0
+    _us_note="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sg-ui-scale.$(id -u)"
+    [ "$(cat "$_us_note" 2>/dev/null)" = "$_us_size" ] && return 0
+    sg_auto_scale "${_us_size%x*}" "${_us_size#*x}" >/dev/null
+    echo "$_us_size" > "$_us_note" 2>/dev/null || :
+    return 0
+}
+
+# The taskbar's height at a scale, as explorer sizes it (wine-sg 0832: 40 px
+# at 100%, in eighths of the scale).   sg_taskbar_h PERCENT
+sg_taskbar_h() {
+    _tb_dpi=$(( $1 * 96 / 100 ))   # LogPixels, a whole number, as explorer reads it
+    _tb8=$(( (_tb_dpi * 8 + 48) / 96 ))
+    [ "$_tb8" -gt 24 ] && _tb8=24
+    echo $(( (40 * _tb8 + 4) / 8 ))
+}
+
+# Linux programs at the display scale (Xwayland draws them 1:1; the
+# compositor's outputs stay at scale 1, or Xwayland -- Wine -- would be
+# stretched): GTK by whole steps (GDK_SCALE: 2 from 150%) and its text by
+# Xft.dpi, the whole step taken back from the text (GDK_DPI_SCALE 1/2, GTK
+# 3: its text is then exactly the scale); Qt by the scale itself
+# (QT_SCALE_FACTOR); Xft and Xlib programs (xterm), Chromium and Electron
+# by Xft.dpi; the X pointer by XCURSOR_SIZE and Xcursor.size (24 px at
+# 100%). Set in this environment --
+# what the shell starts inherits it -- and the user's systemd manager's and
+# D-Bus activation's. At 100% nothing is set: as before.
+#   sg_linux_scale_env PERCENT
+sg_linux_scale_env() {
+    [ "${1:-100}" -gt 100 ] 2>/dev/null || return 0
+    _ls_g=$(( ($1 + 50) / 100 ))
+    GDK_SCALE=$_ls_g
+    GDK_DPI_SCALE=$(awk -v g="$_ls_g" 'BEGIN { printf "%.4g", 1 / g }')
+    QT_SCALE_FACTOR=$(awk -v p="$1" 'BEGIN { printf "%.4g", p / 100 }')
+    QT_AUTO_SCREEN_SCALE_FACTOR=0
+    XCURSOR_SIZE=$(( 24 * $1 / 100 ))
+    export GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR XCURSOR_SIZE
+    _ls_names="GDK_SCALE GDK_DPI_SCALE QT_SCALE_FACTOR QT_AUTO_SCREEN_SCALE_FACTOR XCURSOR_SIZE"
+    # shellcheck disable=SC2086  # the names, split
+    systemctl --user import-environment $_ls_names >/dev/null 2>&1 || true
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        dbus-update-activation-environment $_ls_names >/dev/null 2>&1 || true
+    fi
+    sg_x_resources "$1"
+}
+
+# Xft.dpi and Xcursor.size in the X server's resources (xrdb): read by Xft
+# and Xlib programs, Chromium and Electron, libXcursor; changed while the
+# session runs too (the screen changed, a new scale). At 100% they are
+# taken back to 96 and 24 only where an earlier scale set them.
+#   sg_x_resources PERCENT
+sg_x_resources() {
+    command -v xrdb >/dev/null 2>&1 || return 0
+    if [ "${1:-100}" -le 100 ] 2>/dev/null; then
+        xrdb -query 2>/dev/null | grep -q '^Xft\.dpi:' || return 0
+    fi
+    printf 'Xft.dpi: %s\nXcursor.size: %s\n' $(( 96 * $1 / 100 )) $(( 24 * $1 / 100 )) | xrdb -merge 2>/dev/null || :
+}
+
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
 # Images before 2026-10-02 carried a lab-only setup in /etc, outside any
 # package: sshd started only when root had keys (the gates'), and passwords
@@ -653,8 +804,10 @@ sg_x11_workarea() {
     # by. Their Wine frame keeps the shadow outside itself and sizes them by
     # its own edge (wine-sg 0813, 0842).
     [ "$_rc" -eq 0 ] && sg_x11_add_supported _GTK_FRAME_EXTENTS 2>/dev/null
-    xprop -root -f _NET_WORKAREA 32c -set _NET_WORKAREA "0, 0, $_w, $((_h - ${SG_TASKBAR_H:-40}))" 2>/dev/null &&
-        sg_log "work area for Linux programs: ${_w}x$((_h - ${SG_TASKBAR_H:-40}))"
+    # the taskbar's height at the display scale (SG_SCALE, sg-run-explorer's)
+    _bar=${SG_TASKBAR_H:-$(sg_taskbar_h "${SG_SCALE:-100}")}
+    xprop -root -f _NET_WORKAREA 32c -set _NET_WORKAREA "0, 0, $_w, $((_h - _bar))" 2>/dev/null &&
+        sg_log "work area for Linux programs: ${_w}x$((_h - _bar))"
     return 0
 }
 

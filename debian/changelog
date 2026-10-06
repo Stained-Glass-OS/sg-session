@@ -1,3 +1,32 @@
+sg-session (0.1.0-120) unstable; urgency=medium
+
+  * High-resolution screens (David 2026-10-05, a Surface Pro 7 at
+    2736x1824: "everything is tiny"; "the taskbar will take up the same % of
+    screen as on a 1080p screen does"). The display scale (LogPixels) is the
+    screen's recommended one until the user picks one in Settings: the
+    shorter side over 1080, to the nearest of Windows' 25% steps, never
+    below 100% -- 1440 lines 125%, 1824 175%, 2160 200%; 1080p and smaller
+    stay at 100% and nothing is written for them (sg_scale_for; the same
+    rule as sg-shell's Settings, whose ScaleChosen pick sticks). Set before
+    the shell starts (sg-run-explorer, sg_auto_scale), so every Windows
+    program starts at it; the screen changing size follows (sg-shell's
+    --set desktop). Linux programs get it too: GDK_SCALE (whole steps, from
+    150%) with Xft.dpi for the text, QT_SCALE_FACTOR, XCURSOR_SIZE and
+    Xcursor.size (xrdb: Depends x11-xserver-utils), in the session's,
+    systemd's and D-Bus's environment; at 100% nothing is set. The work area above the taskbar is the taskbar's
+    scaled height (70 px at 175%). The login screen, Setup on the live
+    medium, the first-run setup, the lock screen and the consent prompt run
+    at the screen's recommended scale (lib/sg-ui-scale, sg_ui_scale): they
+    were a small box in the middle of the screen. Setup's and the first-run
+    setup's backdrop reaches the screen's bottom at every height (a 1042-line
+    screen was left a black band). Tests: test/display-scale-test.sh
+    (mutants NO_STICK, LINUX_NO_SCALE, RECOMMEND_100), test/hidpi-ui-e2e.sh
+    (make test-hidpi: Setup and the first-run setup at 2736x1824 the share
+    of the screen they have at 1080p, GTK 3 and 4 programs scaled; mutants
+    UI_NO_SCALE, LINUX_NO_SCALE, SG_MUTANT_BACKDROP_SHORT).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 19:00:00 -0700
+
 sg-session (0.1.0-119) unstable; urgency=medium
 
   * Kernel updates start (all installed machines): a machine Setup

@@ -958,7 +958,14 @@ static COLORREF shade( int y, int h, int dr, int dg, int db )
 static void build_backdrop( HDC ref, int w, int h )
 {
     enum { CELL = 150 };
+    /* the grid's last line is half a cell in from its edge, jittered from
+     * there: one more row and column than the screen holds whole, or a
+     * screen 1042 lines tall (2736x1824 at 175%) was left a black band */
+#ifndef SG_MUTANT_BACKDROP_SHORT
+    int cols = w / CELL + 3, rows = h / CELL + 3, i, j;
+#else
     int cols = w / CELL + 2, rows = h / CELL + 2, i, j;
+#endif
     POINT *v = malloc( sizeof(POINT) * cols * rows );
     HDC dc = CreateCompatibleDC( ref );
     HPEN lead = CreatePen( PS_SOLID, 3, RGB(0x07, 0x08, 0x1A) ), oldp;

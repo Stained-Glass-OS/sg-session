@@ -31,7 +31,7 @@ if grep -qw systemd.volatile=overlay /proc/cmdline 2>/dev/null && [ "${SG_SETUP:
         && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-setup64.exe" ]; then
     result=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/sg-setup-result.XXXXXX") || exit 1
     SG_SETUP_RESULT="$result" systemd-cat -t sg-setup -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" \
-        "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-setup64.exe"
+        "env -u WAYLAND_DISPLAY $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-setup64.exe"
     answer=$(cat "$result" 2>/dev/null)
     rm -f "$result"
     if [ "$answer" = try ] && getent passwd live >/dev/null; then
@@ -63,7 +63,7 @@ if [ -f "$OOBE_PENDING" ] && [ "${SG_OOBE:-1}" != 0 ] && [ -S "$OOBE_SOCK" ] \
     ready="${TMPDIR:-/tmp}/sg-oobe-ready.$(id -u)"
     rm -f "$ready"
     SG_OOBE_READY="$ready" SG_OOBED_SOCK="$OOBE_SOCK" systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -- \
-        "$LIBEXEC/sg-setup-bridge" --oobe "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-oobe64.exe" &
+        "$LIBEXEC/sg-setup-bridge" --oobe "env -u WAYLAND_DISPLAY $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-oobe64.exe" &
     pid=$!
     waited=0
     while [ ! -e "$ready" ] && kill -0 "$pid" 2>/dev/null; do
@@ -95,4 +95,4 @@ fi
 # not forward a greeter's output anywhere.
 # -s: Ctrl+Alt+F1-F9 reach the text consoles from the sign-in screen too
 exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -s -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
-    "env -u WAYLAND_DISPLAY wine $LIBEXEC/sg-greeter64.exe"
+    "env -u WAYLAND_DISPLAY $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-greeter64.exe"

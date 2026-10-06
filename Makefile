@@ -21,7 +21,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
-               lib/sg-oobe-user lib/sg-oobe-browser
+               lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
 
@@ -252,6 +252,7 @@ lint:
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
+	@sh test/display-scale-test.sh
 	@sh test/systemroot-temp-test.sh
 	@sh test/ssh-migrate-test.sh
 	@sh test/oobe-browser-linux-test.sh
@@ -472,6 +473,12 @@ procagent:
 	    $(MINGW64) -O2 -o build/sg-procmem-probe.exe test/sg-procmem-probe.c && \
 	    echo "built: build/sg-procagent build/sg-procmem-probe.exe"; \
 	else echo "built: build/sg-procagent (SKIP probe: no mingw)"; fi
+
+# High-resolution screens: Setup, the first-run setup and GTK programs at
+# 2736x1824 (Xvfb, a real Wine; SG_WINE_DIR for another one).
+.PHONY: test-hidpi
+test-hidpi: greeter
+	@sh test/hidpi-ui-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 .PHONY: test-greeter
 test-greeter: greeter

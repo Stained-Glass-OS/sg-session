@@ -94,9 +94,6 @@ if [ "${SG_DESKTOP_AUTO:-1}" != 0 ] && [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && 
     fi
 fi
 
-# The work area for Linux programs: the screen less the taskbar (sg-common.sh).
-[ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && sg_x11_workarea "${GEOM%x*}" "${GEOM#*x}"
-
 # Publish where the session lives, so a check running over ssh can attach to it
 # without having to guess. Without this the gate cannot find the display.
 mkdir -p "$SG_STATE"
@@ -149,6 +146,19 @@ reg_set() {
 # fullscreen compositor covers the desktop and taskbar entirely.
 reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
 reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
+
+# The display scale: the recommended one for this screen unless the user
+# picked one (sg-common.sh sg_auto_scale; David 2026-10-05, a Surface Pro 7
+# at 2736x1824: "everything is tiny"). Set before the shell starts, as
+# Windows programs read it at their start; Linux programs take it from the
+# environment the shell hands them (sg_linux_scale_env). At 1080p and below
+# it is 100% and nothing changes.
+SG_SCALE=$(sg_auto_scale "${GEOM%x*}" "${GEOM#*x}")
+export SG_SCALE
+sg_linux_scale_env "$SG_SCALE"
+
+# The work area for Linux programs: the screen less the taskbar (sg-common.sh).
+[ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && sg_x11_workarea "${GEOM%x*}" "${GEOM#*x}"
 
 # Microsoft Office draws in software unless the user chose otherwise: its
 # hardware drawing shares Direct3D textures the Vulkan layer cannot share

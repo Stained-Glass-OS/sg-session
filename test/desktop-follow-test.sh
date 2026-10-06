@@ -16,9 +16,10 @@ s=$(head -n 1 "$Q"); [ -n "$s" ] && sed -i 1d "$Q"
 echo "$s" > "$Q.last"
 printf '  Width: %s\n  Height: %s\n' "${s%x*}" "${s#*x}"
 W
+# (the display scale's registry reads after a change are not the desktop's)
 cat > "$T/bin/wine" <<'W'
 #!/bin/sh
-echo "${*##*/}" >> "$Q.args"
+case "$*" in *sg-settings64.exe*) echo "${*##*/}" >> "$Q.args" ;; esac
 W
 chmod +x "$T/bin/xwininfo" "$T/bin/wine"
 printf '%s\n' 1280x800 1280x800 1920x1080 1920x1080 1920x1080 1024x768 > "$T/q"
