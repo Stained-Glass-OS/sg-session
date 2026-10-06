@@ -1,3 +1,14 @@
+sg-session (0.1.0-130) unstable; urgency=medium
+
+  * GTK at the display scale itself: the session's XSETTINGS manager also
+    gives Gdk/SgFractionalScale (the scale in 1024ths, above 100%), which
+    our GTK packages (sg-image gtk-scale: libgtk-3-0t64, libgtk-4-1 +sg)
+    draw at -- 175% exactly, not 200%; Debian's GTK ignores it.
+    test/hidpi-ui-e2e.sh wants 1.75 times from GTK 3 and 4 where ours is
+    installed. Test: test/display-scale-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 00:30:00 -0700
+
 sg-session (0.1.0-129) unstable; urgency=medium
 
   * Linux programs print through a printer's Windows driver (David

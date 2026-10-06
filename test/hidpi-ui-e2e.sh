@@ -163,15 +163,20 @@ linux_live() {
     echo "${a3%x*} ${b3%x*} ${a4%x*} ${b4%x*} ${aq%x*} ${bq%x*}" | sed 's/  */ /g; s/^ //' | awk '{for (i = 1; i <= 6; i++) printf "%s ", ($i == "" ? 0 : $i); print ""}'
 }
 ratio_in() { awk -v a="$1" -v b="$2" -v lo="$3" -v hi="$4" 'BEGIN { exit !(a > 0 && b / a >= lo && b / a <= hi) }'; }
+# our GTK (sg-image gtk-scale, version +sg...) draws at the scale itself:
+# 1.75 times; Debian's at the next whole step, 2
+g3lo=1.6 g3hi=2.1 g4lo=1.6 g4hi=2.1
+case "$(dpkg-query -W -f='${Version}' libgtk-3-0t64 2>/dev/null)" in *+sg*) g3lo=1.73 g3hi=1.77 ;; esac
+case "$(dpkg-query -W -f='${Version}' libgtk-4-1 2>/dev/null)" in *+sg*) g4lo=1.73 g4hi=1.77 ;; esac
 set -- $(linux_live "$HERE/lib" 175)
 ok=1
-ratio_in "$1" "$2" 1.6 2.1 || ok=0
-[ "$3" = 0 ] || ratio_in "$3" "$4" 1.6 2.1 || ok=0
+ratio_in "$1" "$2" $g3lo $g3hi || ok=0
+[ "$3" = 0 ] || ratio_in "$3" "$4" $g4lo $g4hi || ok=0
 [ "$5" = 0 ] || ratio_in "$5" "$6" 1.73 1.77 || ok=0
 if [ $ok = 1 ]; then
-    pass "Linux programs follow 100% -> 175% while they run: GTK 3 $1 -> $2 px wide, GTK 4 (zenity) $3 -> $4, Qt ($QTPY) $5 -> $6 (exactly 1.75 times)"
+    pass "Linux programs follow 100% -> 175% while they run: GTK 3 $1 -> $2 px wide ($g3lo-$g3hi times), GTK 4 (zenity) $3 -> $4 ($g4lo-$g4hi), Qt ($QTPY) $5 -> $6 (exactly 1.75 times)"
 else
-    fail "Linux programs, 100% -> 175% while they run: GTK 3 $1 -> $2, GTK 4 $3 -> $4 (want 1.6 to 2.1 times), Qt $5 -> $6 (want 1.75 times)"
+    fail "Linux programs, 100% -> 175% while they run: GTK 3 $1 -> $2 (want $g3lo-$g3hi times), GTK 4 $3 -> $4 (want $g4lo-$g4hi), Qt $5 -> $6 (want 1.75 times)"
 fi
 
 # --- mutants: each must fail what it breaks ------------------------------------------------

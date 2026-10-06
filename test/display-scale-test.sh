@@ -13,7 +13,7 @@
 #   - sg_taskbar_h: explorer's bar (wine-sg 0832), 40 px at 100%, 70 at 175%
 #   - sg_linux_scale_env: the XSETTINGS GTK, Qt and the pointer follow
 #     (xsettingsd's file: Xft/DPI, Gdk/WindowScalingFactor, Gdk/UnscaledDPI,
-#     Gtk/CursorThemeSize) and Xft.dpi/Xcursor.size at 175%, 150%, 125%;
+#     Gtk/CursorThemeSize, Gdk/SgFractionalScale above 100%) and Xft.dpi/Xcursor.size at 175%, 150%, 125%;
 #     96 DPI and scale 1 at 100% (a 1080p session as before); none of the
 #     fixed variables (GDK_SCALE, QT_SCALE_FACTOR ...) that stop GTK and Qt
 #     following a change, and Qt told to take the exact scale
@@ -142,13 +142,13 @@ linux() {   # LIB PERCENT: the environment, the XSETTINGS and the resources set
 }
 QT="QT_ENABLE_HIGHDPI_SCALING=1 QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough"
 l=$(linux "$LIB" 175)
-[ "$l" = "$QT Xft/DPI 172032 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 86016 Gtk/CursorThemeSize 42 Xft.dpi: 168 Xcursor.size: 42 " ] \
+[ "$l" = "$QT Xft/DPI 172032 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 86016 Gtk/CursorThemeSize 42 Gdk/SgFractionalScale 1792 Xft.dpi: 168 Xcursor.size: 42 " ] \
     && pass "Linux programs at 175%: $l" || fail "Linux programs at 175%: '$l'"
 l=$(linux "$LIB" 150)
-[ "$l" = "$QT Xft/DPI 147456 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 73728 Gtk/CursorThemeSize 36 Xft.dpi: 144 Xcursor.size: 36 " ] \
+[ "$l" = "$QT Xft/DPI 147456 Gdk/WindowScalingFactor 2 Gdk/UnscaledDPI 73728 Gtk/CursorThemeSize 36 Gdk/SgFractionalScale 1536 Xft.dpi: 144 Xcursor.size: 36 " ] \
     && pass "Linux programs at 150%: $l" || fail "Linux programs at 150%: '$l'"
 l=$(linux "$LIB" 125)
-[ "$l" = "$QT Xft/DPI 122880 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 122880 Gtk/CursorThemeSize 30 Xft.dpi: 120 Xcursor.size: 30 " ] \
+[ "$l" = "$QT Xft/DPI 122880 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 122880 Gtk/CursorThemeSize 30 Gdk/SgFractionalScale 1280 Xft.dpi: 120 Xcursor.size: 30 " ] \
     && pass "Linux programs at 125%: $l" || fail "Linux programs at 125%: '$l'"
 l=$(linux "$LIB" 100)
 [ "$l" = "$QT Xft/DPI 98304 Gdk/WindowScalingFactor 1 Gdk/UnscaledDPI 98304 Gtk/CursorThemeSize 24 Xft.dpi: 96 Xcursor.size: 24 " ] \

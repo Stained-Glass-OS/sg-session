@@ -536,9 +536,11 @@ sg_taskbar_h() {
 # stretched), so each toolkit scales itself, told by an XSETTINGS manager
 # (xsettingsd) that the session runs on its X display, and by the X
 # resources:
-#   - GTK 3 and 4: Gdk/WindowScalingFactor (whole steps: 2 from 150%) and
+#   - GTK 3 and 4: Gdk/SgFractionalScale, the scale itself, which our GTK
+#     packages (sg-image gtk-scale) draw at -- 175% exactly; Debian's
+#     GTK takes Gdk/WindowScalingFactor (whole steps: 2 from 150%) and
 #     Gdk/UnscaledDPI (the text's DPI at that step, so the text is exactly
-#     the scale); they follow a change at once. No GDK_SCALE: GTK ignores
+#     the scale). They follow a change at once. No GDK_SCALE: GTK ignores
 #     XSETTINGS' scale when it is set.
 #   - Qt 5 and 6: Xft/DPI, with QT_ENABLE_HIGHDPI_SCALING=1 and
 #     QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough -- the exact scale
@@ -585,6 +587,10 @@ sg_xsettings_conf() {
     printf 'Gdk/WindowScalingFactor %d\n' "$_xc_g"
     printf 'Gdk/UnscaledDPI %d\n' $(( _xc_dpi * 1024 / _xc_g ))
     printf 'Gtk/CursorThemeSize %d\n' $(( 24 * _xc_p / 100 ))
+    # the scale as it is, for our GTK (sg-image gtk-scale: libgtk-3-0t64 and
+    # libgtk-4-1 +sg): 1.75, not 2 -- in 1024ths; other GTKs ignore it
+    [ "$_xc_p" -gt 100 ] && printf 'Gdk/SgFractionalScale %d\n' $(( 1024 * _xc_p / 100 ))
+    return 0
 }
 
 # Linux programs at PERCENT, at once: the XSETTINGS manager of this X
