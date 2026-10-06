@@ -13,8 +13,13 @@
 #   - sg_taskbar_h: explorer's bar (wine-sg 0832), 40 px at 100%, 70 at 175%
 #   - sg_linux_scale_env: GTK, Qt, Xcursor and Xft.dpi at 175% and 150%;
 #     nothing at all at 100% (a 1080p session as before)
+#   - sg_ui_scale: the login screen's scale in its environment
+#     (SG_LOGPIXELS), the size from the kernel, no Wine or X run before it;
+#     nothing at 1080p
 # Mutants (sed on a copy of the library): NO_STICK (the pick ignored),
-# LINUX_NO_SCALE (Linux programs left at 100%), RECOMMEND_100.
+# LINUX_NO_SCALE (Linux programs left at 100%), UI_REGISTRY (the scale
+# written with wine reg first, as 0.1.0-120 did), UI_XSIZE (the size from
+# the X server, starting Xwayland), RECOMMEND_100.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -118,6 +123,32 @@ l=$(linux "$LIB" 125)
 l=$(linux "$LIB" 100)
 [ -z "$l" ] && pass "at 100% nothing is set: a 1080p session's Linux programs as before" || fail "at 100%: '$l'"
 
+# sg_ui_scale (the login screen, Setup, the first-run setup): the scale in
+# the program's environment, the screen's size from the kernel (a stand-in
+# /sys/class/drm: a disconnected 4K output and the connected one), and no
+# Wine or X program run before it -- wine reg as the greeter's account, and
+# xwininfo starting the on-demand Xwayland, each left the greeter without
+# its window (release s9's boot test, 2026-10-05). With "x" (the lock
+# screen's own Xwayland) and no DRM output, the X server's size.
+ui() {   # LIB WxH [x]: SG_LOGPIXELS as left, then the Wine and X calls made
+    fresh
+    rm -rf "$T/drm"; mkdir -p "$T/drm/card0-DP-1" "$T/drm/card0-eDP-1"
+    echo disconnected > "$T/drm/card0-DP-1/status"; printf '3840x2160\n' > "$T/drm/card0-DP-1/modes"
+    if [ "$2" != none ]; then echo connected > "$T/drm/card0-eDP-1/status"; printf '%s\n1024x768\n' "$2" > "$T/drm/card0-eDP-1/modes"; fi
+    printf '#!/bin/sh\necho xwininfo >> "%s/calls"\nprintf "  Width: 2736\\n  Height: 1824\\n"\n' "$T" > "$T/bin/xwininfo"
+    chmod +x "$T/bin/xwininfo"
+    run "$1" "SG_DRM_SYSFS=$T/drm; sg_ui_scale ${3:-}; echo \"\${SG_LOGPIXELS:-none}\""
+    [ -s "$T/calls" ] && sed 's/ .*//' "$T/calls" | sort -u
+    rm -f "$T/bin/xwininfo"
+}
+u=$(ui "$LIB" 2736x1824 | tr '\n' ' ')
+[ "$u" = "168 " ] && pass "the login screen at 2736x1824: SG_LOGPIXELS=168 in its environment, from the kernel's mode; no Wine or X run before it" \
+    || fail "sg_ui_scale at 2736x1824: '$u' (want '168 ')"
+u=$(ui "$LIB" 1920x1080 | tr '\n' ' ')
+[ "$u" = "none " ] && pass "at 1920x1080: nothing set, nothing run" || fail "sg_ui_scale at 1080p: '$u'"
+u=$(ui "$LIB" none x | tr '\n' ' ')
+[ "$u" = "168 xwininfo " ] && pass "the lock screen's own X server, no DRM output: its size (2736x1824, 168)" || fail "sg_ui_scale x: '$u'"
+
 # --- mutants: the checks above catch each --------------------------------------------------
 mutant() {   # NAME SED CHECK
     sed "$2" "$LIB" > "$T/mut.sh"
@@ -128,5 +159,9 @@ mutant NO_STICK 's/if \[ "\${_as_chosen:-0}" != 0 \]; then/if false; then/; s/el
     '[ -n "$(stick "$T/mut.sh")" ]'
 mutant LINUX_NO_SCALE 's/\[ "\${1:-100}" -gt 100 \] 2>\/dev\/null || return 0/return 0/' \
     '[ "$(linux "$T/mut.sh" 175)" != "$(linux "$LIB" 175)" ]'
+mutant UI_REGISTRY 's/^    SG_LOGPIXELS=\$(( _us_pc \* 96 \/ 100 ))$/    sg_auto_scale "${_us_size%x*}" "${_us_size#*x}" >\/dev\/null; return 0/' \
+    '[ "$(ui "$T/mut.sh" 2736x1824 | tr "\n" " ")" != "168 " ]'
+mutant UI_XSIZE 's/^    _us_size=\$(sg_drm_size)$/    _us_size=$(sg_x_size)/' \
+    '[ "$(ui "$T/mut.sh" 2736x1824 | tr "\n" " ")" != "168 " ]'
 mutant RECOMMEND_100 's/echo \$(( _sq \* 25 ))/echo 100/' '[ -n "$(table "$T/mut.sh")" ]'
 exit $RC

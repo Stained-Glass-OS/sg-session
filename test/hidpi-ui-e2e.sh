@@ -4,8 +4,9 @@
 # 2026-10-05, a Surface Pro 7 at 2736x1824: "everything is tiny"; Setup on
 # the live medium, the first-run setup and the login screen must be usable).
 # Under Xvfb at 2736x1824, with a real Wine:
-#   1. Setup, started as sg-login-ui starts it (lib/sg-ui-scale), sets its
-#      account's scale to the recommended 175% and Wine draws it at that
+#   1. Setup, started as sg-login-ui starts it (lib/sg-ui-scale), is given
+#      the recommended 175% in its environment (SG_LOGPIXELS, wine-sg 0882;
+#      nothing written to its account's registry) and Wine draws it at that
 #      scale: its window takes the share of the screen's height it takes at
 #      1080p (600 of 1080 lines, within 8%), and the backdrop reaches the
 #      screen's bottom (a 1042-line screen was left a black band)
@@ -42,7 +43,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 export SG_PREFIX="$T/prefix" WINEPREFIX="$T/prefix" WINEDEBUG=-all XDG_RUNTIME_DIR="$T/run" SG_LOG_DIR="$T"
 export WINEDLLOVERRIDES="mscoree,mshtml=;${WINEDLLOVERRIDES:-winemenubuilder.exe=d}"
-mkdir -p "$T/run" "$T/lib"
+mkdir -p "$T/run" "$T/lib" "$T/drm/card0-eDP-1"
+# the kernel's view of the screen (sg_drm_size reads the preferred mode): a
+# Surface Pro 7's panel, as Xvfb is
+echo connected > "$T/drm/card0-eDP-1/status"; printf '2736x1824\n1920x1080\n' > "$T/drm/card0-eDP-1/modes"
+export SG_DRM_SYSFS="$T/drm"
 cp "$HERE"/lib/sg-common.sh "$HERE"/lib/sg-ui-scale "$T/lib/"
 cc -O2 -o "$T/gtk3probe" "$HERE/test/gtk3-scale-probe.c" -ldl || { fail "the GTK probe did not build"; exit 1; }
 
@@ -89,9 +94,9 @@ setup_h() {
 }
 h=$(setup_h "$T/lib" "$SETUP")
 lp=$(logpixels)
-share "$h" 1824 600 1080 && [ "$lp" = 168 ] \
-    && pass "Setup at 2736x1824: its account at 175% (LogPixels $lp), its window $h px tall, $(pct "$h" 1824) of the screen (1080p: 600 px, 55.6%)" \
-    || fail "Setup at 2736x1824: LogPixels '$lp', window $h px ($(pct "$h" 1824), want about 55.6%)"
+share "$h" 1824 600 1080 && [ -z "$lp" ] \
+    && pass "Setup at 2736x1824: at 175% (SG_LOGPIXELS, nothing written to its account), its window $h px tall, $(pct "$h" 1824) of the screen (1080p: 600 px, 55.6%)" \
+    || fail "Setup at 2736x1824: LogPixels written '$lp', window $h px ($(pct "$h" 1824), want about 55.6%)"
 cp "$T/setup.png" "$T/setup-scaled.png"
 python3 - "$T/setup-scaled.png" <<'EOS' && pass "Setup's backdrop reaches the screen's bottom (no black band)" || fail "Setup's backdrop leaves black at the bottom"
 import sys

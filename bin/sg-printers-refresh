@@ -28,8 +28,15 @@ RUN_USER="${SG_RUN_USER:-/run/user}"
 grep -q 'systemd.volatile=overlay' "$CMDLINE" 2>/dev/null && { echo "sg-printers-refresh: live boot"; exit 0; }
 ls "$RUN_USER"/*/sg-session.env >/dev/null 2>&1 || { echo "sg-printers-refresh: no one is signed in"; exit 0; }
 sg_machine_wineserver_up || { echo "sg-printers-refresh: the machine wineserver is not running"; exit 0; }
+# And in the services' window station, as the SCM's programs are, never
+# the interactive one (WinSta0) where the login screen, Setup and the
+# sessions' desktops are: there, with explorer.exe disabled, it took
+# WinSta0's Default desktop as the login screen started on it, and the login
+# screen waited on that desktop for good (release s9's first boot,
+# 2026-10-05).
 out=$(timeout 120 runuser -u "$SG_SYSTEM_USER" -- sh -c \
     '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; unset DISPLAY WAYLAND_DISPLAY
+     SG_WINSTATION="__wineservice_winstation\Default"; export SG_WINSTATION
      WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d;explorer.exe=d" wine wmic path Win32_Printer get Name' 2>/dev/null | tr -d '\r')
 echo "sg-printers-refresh: printers now: $(printf '%s\n' "$out" | sed '1d; s/[[:space:]]*$//; /^$/d' | paste -sd, -)"
 exit 0

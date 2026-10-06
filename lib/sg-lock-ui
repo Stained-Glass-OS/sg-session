@@ -40,7 +40,7 @@ mode=/lock
 [ "${SG_LOCK_MODE:-}" = sas ] && mode=/sas
 # at the display scale the screen recommends (the machine's account never
 # picks one): on a high-resolution screen it was a small box (sg-common.sh)
-sg_ui_scale
+sg_ui_scale x
 wine "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-greeter64.exe" "$mode" "$user" 2>>"${SG_LOG_DIR:-/tmp}/lock-ui.log"
 rc=$?
 rm -rf "$XDIR"

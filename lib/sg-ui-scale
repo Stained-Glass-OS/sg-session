@@ -2,13 +2,15 @@
 # Runs a full-screen Windows program of the machine's -- the login screen,
 # Setup, the first-run setup -- at the display scale the screen recommends
 # (sg-common.sh sg_ui_scale): Wine draws programs that do not scale
-# themselves at their account's LogPixels, and the greeter's account never
-# picks one. On a Surface Pro 7 (2736x1824) these were a small box in the
-# middle of the screen (David 2026-10-05).
+# themselves at the process's display scale, handed to it here in its
+# environment (SG_LOGPIXELS); the greeter's account never picks one. On a
+# Surface Pro 7 (2736x1824) these were a small box in the middle of the
+# screen (David 2026-10-05). It runs no Wine or X program of its own (the
+# screen's size is the kernel's): either, run just before the greeter, left
+# the login screen without its window (2026-10-05).
 #   sg-ui-scale COMMAND [ARG...]
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 # shellcheck source=lib/sg-common.sh
 . "$SG_LIB/sg-common.sh"
-sg_wine_env
-sg_ui_scale
+sg_ui_scale ""   # the size from the kernel only: nothing may start the X server first
 exec "$@"

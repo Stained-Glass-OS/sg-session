@@ -1,3 +1,27 @@
+sg-session (0.1.0-123) unstable; urgency=medium
+
+  * sg-printers-refresh also runs in the services' window station, as the
+    SCM's programs do, never WinSta0: there (explorer.exe disabled) it took
+    WinSta0's Default desktop as the login screen started on it at first
+    boot, and the login screen waited on it for good -- release s9's boot
+    test, "session never started" (0.1.0-122 keeps it from running before
+    anyone signs in). Shown in a VM from s9's image: with the path unit
+    masked, or with this, the boot test passes; as built it fails, with or
+    without the scale changes below. Test: test/printers-refresh-test.sh
+    (--mutant-winsta: on WinSta0 -- fails).
+  * The login screen, Setup, the first-run setup, the lock screen and the
+    consent prompt get the screen's recommended scale in their environment
+    (SG_LOGPIXELS, wine-sg 0882) instead of wine reg run as their account
+    before them, and the screen's size from the kernel's preferred mode
+    (/sys/class/drm) instead of xwininfo, which started the compositor's
+    on-demand Xwayland ahead of the program (the lock screen and the
+    consent prompt, on an X server of their own, may still ask it). No Wine
+    or X program runs before them; nothing is written. Tests:
+    test/display-scale-test.sh (mutants UI_REGISTRY, UI_XSIZE),
+    test/hidpi-ui-e2e.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 20:50:00 -0700
+
 sg-session (0.1.0-122) unstable; urgency=medium
 
   * sg-printers-refresh runs only while someone is signed in, never on a

@@ -480,25 +480,43 @@ sg_x_size() {
     xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}'
 }
 
+# The screen's size before anything is drawn, from the kernel: the
+# preferred mode (the first of modes) of each connected output, the tallest
+# -- what the compositor shows at the login screen; SG_OUTPUT_SIZE where
+# the compositor is headless (a remote session). WxH, or nothing.
+sg_drm_size() {
+    case "${SG_OUTPUT_SIZE:-}" in [0-9]*x[0-9]*) echo "$SG_OUTPUT_SIZE"; return 0 ;; esac
+    for _ds_c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*-*; do
+        [ "$(cat "$_ds_c/status" 2>/dev/null)" = connected ] || continue
+        head -n 1 "$_ds_c/modes" 2>/dev/null
+    done | awk -F'x' '$1 > 0 && $2 + 0 > h { h = $2 + 0; s = $0 } END { if (s) print s }'
+}
+
 # The login screen, Setup, the first-run setup, the lock screen and the
 # consent prompt are Windows programs that do not scale themselves: Wine
-# draws them at their account's display scale. Their accounts (the
-# greeter's, the machine's) never pick one, so it is the screen's
-# recommended one; set before the program starts, once per screen size and
-# boot (a note in the runtime directory keeps the next start quick).
-#   sg_ui_scale        (needs sg_wine_env and DISPLAY)
+# draws them at the process's display scale. Their accounts (the greeter's,
+# the machine's) never pick one, so it is the screen's recommended one,
+# handed to the program in its environment (SG_LOGPIXELS, which wine-sg
+# 0882 takes over the registry's). Nothing is written and no Wine or X
+# program runs before it (2026-10-05, release s9's boot test: wine reg run
+# as the greeter's account left the login screen without its window, and
+# so did measuring the screen with xwininfo first -- it started the
+# compositor's on-demand Xwayland, which went away again (-terminate 10)
+# while Wine, slow at boot, was still starting). The size comes from the
+# kernel (sg_drm_size); "x": from the X server, where it is already up and
+# stays (the lock screen's and the consent prompt's own Xwayland). At 100%
+# nothing is set.
+#   sg_ui_scale [x]        (exports SG_LOGPIXELS)
 sg_ui_scale() {
-    _us_size=""
-    _us_i=0
-    while [ -z "$_us_size" ] && [ "$_us_i" -lt 20 ]; do
+    _us_size=$(sg_drm_size)
+    if [ -z "$_us_size" ] && [ "${1:-}" = x ]; then
         _us_size=$(sg_x_size)
-        [ -n "$_us_size" ] || { sleep 0.25; _us_i=$((_us_i + 1)); }
-    done
+    fi
     [ -n "$_us_size" ] || return 0
-    _us_note="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sg-ui-scale.$(id -u)"
-    [ "$(cat "$_us_note" 2>/dev/null)" = "$_us_size" ] && return 0
-    sg_auto_scale "${_us_size%x*}" "${_us_size#*x}" >/dev/null
-    echo "$_us_size" > "$_us_note" 2>/dev/null || :
+    _us_pc=$(sg_scale_for "${_us_size%x*}" "${_us_size#*x}")
+    [ "$_us_pc" -gt 100 ] || return 0
+    SG_LOGPIXELS=$(( _us_pc * 96 / 100 ))
+    export SG_LOGPIXELS
     return 0
 }
 

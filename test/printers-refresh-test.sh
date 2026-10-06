@@ -4,9 +4,10 @@
 # Win32_Printer), which makes Windows' printers again from CUPS's (a standard
 # user may not write them to HKLM); with it down it does nothing; and the
 # path unit starts it when CUPS's ppd directory or printers.conf changes.
-#   sh test/printers-refresh-test.sh [--mutant|--mutant-session]
+#   sh test/printers-refresh-test.sh [--mutant|--mutant-session|--mutant-winsta]
 #     (--mutant: run as the caller instead of SYSTEM; --mutant-session: the
-#     signed-in check left out -- both must fail)
+#     signed-in check left out; --mutant-winsta: on the interactive window
+#     station -- each must fail)
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -19,6 +20,8 @@ trap 'rm -rf "$T"' EXIT INT TERM
 TOOL="$HERE/../bin/sg-printers-refresh"
 if [ "${1:-}" = --mutant ]; then
     sed 's|runuser -u "\$SG_SYSTEM_USER" -- ||' "$TOOL" > "$T/tool"; TOOL="$T/tool"
+elif [ "${1:-}" = --mutant-winsta ]; then
+    sed '/SG_WINSTATION=/d' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 elif [ "${1:-}" = --mutant-session ]; then
     sed '/sg-session.env/d; /oobe.pending.*exit/d; /live boot.*exit/d' "$TOOL" > "$T/tool"; TOOL="$T/tool"
 fi
@@ -59,6 +62,12 @@ out=$(run)
 case "$(cat "$T/calls" 2>/dev/null)" in
     "runuser -u sgsystem -- sh -c "*"sg_wine_env"*"wine wmic path Win32_Printer"*) pass "SYSTEM loads winspool (wmic Win32_Printer)" ;;
     *) fail "not as SYSTEM: $(cat "$T/calls" 2>/dev/null)" ;; esac
+# in the services' window station: on the interactive one it took the login
+# screen's desktop at first boot (release s9, 2026-10-05; --mutant-winsta)
+case "$(cat "$T/calls" 2>/dev/null)" in
+    *'SG_WINSTATION="__wineservice_winstation\Default"; export SG_WINSTATION'*"wine wmic"*)
+        pass "in the services' window station, not the login screen's" ;;
+    *) fail "not in the services' window station: $(cat "$T/calls" 2>/dev/null)" ;; esac
 case "$out" in *"printers now: DYMO_LabelWriter_550,Print-to-PDF"*) pass "and it reports the Windows printers" ;; *) fail "output: $out" ;; esac
 U="$HERE/../systemd/sg-printers-refresh.path"
 grep -qx 'PathChanged=/etc/cups/ppd' "$U" && grep -qx 'PathChanged=/etc/cups/printers.conf' "$U" \
