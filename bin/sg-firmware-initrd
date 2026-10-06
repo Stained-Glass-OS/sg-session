@@ -81,6 +81,14 @@ def read_list():
 def esp():
     if os.environ.get("SG_ESP"):
         return os.environ["SG_ESP"]
+    # the boot partition kernel-install writes to (sg-boot-layout: /efi or /xbootldr)
+    try:
+        with open("/etc/kernel/install.conf") as f:
+            roots = [l.strip()[len("BOOT_ROOT="):] for l in f if l.startswith("BOOT_ROOT=")]
+        if roots and os.path.isdir(os.path.join(roots[-1], "loader", "entries")):
+            return roots[-1]
+    except OSError:
+        pass
     for opt in ("--print-boot-path", "--print-esp-path"):
         try:
             out = subprocess.run(["bootctl", opt], capture_output=True, text=True, timeout=30).stdout.strip()

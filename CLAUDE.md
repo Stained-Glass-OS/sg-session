@@ -833,6 +833,57 @@ installed, never started. `bin/sg-kernel-entries`:
   configured newer platformoff`; the last is sg-install's Surface
   `hwsupport.off` through `sg-drivers --platform-off --root`).
 
+### /boot on the root file system (sg-boot-layout)
+
+Until 0.1.0-121 `/boot` was the FAT boot partition (gpt-auto-generator
+mounted the ESP, or our XBOOTLDR beside Windows, there), and dpkg cannot
+replace a kernel package's files on FAT ("unable to make backup link": no hard
+links). Now:
+
+| | where |
+|---|---|
+| Debian's `vmlinuz-*`, `initrd.img-*`, `config-*`, `System.map-*` | `/boot`, a directory of the root file system (with `README.stained-glass`, so never empty) |
+| the ESP | `/efi` (fstab, automount, `umask=0077,nofail`) |
+| our XBOOTLDR (beside another system's ESP) | `/xbootldr` (same) |
+| where kernel-install puts kernels and entries | `/etc/kernel/install.conf` `BOOT_ROOT=/efi` or `/xbootldr` |
+
+A non-empty `/boot` and the fstab lines keep gpt-auto-generator from mounting
+either partition at `/boot`. bootctl and systemd-bless-boot look for XBOOTLDR
+at `/boot` only: `/etc/systemd/system.conf.d/50-sg-xbootldr.conf` gives
+services `SYSTEMD_XBOOTLDR_PATH=/xbootldr` (an interactive `bootctl list`
+needs it set by hand). Our tools (sg-boot-splash, sg-drivers,
+sg-kernel-entries, sg-firmware-initrd) find the boot partition through
+`BOOT_ROOT` first. The boot loader reads its partitions itself: none of these
+mounts is needed to boot.
+
+- `sg-boot-layout --configure --root R --esp PARTUUID [--xbootldr PARTUUID]`:
+  sg-install, every new system (Debian's files from the live ESP go to
+  `R/boot`).
+- `sg-boot-layout --migrate`: `sg-boot-layout.service`, once
+  (`/var/lib/stained-glass/boot-layout`), on a machine Setup installed
+  (`root=PARTUUID=` in `/etc/kernel/cmdline`), never live. The partition at
+  `/boot` is identified by type; Debian's files are copied to the root file
+  system's own `/boot` (a bind mount of `/`) and compared; only then fstab,
+  install.conf and the environment are written (old ones kept as
+  `*.sg-boot-layout.bak`) and `/boot` is let go (else at the next boot).
+  Nothing on the partition changes. Back: restore the two `.bak` files,
+  empty the root's `/boot`, remove the marker, restart.
+- Gate: `test/boot-layout-test.sh` (lint block; mutants `verify live
+  bootroot marker`); sg-image's `make boot-layout-test` in QEMU (a new
+  install, and an old disk updated: moved over, a same-name kernel
+  reinstalled, its entry boots and is blessed).
+
+### Restart required (sg-restart-notify)
+
+`/run/reboot-required` (Debian's convention) is written by the kernel-install
+plugin `93-sg-reboot-required` and `sg-kernel-entries` for a kernel newer than
+the running one, and by sg-drivers' Surface install. `lib/sg-restart-notify`,
+in the session's helper loop, starts sg-shell's `sg-restart-notice64.exe`
+("Restart to finish updating": what, Restart now / Later, kept in the
+notification centre) once per boot (`restart-seen` holds the boot id). Gate:
+`test/restart-notify-test.sh` (mutant: forgets the boot); sg-shell's
+`test/restart-notice-check.sh`.
+
 ### This PC model's own support: a Surface's touch screen and pen
 
 Microsoft's Surface PCs (Pro 4-9, Laptop, Book, Go, Studio; x86) drive their

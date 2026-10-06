@@ -1,0 +1,14 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): a kernel other than the running
+# one was given a boot entry -- it is used from the next start, so a restart
+# is needed: /run/reboot-required, which the session shows (sg-restart-notify).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[ "${1:-}" = add ] || exit 0
+# a newer kernel than the running one (not an older one's initrd made again)
+run=${SG_UNAME:-$(uname -r)}
+[ "${2:-}" != "$run" ] || exit 0
+[ "$(printf '%s\n%s\n' "$run" "${2:-}" | sort -V | tail -1)" = "${2:-}" ] || exit 0
+F=${SG_REBOOT_REQUIRED:-/run/reboot-required}
+[ -d "$(dirname "$F")" ] || exit 0
+printf '*** System restart required: a new Linux kernel (%s) ***\n' "$2" > "$F" 2>/dev/null || :
+exit 0

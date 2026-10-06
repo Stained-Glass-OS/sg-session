@@ -239,6 +239,9 @@ EOS
 
 boot_path() {
     if [ -n "${SG_DRIVERS_BOOT:-}" ]; then echo "$SG_DRIVERS_BOOT"; return; fi
+    # the boot partition kernel-install writes to (sg-boot-layout: /efi or /xbootldr)
+    _br=$(sed -n 's/^BOOT_ROOT=//p' /etc/kernel/install.conf 2>/dev/null | tail -1)
+    if [ -n "$_br" ] && ls "$_br/loader/entries" >/dev/null 2>&1; then echo "$_br"; return; fi
     ls /boot /efi >/dev/null 2>&1 || :   # automounts
     bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
 }
@@ -355,8 +358,8 @@ keep_nouveau_away() {
     grep -q 'modprobe.blacklist=nouveau' "$cl" || sed -i 's/$/ modprobe.blacklist=nouveau/' "$cl"
     root_id=$(grep -o 'root=PARTUUID=[^ ]*' "$cl" || :)
     [ -n "$root_id" ] || return 0
-    ls /boot /efi >/dev/null 2>&1 || :
-    for dir in ${SG_DRIVERS_ENTRIES:-/boot/loader/entries /efi/loader/entries}; do
+    ls /boot /efi /xbootldr >/dev/null 2>&1 || :
+    for dir in ${SG_DRIVERS_ENTRIES:-/boot/loader/entries /efi/loader/entries /xbootldr/loader/entries}; do
       for e in "$dir"/*.conf; do
         [ -f "$e" ] || continue
         grep -q "^options .*$root_id" "$e" || continue

@@ -1,0 +1,19 @@
+# The boot partition off /boot, once, on a machine Setup installed before
+# 0.1.0-121 (sg-boot-layout --migrate): Debian's kernels on the root file
+# system's /boot -- dpkg cannot upgrade a kernel package on FAT -- and the
+# boot partition at /efi (or /xbootldr beside another system's ESP), where
+# kernel-install copies the kernels. Nothing on the boot partition changes;
+# the boot loader never depends on these mounts. Not on a live boot.
+[Unit]
+Description=Debian's kernels on the root file system, the boot partition at /efi or /xbootldr
+ConditionPathExists=!/var/lib/stained-glass/boot-layout
+ConditionKernelCommandLine=!systemd.volatile
+After=local-fs.target systemd-bless-boot.service
+Before=sg-firmware-initrd.service sg-drivers.service sg-hwsupport.service packagekit.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-boot-layout --migrate
+
+[Install]
+WantedBy=multi-user.target

@@ -516,6 +516,10 @@ avail=$(df -B1 --output=avail "$B" | tail -1 | tr -d ' ')
 for f in "$S"/*; do
     name=${f##*/}
     case "$name" in EFI|loader|'*') continue ;; esac
+    # Debian's own kernel files go to the root file system's /boot, where
+    # its packages keep them (dpkg cannot upgrade them on FAT); the boot
+    # loader's copies are in the entry directories (sg-boot-layout)
+    case "$name" in vmlinuz-*|initrd.img-*|config-*|System.map-*) mkdir -p "$R/boot"; cp -p "$f" "$R/boot/"; continue ;; esac
     if [ "$name" = debian ]; then rm -rf "${B:?}/$TOKEN"; cp -r "$f" "$B/$TOKEN"; else cp -r "$f" "$B/"; fi
 done
 mkdir -p "$B/loader/entries"
@@ -540,6 +544,16 @@ printf '%s\n' "$TOKEN" > "$R/etc/kernel/entry-token"
 # it cannot tell the layout from this boot partition -- with boot counting,
 # so a new kernel that cannot start gives way to the previous one by itself.
 sg-kernel-entries --configure --root "$R" || die "cannot set up boot entries for later kernels"
+# /boot a directory of the root file system; the system partition at /efi,
+# our boot partition (beside another system's) at /xbootldr: fstab, and
+# kernel-install's BOOT_ROOT
+ESP_PARTUUID=$(lsblk -n -d -o PARTUUID "$ESP_PART" | head -1)
+if [ -n "$BOOT_PART" ]; then
+    sg-boot-layout --configure --root "$R" --esp "$ESP_PARTUUID" --xbootldr "$(lsblk -n -d -o PARTUUID "$BOOT_PART" | head -1)" \
+        || die "cannot set up the boot partitions' mount points"
+else
+    sg-boot-layout --configure --root "$R" --esp "$ESP_PARTUUID" || die "cannot set up the boot partitions' mount points"
+fi
 
 # The boot loader. Another system's loaders are never replaced: the firmware's
 # fallback path is ours only where nothing is there yet.

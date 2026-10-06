@@ -32,6 +32,9 @@ THEME_DIR=${SG_THEME_DIR:-/usr/share/plymouth/themes/stained-glass}
 
 esp() {
     if [ -n "${SG_ESP:-}" ]; then echo "$SG_ESP"; return; fi
+    # the boot partition kernel-install writes to (sg-boot-layout: /efi or /xbootldr)
+    _br=$(sed -n 's/^BOOT_ROOT=//p' /etc/kernel/install.conf 2>/dev/null | tail -1)
+    if [ -n "$_br" ] && ls "$_br/loader/entries" >/dev/null 2>&1; then echo "$_br"; return; fi
     command -v bootctl >/dev/null 2>&1 || return 1
     bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
 }

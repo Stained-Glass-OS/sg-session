@@ -1,3 +1,29 @@
+sg-session (0.1.0-121) unstable; urgency=medium
+
+  * /boot on the root file system (all installed machines): /boot was the
+    FAT boot partition, where dpkg cannot upgrade a kernel package in place
+    ("unable to make backup link": no hard links on FAT) -- a Debian
+    revision of the same kernel would have left the update stuck.
+    sg-boot-layout: Debian's kernel files live in the root file system's
+    /boot; the ESP is mounted at /efi and our own boot partition (beside
+    another system's ESP) at /xbootldr, from /etc/fstab (automounts,
+    nofail); kernel-install copies kernels there (install.conf BOOT_ROOT=),
+    services get SYSTEMD_XBOOTLDR_PATH. sg-install sets it up on every new
+    system; sg-boot-layout.service moves an installed machine over once, at
+    its next boot: Debian's files copied to the root file system and
+    compared before anything is switched, the old fstab and install.conf
+    kept (.bak), nothing on the boot partition touched. Our tools find the
+    boot partition through BOOT_ROOT. Gate: test/boot-layout-test.sh
+    (mutants verify, live, bootroot, marker).
+  * Restart to finish updating: sg-restart-notify (the session's helper
+    loop) shows sg-shell's sg-restart-notice once a boot while
+    /run/reboot-required is there; the kernel-install plugin
+    93-sg-reboot-required and sg-kernel-entries write it for a kernel newer
+    than the running one (the Surface install already did). Gate:
+    test/restart-notify-test.sh (mutant: no memory of the boot).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 05 Oct 2026 17:59:12 -0700
+
 sg-session (0.1.0-120) unstable; urgency=medium
 
   * High-resolution screens (David 2026-10-05, a Surface Pro 7 at

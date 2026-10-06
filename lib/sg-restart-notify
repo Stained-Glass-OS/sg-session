@@ -1,0 +1,30 @@
+#!/bin/sh
+# sg-restart-notify -- tell this person a restart is needed, once a boot.
+#
+# Something installed that takes effect at the next start writes
+# /run/reboot-required (Debian's convention): a new kernel (the
+# kernel-install plugin 93-sg-reboot-required, sg-kernel-entries), a
+# Surface's touch and pen support (sg-drivers). The session's helper loop
+# (sg-run-explorer) runs this every few seconds: while the file is there, its
+# notice (sg-shell's sg-restart-notice64.exe: what was installed, "Restart
+# now", "Later") is shown once per boot -- remembered by the boot's id -- and
+# never again until the next boot, if the person says Later.
+#
+#   SG_REBOOT_REQUIRED  SG_RESTART_SEEN  SG_BOOT_ID  SG_RESTART_NOTICE_CMD   for the test
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+F="${SG_REBOOT_REQUIRED:-/run/reboot-required}"
+SEEN="${SG_RESTART_SEEN:-${XDG_STATE_HOME:-$HOME/.local/state}/stained-glass/restart-seen}"
+[ -f "$F" ] || exit 0
+boot=$(cat "${SG_BOOT_ID:-/proc/sys/kernel/random/boot_id}" 2>/dev/null)
+[ -n "$boot" ] || exit 0
+mkdir -p "$(dirname "$SEEN")" 2>/dev/null
+[ "$(cat "$SEEN" 2>/dev/null)" = "$boot" ] && exit 0
+printf '%s\n' "$boot" > "$SEEN" 2>/dev/null || exit 0
+if [ -n "${SG_RESTART_NOTICE_CMD:-}" ]; then
+    $SG_RESTART_NOTICE_CMD &
+else
+    wine "${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-restart-notice64.exe" >/dev/null 2>&1 &
+fi
+exit 0

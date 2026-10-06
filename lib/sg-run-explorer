@@ -306,6 +306,8 @@ sg_shell_helpers() {
             fi
             # what SG Defender quarantined from this person's files: shown once
             [ -f "$_sgshelldir/sg-defender-notice64.exe" ] && sh "$SG_LIB/sg-defender-notify"
+            # an update that needs a restart (/run/reboot-required): once a boot
+            [ -f "$_sgshelldir/sg-restart-notice64.exe" ] && sh "$SG_LIB/sg-restart-notify"
             sleep "${SG_HELPER_INTERVAL:-5}"
         done
     ) &

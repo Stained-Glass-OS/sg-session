@@ -53,6 +53,9 @@ configure() {
 
 boot_path() {
     if [ -n "${SG_KE_BOOT:-}" ]; then echo "$SG_KE_BOOT"; return; fi
+    # the boot partition kernel-install writes to (sg-boot-layout: /efi or /xbootldr)
+    _br=$(sed -n 's/^BOOT_ROOT=//p' /etc/kernel/install.conf 2>/dev/null | tail -1)
+    if [ -n "$_br" ] && ls "$_br/loader/entries" >/dev/null 2>&1; then echo "$_br"; return; fi
     ls /boot /efi >/dev/null 2>&1 || :   # automounts
     bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
 }
@@ -82,7 +85,10 @@ apply() {
         say "kernel $k has no boot entry: adding it (on trial: $TRIES tries)"
         set -- "$files/vmlinuz-$k"
         [ -f "$files/initrd.img-$k" ] && set -- "$@" "$files/initrd.img-$k"
-        ${SG_KE_KERNEL_INSTALL:-kernel-install} add "$k" "$@" >&2 || say "kernel-install could not add $k ($token)"
+        if ${SG_KE_KERNEL_INSTALL:-kernel-install} add "$k" "$@" >&2; then
+            # the session says so (sg-restart-notify)
+            printf '*** System restart required: a new Linux kernel (%s) ***\n' "$k" > "${SG_REBOOT_REQUIRED:-/run/reboot-required}" 2>/dev/null || :
+        else say "kernel-install could not add $k ($token)"; fi
     done
     return 0
 }

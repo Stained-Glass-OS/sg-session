@@ -1,0 +1,189 @@
+#!/bin/sh
+# sg-boot-layout -- where the boot partitions are mounted, and /boot on the
+# root file system.
+#
+#   sg-boot-layout --configure --root DIR --esp PARTUUID [--xbootldr PARTUUID]
+#       (sg-install, a new system)
+#   sg-boot-layout --migrate        (sg-boot-layout.service, installed machines)
+#   sg-boot-layout --status         BOOT_ROOT and how /boot is set up
+#
+# Debian's kernel packages put vmlinuz-*, initrd.img-*, config-* and
+# System.map-* in /boot. On machines Setup installed /boot was the boot
+# partition itself (FAT, mounted there by systemd's gpt-auto-generator), and
+# FAT has no hard links: dpkg could not upgrade a kernel package in place
+# ("unable to make backup link ... Operation not permitted") -- a Debian
+# revision of the same kernel would have left the update stuck.
+#
+# The layout now: /boot is a plain directory of the root file system
+# (Debian's files); the EFI system partition is mounted at /efi and our own
+# boot partition (XBOOTLDR, beside another system's ESP) at /xbootldr, both
+# from /etc/fstab (automounts, umask=0077, nofail: the boot loader reads its
+# partitions itself and never depends on them being mounted). kernel-install
+# copies each kernel and initrd into the boot partition's entry-token
+# directory: /etc/kernel/install.conf BOOT_ROOT= names it. A non-empty /boot
+# and the fstab lines keep gpt-auto-generator from mounting either partition
+# at /boot. With /xbootldr, services get SYSTEMD_XBOOTLDR_PATH (bootctl and
+# systemd-bless-boot look for XBOOTLDR at /boot only).
+#
+# --migrate (a machine Setup installed before: /etc/kernel/cmdline names its
+# root by PARTUUID; never a live boot; once: /var/lib/stained-glass/boot-
+# layout): the partition at /boot is mounted at its new place too, Debian's
+# files are copied to the root file system's /boot (seen through a bind mount
+# of /) and compared, and only then fstab, install.conf and the environment
+# are written (the old fstab and install.conf kept as *.sg-boot-layout.bak)
+# and /boot is unmounted. Nothing on the boot partition is changed or
+# removed: every boot entry stays as it was. To go back: restore the two
+# .bak files, empty the root file system's /boot, restart.
+#
+# For the gate: SG_BL_ETC (/etc), SG_BL_STATE (/var/lib/stained-glass),
+# SG_BL_CMDLINE (/proc/cmdline), SG_BL_ROOTVIEW (a view of the root file
+# system's own /boot's parent, instead of a bind mount of /), SG_BL_BOOT
+# (/boot), SG_BL_PARTINFO (a command printing "PARTTYPE PARTUUID" for a
+# device), SG_BL_SOURCE (the device at /boot), SG_BL_ESP_UUID, SG_BL_SWITCH=0
+# (no unmounting, no systemctl).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+PATH="$PATH:/usr/sbin:/sbin"
+ESP_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+XBOOT_TYPE=bc13c2ff-59e6-4262-a352-b275fd6f7172
+MODE="" ROOT="" ESP="" XBOOT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --configure|--migrate|--status) MODE=${1#--} ;;
+        --root) ROOT=${2:?}; shift ;;
+        --esp) ESP=${2:?}; shift ;;
+        --xbootldr) XBOOT=${2:?}; shift ;;
+        *) echo "usage: sg-boot-layout --configure --root DIR --esp PARTUUID [--xbootldr PARTUUID] | --migrate | --status" >&2; exit 2 ;;
+    esac
+    shift
+done
+say() { printf 'sg-boot-layout: %s\n' "$*" >&2; }
+die() { say "$*"; exit 1; }
+
+# configure ROOT ESP-PARTUUID [XBOOTLDR-PARTUUID]: fstab, install.conf, the
+# environment, the mount points (ETC: ROOT/etc, or SG_BL_ETC)
+configure() {
+    r=$1 esp=$2 xb=${3:-}
+    etc=${SG_BL_ETC:-$r/etc}
+    if [ -n "$xb" ]; then broot=/xbootldr; else broot=/efi; fi
+    mkdir -p "$etc/kernel" "$r/boot" "$r/efi" || return 1
+    [ -z "$xb" ] || mkdir -p "$r/xbootldr" || return 1
+    printf '%s\n' "This directory is on the root file system: Debian's kernels (vmlinuz-*, initrd.img-*)." \
+        "The boot loader's copies are on the boot partition, $broot (sg-boot-layout)." > "$r/boot/README.stained-glass"
+    # fstab: our lines replaced, everything else kept
+    f="$etc/fstab"
+    touch "$f"
+    awk '$2 != "/efi" && $2 != "/xbootldr" && $0 != "# Stained Glass OS: the boot partitions (sg-boot-layout)"' "$f" > "$f.tmp" || return 1
+    {
+        echo "# Stained Glass OS: the boot partitions (sg-boot-layout)"
+        echo "PARTUUID=$esp /efi vfat umask=0077,noauto,x-systemd.automount,x-systemd.idle-timeout=2min,nofail,x-systemd.device-timeout=10s 0 2"
+        [ -z "$xb" ] || echo "PARTUUID=$xb /xbootldr vfat umask=0077,noauto,x-systemd.automount,x-systemd.idle-timeout=2min,nofail,x-systemd.device-timeout=10s 0 2"
+    } >> "$f.tmp"
+    mv -f "$f.tmp" "$f" || return 1
+    # kernel-install: entries (bls), into the boot partition
+    c="$etc/kernel/install.conf"
+    touch "$c"
+    grep -v '^BOOT_ROOT=' "$c" > "$c.tmp"
+    grep -q '^layout=' "$c.tmp" || printf 'layout=bls\n' >> "$c.tmp"
+    printf 'BOOT_ROOT=%s\n' "$broot" >> "$c.tmp"
+    mv -f "$c.tmp" "$c" || return 1
+    d="$etc/systemd/system.conf.d"
+    if [ -n "$xb" ]; then
+        mkdir -p "$d"
+        printf '# sg-boot-layout: our boot partition (XBOOTLDR) is at /xbootldr, not /boot\n[Manager]\nDefaultEnvironment=SYSTEMD_XBOOTLDR_PATH=/xbootldr\n' \
+            > "$d/50-sg-xbootldr.conf"
+    else
+        rm -f "$d/50-sg-xbootldr.conf"
+    fi
+    mkdir -p "${SG_BL_STATE:-$r/var/lib/stained-glass}"
+    printf 'BOOT_ROOT=%s\n' "$broot" > "${SG_BL_STATE:-$r/var/lib/stained-glass}/boot-layout"
+}
+
+partinfo() {   # DEV -> "parttype partuuid"
+    if [ -n "${SG_BL_PARTINFO:-}" ]; then $SG_BL_PARTINFO "$1"; return; fi
+    lsblk -n -d -o PARTTYPE,PARTUUID "$1" 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]'
+}
+
+migrate() {
+    ETC=${SG_BL_ETC:-/etc}
+    STATE=${SG_BL_STATE:-/var/lib/stained-glass}
+    BOOT=${SG_BL_BOOT:-/boot}
+    [ ! -f "$STATE/boot-layout" ] || return 0                                     # done
+    case " $(cat "${SG_BL_CMDLINE:-/proc/cmdline}" 2>/dev/null) " in
+        *" systemd.volatile="*|*" sg.live="*) return 0 ;; esac                       # the live medium
+    grep -q 'root=PARTUUID=' "$ETC/kernel/cmdline" 2>/dev/null || return 0            # not a machine Setup installed
+    ls "$BOOT" >/dev/null 2>&1 || :                                                  # its automount
+    src=${SG_BL_SOURCE:-$(findmnt -n -o SOURCE --mountpoint "$BOOT" 2>/dev/null | tail -1)}
+    [ -n "$src" ] || return 0                                                        # /boot is plain already
+    info=$(partinfo "$src"); ptype=${info%% *} puuid=${info#* }; [ "$puuid" != "$info" ] || puuid=""
+    case "$ptype" in
+        "$ESP_TYPE") new=/efi; esp=$puuid; xb="" ;;
+        "$XBOOT_TYPE") new=/xbootldr; xb=$puuid
+            esp=${SG_BL_ESP_UUID:-}
+            if [ -z "$esp" ]; then
+                ls /efi >/dev/null 2>&1 || :
+                e=$(findmnt -n -o SOURCE --mountpoint /efi 2>/dev/null | tail -1)
+                if [ -n "$e" ]; then
+                    info=$(partinfo "$e")
+                    [ "${info%% *}" != "$ESP_TYPE" ] || esp=${info#* }
+                fi
+            fi ;;
+        *) say "/boot is $src, not a boot partition: left as it is"; return 0 ;;
+    esac
+    { [ -n "$puuid" ] && [ -n "$esp" ]; } || die "cannot tell the boot partitions apart ($src): left as it is"
+    say "moving the boot partition $src from /boot to $new; Debian's kernels to the root file system's /boot"
+
+    # the root file system's own /boot, under the mount
+    W=/run/sg-boot-layout
+    if [ -n "${SG_BL_ROOTVIEW:-}" ]; then RV=$SG_BL_ROOTVIEW
+    else
+        mkdir -p "$W/root" && mount --bind / "$W/root" && mount --make-private "$W/root" 2>/dev/null
+        mountpoint -q "$W/root" || die "cannot see the root file system's /boot: left as it is"
+        RV=$W/root
+    fi
+    cleanup() { [ -n "${SG_BL_ROOTVIEW:-}" ] || umount "$W/root" 2>/dev/null; }
+    mkdir -p "$RV/boot" || { cleanup; die "cannot make /boot on the root file system"; }
+    copied=""
+    for f in "$BOOT"/vmlinuz-* "$BOOT"/initrd.img-* "$BOOT"/config-* "$BOOT"/System.map-*; do
+        [ -f "$f" ] || continue
+        n=${f##*/}
+        if ! cp -p "$f" "$RV/boot/$n.sg-new" || ! cmp -s "$f" "$RV/boot/$n.sg-new"; then
+            rm -f "$RV"/boot/*.sg-new; cleanup
+            die "copying $n to the root file system failed: left as it is"
+        fi
+        copied="$copied $n"
+    done
+    for n in $copied; do mv -f "$RV/boot/$n.sg-new" "$RV/boot/$n"; done
+    [ -f "$ETC/fstab.sg-boot-layout.bak" ] || cp -p "$ETC/fstab" "$ETC/fstab.sg-boot-layout.bak" 2>/dev/null || : > "$ETC/fstab.sg-boot-layout.bak"
+    [ -f "$ETC/kernel/install.conf.sg-boot-layout.bak" ] || cp -p "$ETC/kernel/install.conf" "$ETC/kernel/install.conf.sg-boot-layout.bak" 2>/dev/null || :
+    SG_BL_ETC="$ETC" SG_BL_STATE="$STATE" configure "$RV" "$esp" "$xb" || { cleanup; die "could not write the new layout"; }
+    cleanup
+    say "Debian's kernels:${copied:- none}; BOOT_ROOT=$new"
+
+    # the switch, now if /boot can be let go (else at the next boot, when
+    # gpt-auto-generator finds /boot in use and fstab has the partitions)
+    [ "${SG_BL_SWITCH:-1}" = 1 ] || return 0
+    systemctl daemon-reload 2>/dev/null || :
+    systemctl stop boot.automount boot.mount 2>/dev/null || :
+    mountpoint -q /boot && umount /boot 2>/dev/null
+    if mountpoint -q /boot; then say "/boot is busy: the new layout takes effect at the next start"
+    else
+        mkdir -p "$new"
+        systemctl start "$(systemd-escape -p --suffix=automount "$new")" 2>/dev/null || :
+        if [ -d "$new/loader/entries" ]; then say "done: the boot partition is at $new"
+        else say "the boot partition is not mounted at $new yet (it will be at the next start)"; fi
+    fi
+    return 0
+}
+
+case "$MODE" in
+configure)
+    { [ -n "$ROOT" ] && [ -n "$ESP" ]; } || die "--configure needs --root and --esp"
+    configure "$ROOT" "$ESP" "$XBOOT" || die "could not write the boot layout into $ROOT" ;;
+migrate) migrate ;;
+status)
+    sed -n 's/^BOOT_ROOT=/BOOT_ROOT /p' "${SG_BL_ETC:-/etc}/kernel/install.conf" 2>/dev/null
+    findmnt -n -o TARGET,SOURCE,FSTYPE /boot /efi /xbootldr 2>/dev/null ;;
+esac
+exit 0

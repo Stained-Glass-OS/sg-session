@@ -14,6 +14,8 @@ enable sg-shared-home.service
 enable sg-drivers.service
 # A Surface's touch and pen support: runs on Surface PCs only (ConditionFirmware).
 enable sg-hwsupport.service
+# Debian's kernels off the FAT boot partition, once (ConditionPathExists).
+enable sg-boot-layout.service
 # Voice typing's model installer: the socket everywhere, a service per request.
 enable sg-speechd.socket
 # The first-run setup's service: its socket exists only while it is pending

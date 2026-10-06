@@ -18,9 +18,9 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
-               bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-file-access-check \
+               bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-boot-layout bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check
-LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
@@ -197,6 +197,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 config/keyrings/linux-surface.gpg $(DESTDIR)$(PREFIX)/share/stained-glass/keyrings/linux-surface.gpg
 	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
 	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
+	install -D -m 0755 kernel/93-sg-reboot-required.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/93-sg-reboot-required.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service systemd/sg-defender.service \
@@ -206,7 +207,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    systemd/sg-netd.socket systemd/sg-netd@.service \
 	    systemd/sg-sysinfod.socket systemd/sg-sysinfod@.service systemd/sg-devices-apply.service \
     systemd/sg-speechd.socket systemd/sg-speechd@.service \
-	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service systemd/sg-hwsupport.service \
+	    systemd/sg-gpupdate.service systemd/sg-gpupdate.timer systemd/sg-live.service systemd/sg-drivers.service systemd/sg-hwsupport.service systemd/sg-boot-layout.service \
 	    systemd/sg-oobed.socket systemd/sg-oobed@.service systemd/sg-oobe-browser.service \
 	    systemd/sg-automount@.service \
 	    systemd/sg-print-setup.service systemd/sg-dymo-queue.service systemd/sg-printers-refresh.path systemd/sg-printers-refresh.service systemd/sg-firmware-retry.service systemd/sg-firmware-initrd.service $(UNITDIR)
@@ -268,6 +269,7 @@ lint:
 	@sh test/wine-reload-test.sh
 	@sh test/defender-test.sh
 	@sh test/defender-notify-test.sh
+	@sh test/restart-notify-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
@@ -299,6 +301,8 @@ lint:
 	@sh test/drivers-test.sh
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
 	@sh test/kernel-entries-test.sh
+	@sh test/boot-layout-test.sh
+	@for m in verify live bootroot marker; do ! sh test/boot-layout-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-layout-test: mutant $$m passed"; exit 1; }; done
 	@for m in layout tries configured newer platformoff; do ! sh test/kernel-entries-test.sh --mutant $$m >/dev/null 2>&1 || { echo "kernel-entries-test: mutant $$m passed"; exit 1; }; done
 	@sh test/surface-test.sh
 	@for m in dmi pin key tries twin; do ! sh test/surface-test.sh --mutant $$m >/dev/null 2>&1 || { echo "surface-test: mutant $$m passed"; exit 1; }; done
