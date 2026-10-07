@@ -15,7 +15,9 @@
 #   3. the same with iptables/ip6tables: a chain added and removed, the
 #      rules saved and restored (--test)
 #   4. a desktop user without elevation is refused (the lock needs root)
-#   5. the image starts no firewall of its own (nftables.service disabled)
+#   5. the image loads no ruleset of nftables.service's at boot (nftables
+#      .service disabled); Stained Glass Firewall keeps to its own table
+#      (inet sg_firewall) and is still there beside the lock
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -85,6 +87,12 @@ if [ -n "$USER_NAME" ] && id "$USER_NAME" >/dev/null 2>&1; then
     else pass "$USER_NAME cannot change the firewall without elevation"; fi
 fi
 
+# Stained Glass Firewall (sg-firewall): its own table, untouched by the lock
+if systemctl is-active -q sg-firewall.service 2>/dev/null; then
+    if nft list table inet sg_firewall >/dev/null 2>&1; then
+        pass "Stained Glass Firewall's own table is there beside the lock (inet sg_firewall)"
+    else fail "Stained Glass Firewall runs but its table is gone"; fi
+fi
 case "$(systemctl is-enabled nftables.service 2>/dev/null)" in
     enabled|enabled-runtime) fail "nftables.service is enabled: the image would load a firewall of its own at boot" ;;
     *) pass "no firewall of the image's own at boot (nftables.service not enabled)" ;;

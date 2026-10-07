@@ -1,3 +1,40 @@
+sg-session (0.1.0-175) unstable; urgency=medium
+
+  * Stained Glass Firewall (David 2026-10-07: "build a firewall in by
+    default, and allow apps to ask to make adjustments, like the Sonos
+    app"): sg-firewall and sg-firewall.service, on by default, before any
+    network is up. Its own nftables table (inet sg_firewall), replaced
+    whole on each change, never anyone else's (a VPN's kill switch stays).
+    Connections other computers start are dropped unless allowed;
+    answers to this PC's own connections, the loopback, the ICMP/ICMPv6
+    IPv4 and IPv6 need and DHCP pass. Each network is Public or Private
+    (Domain on a domain's network); a new one is Public. Programs are
+    allowed by path: their ports open while they listen (Windows
+    programs named by Wine, wine-sg 1500); a person's program listening
+    with no rule is asked about in their session (sg-shell's question);
+    built-in groups for the system's own services (SSH and Remote
+    Desktop on every network, File and Printer Sharing and Network
+    Discovery on Private, Domain Controller); rules Windows programs add
+    (INetFwPolicy2, netsh) are read from the machine's registry and
+    pushed at once. Status for Settings in /run/stained-glass-firewall.
+  * Upgrades keep what the machine serves: the networks in use (and wired
+    ones) become Private, everything listening now gets a rule (logged in
+    /var/lib/stained-glass/firewall/upgrade.log).
+  * Gates: firewall-test.py (in make lint, 9 mutants), firewall-netns-test
+    (make test-firewall: two network namespaces, real packets; mutants
+    FW_ACCEPT_ALL, FW_FLUSH, FW_NO_LISTEN); guest check sg-firewall-check
+    (sg-image make firewall-test); sg-netlock-check: our table beside the
+    lock.
+  * This PC's own virtual machines' and containers' bridges (libvirt,
+    Docker, LXC/Incus, VirtualBox, VMware) are let in; a person is an
+    ordinary account or one with a Windows session (sgwine: the lab's
+    sguser); only Wine speaks for a Windows program. Verified on the
+    release image (0.1.0-168 -> this): the upgrade kept everything that
+    listened reachable and made the wired network Private, ssh came back
+    after a reboot through the firewall, sg-firewall-check passed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 16:15:11 -0700
+
 sg-session (0.1.0-174) unstable; urgency=medium
 
   * Makefile: the voice model comment says what is true -- the model ships

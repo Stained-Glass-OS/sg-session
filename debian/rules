@@ -20,6 +20,9 @@ override_dh_installsystemd:
 	dh_installsystemd --no-restart-after-upgrade --no-stop-on-upgrade --name=sg-wineserver
 	dh_installsystemd --name=sg-lockd
 	dh_installsystemd --name=sg-defender
+	# The firewall: enabled and started (an upgrade's postinst sets it up
+	# first: sg-firewall migrate keeps what the machine serves reachable).
+	dh_installsystemd --name=sg-firewall
 	# Setup's installer: the socket is enabled everywhere and exists only on
 	# a live boot (ConditionKernelCommandLine); the service is per connection.
 	dh_installsystemd sg-installd.socket

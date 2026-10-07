@@ -59,6 +59,15 @@ case "$1" in
             fi
         fi
 
+        # Stained Glass Firewall (0.1.0-175), on by default. A machine in use
+        # gets it without losing what it serves: the networks it knows are
+        # Private, and what listens now (a service, a program) keeps a rule --
+        # logged in /var/lib/stained-glass/firewall/upgrade.log. The service
+        # itself is started below (debhelper), after this.
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.1.0-175; then
+            /usr/bin/sg-firewall migrate >/dev/null 2>&1 || true
+        fi
+
         # The session user owns the system prefix. Phase 0 has exactly one.
         # MULTIUSER-DEBT: D1, D2 -- see docs/multiuser-debt.md.
         #

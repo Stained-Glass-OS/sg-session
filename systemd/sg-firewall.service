@@ -1,0 +1,23 @@
+# Stained Glass Firewall: connections other computers start to this PC are
+# blocked except those allowed (sg-firewall). Early, before any network is
+# up; its own nftables table (inet sg_firewall), which stopping removes.
+[Unit]
+Description=Stained Glass Firewall
+Documentation=https://freesoft.page/docs/guide/07-firewall.html
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/sg-firewall --daemon
+ExecStopPost=/usr/bin/sg-firewall --stop
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=stained-glass-firewall
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

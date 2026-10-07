@@ -1,0 +1,1581 @@
+#!/usr/bin/python3
+# sg-firewall -- Stained Glass Firewall: the inbound firewall, as Windows has
+# one (David 2026-10-07: "build a firewall in by default, and allow apps to
+# ask to make adjustments, like the Sonos app").
+#
+# What it does, the Windows way:
+#   - connections other computers start to this PC are blocked, except those
+#     allowed; what this PC's programs start (and their answers) is never
+#     affected (outbound allowed, established/related accepted);
+#   - each network connection is Public or Private (or Domain on a domain
+#     member's domain network), and Public is stricter; a new network is
+#     Public until someone says otherwise;
+#   - programs are allowed by their path, for Private and/or Public: when an
+#     allowed program listens, the ports it listens on are open, and close
+#     again when it stops (nftables cannot match an inbound packet to a
+#     process, so the rule follows the program's listening sockets);
+#   - a program that starts listening with no rule makes the person's
+#     session ask: "Stained Glass Firewall has blocked some features of this
+#     app" (sg-shell's prompt, through the taskbar's network icon), and an
+#     administrator's "Allow access" adds the rule (through sg-admind);
+#   - the system's own services are allowed in groups, as Windows' built-in
+#     rules: Remote access (SSH), Remote Desktop, File and Printer Sharing,
+#     Network Discovery, Domain Controller;
+#   - rules Windows programs add (INetFwPolicy2, netsh advfirewall) are kept
+#     where Windows keeps them -- the machine's FirewallRules registry key --
+#     and are read from there and applied.
+#
+# Its own nftables table (inet sg_firewall), replaced whole and atomically on
+# every change; other tables (a VPN's kill switch) are never touched.
+#
+#   sg-firewall status                   the state, for anyone (also in
+#                                        /run/stained-glass-firewall/status)
+#   sg-firewall rule-add ACTION PROFILES PROTOCOL PORTS PROGRAM NAME [SOURCE]
+#   sg-firewall rule-set ID ENABLED ACTION PROFILES
+#   sg-firewall rule-remove ID
+#   sg-firewall group NAME PROFILES      a built-in group's networks (none: off)
+#   sg-firewall profile domain|private|public|all on|off
+#   sg-firewall network UUID private|public [NAME]
+#   sg-firewall reset                    Restore defaults (networks kept)
+#   sg-firewall registry-push ID [TEXT]  a rule a program just stored (TEXT
+#                                        empty: removed) -- at once, before
+#                                        the registry reaches the disk
+#   sg-firewall migrate                  an upgrade: existing networks are
+#                                        Private, services listening now stay
+#                                        reachable (logged)
+#   sg-firewall ruleset                  the nftables ruleset it would load
+#   sg-firewall apply                    load it once (no daemon)
+#   sg-firewall --daemon                 sg-firewall.service
+#   sg-firewall --stop                   remove the table (the service's stop)
+#
+# Changes need root (sg-admind runs them for an elevated program). Output:
+# lines, then "OK" or "ERROR <kind> <message>"; exit 0, 3 denied, 2 invalid.
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import array
+import fcntl
+import os
+import pwd
+import re
+import secrets
+import select
+import signal
+import socket
+import stat
+import struct
+import subprocess
+import sys
+import syslog
+import time
+
+ENV = os.environ.get
+CONF = ENV("SG_FIREWALL_CONF", "/etc/stained-glass/firewall.conf")
+STATE_DIR = ENV("SG_FIREWALL_STATE", "/var/lib/stained-glass/firewall")
+RUN_DIR = ENV("SG_FIREWALL_RUN", "/run/stained-glass-firewall")
+SYSTEM_REG = ENV("SG_FIREWALL_SYSTEM_REG", "/var/lib/stained-glass/prefix/system.reg")
+ROLE_FILE = ENV("SG_FIREWALL_ROLE", "/etc/stained-glass/role")
+PROC = ENV("SG_FIREWALL_PROC", "/proc")
+NFT = ENV("SG_FIREWALL_NFT", "nft")
+NMCLI = ENV("SG_FIREWALL_NMCLI", "nmcli")
+SYSTEM_USER = ENV("SG_SYSTEM_USER", "sgsystem")
+TABLE = ENV("SG_FIREWALL_TABLE", "sg_firewall")
+PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+PROFILES = ("domain", "private", "public")
+PROTOCOLS = ("tcp", "udp", "any")
+EPHEMERAL = 32768       # Linux's ip_local_port_range starts here: a UDP socket
+                        # on a port above it is a program's own end of a
+                        # conversation, not a service, and asks nothing
+TICK = 2.0
+NETWORK_EVERY = 5.0
+
+# The built-in groups (Windows' predefined rule groups): ports the system's
+# own services listen on, allowed on these networks while a system service
+# (not a person's program) listens there.
+GROUPS = {
+    "ssh": ("Remote access (SSH)", {"domain", "private", "public"}, [("tcp", "22")]),
+    "remote-desktop": ("Remote Desktop", {"domain", "private", "public"}, [("tcp", "3389"), ("udp", "3389")]),
+    "file-sharing": ("File and Printer Sharing", {"domain", "private"},
+                     [("tcp", "139,445,631"), ("udp", "137,138")]),
+    "network-discovery": ("Network Discovery", {"domain", "private"},
+                          [("udp", "1900,3702,5353,5355"), ("tcp", "5357,5358")]),
+    "domain-controller": ("Domain Controller", {"domain", "private", "public"},
+                          [("tcp", "53,88,135,389,445,464,636,3268,3269,49152-65535"),
+                           ("udp", "53,88,123,389,464")]),
+}
+GROUP_ORDER = ("ssh", "remote-desktop", "file-sharing", "network-discovery", "domain-controller")
+
+# Windows' environment variables in a rule's program path, as installers write them
+WIN_VARS = {
+    "%programfiles%": "C:\\Program Files",
+    "%programfiles(x86)%": "C:\\Program Files (x86)",
+    "%programw6432%": "C:\\Program Files",
+    "%systemroot%": "C:\\windows",
+    "%windir%": "C:\\windows",
+    "%systemdrive%": "C:",
+    "%programdata%": "C:\\ProgramData",
+    "%allusersprofile%": "C:\\ProgramData",
+}
+
+INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|nodejs|bash|sh|dash|java|mono)$")
+WIN_PATH = re.compile(r"^(?:[A-Za-z]:\\|\\\\)[^\x00-\x1f\t]*$")
+LINUX_PATH = re.compile(r"^/[^\x00-\x1f\t]*$")
+ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+REG_ID_RE = re.compile(r"^[^\x00-\x1f\t|]{1,200}$")
+EXIT = {"denied": 3, "invalid": 2}
+
+
+class Fail(Exception):
+    def __init__(self, kind, message):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+
+
+def log(msg):
+    syslog.syslog(syslog.LOG_INFO, msg)
+
+
+def clean(text):
+    return "".join(c if c.isprintable() and c != "\t" else " " for c in str(text))
+
+
+# --- ports, profiles -----------------------------------------------------------
+
+def parse_ports(text):
+    """'*' -> None (any); '80,443,1000-2000' -> [(80, 80), (443, 443), (1000, 2000)]."""
+    text = (text or "").strip()
+    if text in ("", "*", "any", "Any"):
+        return None
+    out = []
+    for part in text.split(","):
+        part = part.strip()
+        m = re.match(r"^(\d{1,5})(?:-(\d{1,5}))?$", part)
+        if not m:
+            raise Fail("invalid", "Ports are numbers or ranges, such as 80, 443, 8000-8080.")
+        lo = int(m.group(1))
+        hi = int(m.group(2) or lo)
+        if not (1 <= lo <= hi <= 65535):
+            raise Fail("invalid", "A port is a number from 1 to 65535.")
+        out.append((lo, hi))
+    return out
+
+
+def ports_text(ports):
+    if ports is None:
+        return "*"
+    return ",".join(str(lo) if lo == hi else "%d-%d" % (lo, hi) for lo, hi in ports)
+
+
+def port_in(ports, port):
+    return ports is None or any(lo <= port <= hi for lo, hi in ports)
+
+
+def parse_profiles(text):
+    text = (text or "").strip().lower()
+    if text in ("all", "any", "*"):
+        return set(PROFILES)
+    if text in ("", "none", "-"):
+        return set()
+    out = set()
+    for p in text.split(","):
+        p = p.strip()
+        if p not in PROFILES:
+            raise Fail("invalid", "Networks are domain, private, public, all or none.")
+        out.add(p)
+    return out
+
+
+def profiles_text(profiles):
+    if set(profiles) == set(PROFILES):
+        return "all"
+    return ",".join(p for p in PROFILES if p in profiles) or "none"
+
+
+def program_key(program):
+    """How programs compare: Windows paths without regard to case."""
+    if program and WIN_PATH.match(program):
+        return program.replace("/", "\\").lower()
+    return program
+
+
+def expand_win(path):
+    low = path.lower()
+    for var, val in WIN_VARS.items():
+        if low.startswith(var):
+            return val + path[len(var):]
+    return path
+
+
+# --- the configuration ----------------------------------------------------------
+
+class Rule:
+    __slots__ = ("id", "enabled", "action", "profiles", "proto", "ports", "program", "name", "source")
+
+    def __init__(self, id, enabled, action, profiles, proto, ports, program, name, source="user"):
+        self.id, self.enabled, self.action, self.profiles = id, enabled, action, set(profiles)
+        self.proto, self.ports, self.program, self.name, self.source = proto, ports, program, name, source
+
+    def line(self):
+        return "\t".join(["rule", self.id, "1" if self.enabled else "0", self.action, profiles_text(self.profiles),
+                          self.proto, ports_text(self.ports), self.program or "*", clean(self.name), self.source])
+
+
+class Config:
+    def __init__(self):
+        self.profiles = {p: True for p in PROFILES}
+        self.networks = {}          # uuid -> [category, name]
+        self.rules = []
+        self.overrides = {}         # registry rule id -> {"removed": bool, "enabled", "action", "profiles"}
+        self.groups = {g: set(GROUPS[g][1]) for g in GROUPS}
+
+    def lines(self):
+        out = ["# Stained Glass Firewall -- written by sg-firewall (Settings > Network & Internet > Firewall).",
+               "# Change it there, or with sg-firewall as root; a hand edit is read too."]
+        out += ["profile\t%s\t%s" % (p, "on" if self.profiles[p] else "off") for p in PROFILES]
+        out += ["group\t%s\t%s" % (g, profiles_text(self.groups[g])) for g in GROUP_ORDER]
+        out += ["network\t%s\t%s\t%s" % (u, c, clean(n)) for u, (c, n) in sorted(self.networks.items())]
+        out += [r.line() for r in self.rules]
+        for rid, o in sorted(self.overrides.items()):
+            if o.get("removed"):
+                out.append("override\t%s\tremoved" % rid)
+            else:
+                out.append("override\t%s\t%s\t%s\t%s" % (rid, "1" if o["enabled"] else "0", o["action"],
+                                                         profiles_text(o["profiles"])))
+        return out
+
+
+def parse_rule(f, source_default="user"):
+    """f: the fields after 'rule'."""
+    if len(f) < 8:
+        return None
+    rid, enabled, action, profiles, proto, ports, program, name = f[:8]
+    source = f[8] if len(f) > 8 else source_default
+    if action not in ("allow", "block") or proto not in PROTOCOLS:
+        return None
+    try:
+        return Rule(rid, enabled == "1", action, parse_profiles(profiles), proto, parse_ports(ports),
+                    None if program in ("*", "") else program, name, source)
+    except Fail:
+        return None
+
+
+def parse_config(text):
+    c = Config()
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        f = raw.split("\t")
+        try:
+            if f[0] == "profile" and len(f) >= 3 and f[1] in PROFILES:
+                c.profiles[f[1]] = f[2] != "off"
+            elif f[0] == "group" and len(f) >= 3 and f[1] in GROUPS:
+                c.groups[f[1]] = parse_profiles(f[2])
+            elif f[0] == "network" and len(f) >= 3 and f[2] in ("private", "public"):
+                c.networks[f[1]] = [f[2], f[3] if len(f) > 3 else ""]
+            elif f[0] == "rule":
+                r = parse_rule(f[1:])
+                if r:
+                    c.rules.append(r)
+            elif f[0] == "override" and len(f) >= 3:
+                if f[2] == "removed":
+                    c.overrides[f[1]] = {"removed": True}
+                elif len(f) >= 5 and f[3] in ("allow", "block"):
+                    c.overrides[f[1]] = {"removed": False, "enabled": f[2] == "1", "action": f[3],
+                                         "profiles": parse_profiles(f[4])}
+        except Fail:
+            continue
+    return c
+
+
+def read_config():
+    try:
+        with open(CONF, encoding="utf-8", errors="replace") as f:
+            return parse_config(f.read())
+    except FileNotFoundError:
+        return Config()
+
+
+def write_config(c):
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    tmp = CONF + ".sg-new"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(c.lines()) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, CONF)
+
+
+class Locked:
+    """One change at a time (sg-admind, the daemon's Cancel, a person with sudo)."""
+    def __enter__(self):
+        os.makedirs(STATE_DIR, exist_ok=True)
+        self.fd = os.open(os.path.join(STATE_DIR, ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        os.close(self.fd)
+
+
+# --- rules programs stored in the registry (INetFwPolicy2, netsh) ----------------
+
+RULES_KEY = "[system\\\\currentcontrolset\\\\services\\\\sharedaccess\\\\parameters\\\\firewallpolicy\\\\firewallrules]"
+
+
+def reg_unescape(s):
+    """A string as wineserver writes it in a .reg file (dump_strW)."""
+    out, i, n = [], 0, len(s)
+    simple = {"a": "\a", "b": "\b", "t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r", "e": "\x1b"}
+    while i < n:
+        c = s[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        d = s[i + 1]
+        if d == "x":
+            m = re.match(r"[0-9a-fA-F]{1,4}", s[i + 2:])
+            if m:
+                out.append(chr(int(m.group(0), 16)))
+                i += 2 + len(m.group(0))
+                continue
+            out.append("x")
+            i += 2
+        elif d in "01234567":
+            m = re.match(r"[0-7]{1,3}", s[i + 1:])
+            out.append(chr(int(m.group(0), 8)))
+            i += 1 + len(m.group(0))
+        elif d in simple:
+            out.append(simple[d])
+            i += 2
+        else:
+            out.append(d)
+            i += 2
+    return "".join(out)
+
+
+def read_registry_rules(path=None):
+    """{value name: rule text} from the FirewallRules key of the machine's system.reg."""
+    path = path or SYSTEM_REG
+    rules = {}
+    try:
+        f = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return rules
+    with f:
+        inside = False
+        for line in f:
+            if line.startswith("["):
+                inside = line.split("]")[0].lower() + "]" == RULES_KEY
+                continue
+            if not inside:
+                continue
+            m = re.match(r'^"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"\s*$', line)
+            if m:
+                rules[reg_unescape(m.group(1))] = reg_unescape(m.group(2))
+    return rules
+
+
+def rule_from_registry(rid, text):
+    """Windows' "v2.30|Action=Allow|Dir=In|Protocol=6|LPort=..|App=..|Name=..|" -> Rule (inbound only)."""
+    fields = {}
+    profiles, lports = set(), []
+    for item in text.split("|"):
+        if "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        k = k.lower()
+        if k == "profile":
+            if v.lower() in PROFILES:
+                profiles.add(v.lower())
+        elif k == "lport":
+            lports.append(v)
+        else:
+            fields.setdefault(k, v)
+    if fields.get("dir", "In").lower() != "in":
+        return None
+    proto = {"6": "tcp", "17": "udp"}.get(fields.get("protocol", "256"), "any")
+    if fields.get("protocol") not in (None, "6", "17", "256"):
+        return None                     # ICMP and other protocols: the core rules decide
+    ports = []
+    for p in lports:
+        try:
+            got = parse_ports(p)
+        except Fail:
+            continue                    # keywords (RPC, IPHTTPS, Teredo...): not ours
+        if got is None:
+            ports = None
+            break
+        ports += got
+    if lports and ports == []:
+        return None
+    app = fields.get("app")
+    if app and app.lower() != "system":
+        app = expand_win(app)
+    elif app:
+        app = None
+    name = fields.get("name", "") or (app.split("\\")[-1] if app else "Port " + ports_text(ports or None))
+    if name.startswith("@"):            # a resource reference: the program's own name instead
+        name = app.split("\\")[-1] if app else rid
+    return Rule("reg:" + rid, fields.get("active", "TRUE").upper() == "TRUE",
+                "block" if fields.get("action", "Allow").lower() == "block" else "allow",
+                profiles or set(PROFILES), proto, ports if lports else None, app, name, "program")
+
+
+def pushed_path():
+    return os.path.join(STATE_DIR, "registry-pushed")
+
+
+def read_pushed():
+    out = []
+    try:
+        with open(pushed_path(), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                p = line.rstrip("\n").split("\t", 2)
+                if len(p) == 3:
+                    out.append((float(p[0]), p[1], p[2]))
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def effective_registry(reg_path=None):
+    """The registry's rules, with what programs pushed since the file was last written."""
+    path = reg_path or SYSTEM_REG
+    rules = read_registry_rules(path)
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        mtime = 0
+    for t, rid, text in read_pushed():
+        if t > mtime:
+            if text:
+                rules[rid] = text
+            else:
+                rules.pop(rid, None)
+    return rules
+
+
+def all_rules(conf, registry):
+    """Every rule in force: ours, then the registry's with this PC's changes to them."""
+    rules = list(conf.rules)
+    for rid, text in sorted(registry.items()):
+        r = rule_from_registry(rid, text)
+        if not r:
+            continue
+        o = conf.overrides.get(r.id[4:])
+        if o and o.get("removed"):
+            continue
+        if o:
+            r.enabled, r.action, r.profiles = o["enabled"], o["action"], set(o["profiles"])
+        rules.append(r)
+    return rules
+
+
+# --- what listens ----------------------------------------------------------------
+
+class Listener:
+    __slots__ = ("proto", "addr", "port", "inode", "uid", "program", "kind", "owner_uid", "pid")
+
+    def __init__(self, proto, addr, port, inode, uid):
+        self.proto, self.addr, self.port, self.inode, self.uid = proto, addr, port, inode, uid
+        self.program, self.kind, self.owner_uid, self.pid = None, "unknown", uid, 0
+
+
+def hex_addr(h):
+    if len(h) == 8:
+        return socket.inet_ntop(socket.AF_INET, struct.pack("<I", int(h, 16)))
+    words = [struct.pack("<I", int(h[i:i + 8], 16)) for i in range(0, 32, 8)]
+    return socket.inet_ntop(socket.AF_INET6, b"".join(words))
+
+
+def loopback(addr):
+    return addr.startswith("127.") or addr == "::1" or addr.startswith("::ffff:127.")
+
+
+def scan_listeners(proc=None):
+    """Sockets that can take a connection from another computer: TCP listening,
+    UDP not connected, on any address but the loopback."""
+    proc = proc or PROC
+    out = []
+    for fname, proto, want in (("tcp", "tcp", "0A"), ("tcp6", "tcp", "0A"), ("udp", "udp", "07"), ("udp6", "udp", "07")):
+        try:
+            with open(os.path.join(proc, "net", fname)) as f:
+                lines = f.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            p = line.split()
+            if len(p) < 10 or p[3] != want:
+                continue
+            ah, ph = p[1].split(":")
+            try:
+                addr = hex_addr(ah)
+            except (ValueError, OSError):
+                continue
+            if loopback(addr):
+                continue
+            out.append(Listener(proto, addr, int(ph, 16), int(p[9]), int(p[7])))
+    return out
+
+
+def socket_owners(inodes, proc=None):
+    """inode -> [pid] for these inodes."""
+    proc = proc or PROC
+    want = {"socket:[%d]" % i: i for i in inodes}
+    found = {}
+    if not want:
+        return found
+    for pid in os.listdir(proc):
+        if not pid.isdigit():
+            continue
+        fd_dir = os.path.join(proc, pid, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                link = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if link in want:
+                found.setdefault(want[link], []).append(int(pid))
+    return found
+
+
+def process_info(pid, proc=None):
+    """(exe, argv, uid) of a process."""
+    proc = proc or PROC
+    base = os.path.join(proc, str(pid))
+    try:
+        exe = os.readlink(os.path.join(base, "exe"))
+    except OSError:
+        exe = ""
+    try:
+        with open(os.path.join(base, "cmdline"), "rb") as f:
+            argv = [a.decode("utf-8", "replace") for a in f.read().split(b"\0") if a]
+    except OSError:
+        argv = []
+    uid = -1
+    try:
+        with open(os.path.join(base, "status")) as f:
+            for line in f:
+                if line.startswith("Uid:"):
+                    uid = int(line.split()[1])
+                    break
+    except OSError:
+        pass
+    return exe.removesuffix(" (deleted)"), argv, uid
+
+
+def is_wine(exe):
+    b = os.path.basename(exe)
+    return b.startswith("wine") and ("preloader" in b or b in ("wine", "wine64"))
+
+
+def is_wineserver(exe):
+    return os.path.basename(exe) in ("wineserver", "wineserver64")
+
+
+def system_uid():
+    try:
+        return pwd.getpwnam(SYSTEM_USER).pw_uid
+    except KeyError:
+        return -2
+
+
+WINE_GROUP = ENV("SG_WINE_GROUP", "sgwine")
+_PEOPLE = {"time": 0, "uids": set()}
+
+
+def person_uid(uid):
+    """A person's account: an ordinary one, or one with a Windows session
+    (group sgwine -- the lab image's sguser is a system account), never the
+    SYSTEM or login-screen accounts."""
+    if 1000 <= uid < 60000:
+        return True
+    now = time.monotonic()
+    if now - _PEOPLE["time"] > 60:
+        uids = set()
+        try:
+            import grp
+            for name in grp.getgrnam(WINE_GROUP).gr_mem:
+                if name in (SYSTEM_USER, "sggreet"):
+                    continue
+                try:
+                    uids.add(pwd.getpwnam(name).pw_uid)
+                except KeyError:
+                    pass
+        except KeyError:
+            pass
+        _PEOPLE.update(time=now, uids=uids)
+    return uid in _PEOPLE["uids"]
+
+
+def identify(listeners, hints, proc=None, cache=None):
+    """Who each listener belongs to: program (a Windows or Linux path), kind
+    (windows, linux-user, system, unknown) and the account to ask. CACHE
+    (inode -> what was found) spares the daemon a look through every
+    process's descriptors each time."""
+    cache = {} if cache is None else cache
+    need = [l.inode for l in listeners if l.inode not in hints and l.inode not in cache]
+    owners = socket_owners(need, proc) if need else {}
+    sys_uid = system_uid()
+    for l in listeners:
+        h = hints.get(l.inode)
+        if h:
+            l.program, l.kind, l.owner_uid, l.pid = h["program"], "windows", h["uid"], h["pid"]
+            continue
+        if l.inode in cache:
+            l.kind, l.program, l.owner_uid, l.pid = cache[l.inode]
+            continue
+        pids = owners.get(l.inode, [])
+        best = None
+        for pid in pids:
+            exe, argv, uid = process_info(pid, proc)
+            if is_wineserver(exe):
+                best = best or ("unknown", None, uid, pid)
+                continue
+            if is_wine(exe):
+                # a Windows program holding its own socket (older Wine): its
+                # command line starts with its Windows path
+                prog = argv[0] if argv and WIN_PATH.match(argv[0]) else None
+                best = ("windows" if prog else "unknown", prog, uid, pid)
+                break
+            prog = exe
+            if INTERPRETERS.match(os.path.basename(exe)) and len(argv) > 1 and argv[1].startswith("/"):
+                prog = argv[1]
+            kind = "linux-user" if (person_uid(uid) or uid == sys_uid) else "system"
+            best = (kind, prog, uid, pid)
+            break
+        if best:
+            l.kind, l.program, l.owner_uid, l.pid = best
+            cache[l.inode] = best
+    return listeners
+
+
+# --- deciding -----------------------------------------------------------------------
+
+def rule_matches(r, l):
+    if r.proto != "any" and r.proto != l.proto:
+        return False
+    if not port_in(r.ports, l.port):
+        return False
+    if r.program is None:
+        return False                    # a port rule: static, not per listener
+    return program_key(r.program) == program_key(l.program)
+
+
+def group_rules(conf):
+    out = []
+    for g in GROUP_ORDER:
+        profiles = conf.groups.get(g, set())
+        for proto, ports in GROUPS[g][2]:
+            out.append(Rule("group:" + g, bool(profiles), "allow", profiles, proto, parse_ports(ports), "@system",
+                            GROUPS[g][0], "built-in"))
+    return out
+
+
+def known_program(rules, program):
+    """A rule names this program (allowed, blocked, or turned off): no question."""
+    k = program_key(program)
+    return any(r.program and program_key(r.program) == k for r in rules)
+
+
+class Plan:
+    def __init__(self):
+        self.open = {p: {"tcp": set(), "udp": set()} for p in PROFILES}
+        self.block = {p: {"tcp": set(), "udp": set()} for p in PROFILES}
+        self.decisions = []             # (listener, allowed profiles, state)
+        self.ask = []                   # listeners to ask about
+
+
+def evaluate(conf, rules, listeners):
+    plan = Plan()
+    groups = group_rules(conf)
+    # port rules (no program): open or closed whatever listens
+    for r in rules:
+        if not r.enabled or r.program is not None:
+            continue
+        target = plan.open if r.action == "allow" else plan.block
+        for p in r.profiles:
+            for proto in (("tcp", "udp") if r.proto == "any" else (r.proto,)):
+                for rng in (r.ports or [(1, 65535)]):
+                    target[p][proto].add(rng)
+    asked = set()
+    for l in listeners:
+        allowed, blocked = set(), set()
+        if l.kind == "system":
+            for r in groups:
+                if r.enabled and r.proto == l.proto and port_in(r.ports, l.port):
+                    allowed |= r.profiles
+        if l.program:
+            for r in rules:
+                if r.enabled and rule_matches(r, l):
+                    (allowed if r.action == "allow" else blocked).update(r.profiles)
+        allowed -= blocked
+        for p in allowed:
+            plan.open[p][l.proto].add((l.port, l.port))
+        if allowed:
+            state = "allowed"
+        elif l.kind in ("windows", "linux-user") and l.program and not known_program(rules, l.program) \
+                and (l.proto == "tcp" or l.port < EPHEMERAL):
+            state = "ask"
+            key = (l.owner_uid, program_key(l.program))
+            if key not in asked:
+                asked.add(key)
+                plan.ask.append(l)
+        else:
+            state = "blocked"
+        plan.decisions.append((l, allowed, state))
+    return plan
+
+
+# --- nftables ------------------------------------------------------------------------
+
+def merge(ranges):
+    out = []
+    for lo, hi in sorted(ranges):
+        if out and lo <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], hi))
+        else:
+            out.append((lo, hi))
+    return out
+
+
+def elements(ranges):
+    return ", ".join(str(lo) if lo == hi else "%d-%d" % (lo, hi) for lo, hi in merge(ranges))
+
+
+def nft_quote(s):
+    return '"%s"' % re.sub(r'[^A-Za-z0-9_.:@+-]', "_", s)
+
+
+def ruleset(conf, plan, ifaces):
+    """The whole table, as nft -f text. ifaces: {interface: profile}."""
+    t = ["table inet %s {" % TABLE,
+         '\tcomment "Stained Glass Firewall (sg-firewall): made by the program, changes here are replaced"']
+    for p in PROFILES:
+        for kind, src in (("allow", plan.open[p]), ("block", plan.block[p])):
+            for proto in ("tcp", "udp"):
+                t.append("\tset %s_%s_%s {" % (p, kind, proto))
+                t.append("\t\ttype inet_service")
+                t.append("\t\tflags interval")
+                if src[proto]:
+                    t.append("\t\telements = { %s }" % elements(src[proto]))
+                t.append("\t}")
+    t += ["\tchain input {",
+          "\t\ttype filter hook input priority filter; policy accept;",
+          '\t\tiif "lo" accept',
+          "\t\tct state established,related accept",
+          "\t\tct state invalid drop",
+          "\t\t# what IPv6 and IPv4 cannot work without",
+          "\t\ticmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, "
+          "nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect, mld-listener-query, "
+          "mld-listener-report, mld2-listener-report } accept",
+          "\t\ticmp type { destination-unreachable, time-exceeded, parameter-problem } accept",
+          "\t\t# this PC's own address: the DHCP server's answers",
+          "\t\tudp sport 67 udp dport 68 accept",
+          "\t\tip6 saddr fe80::/10 udp sport 547 udp dport 546 accept"]
+    # this PC's own virtual networks -- its virtual machines' and containers'
+    # bridges (libvirt, Docker, LXC/Incus, VirtualBox, VMware): what comes in
+    # on them comes from this PC's own guests, which need its DHCP and DNS
+    t.append("\t\t# this PC's own virtual machines' and containers' networks")
+    t.append('\t\tiifname { "virbr*", "docker*", "br-*", "lxcbr*", "lxdbr*", "incusbr*", "vboxnet*", "vmnet*" } accept')
+    if ifaces:
+        pairs = ", ".join("%s : goto %s" % (nft_quote(i), p) for i, p in sorted(ifaces.items()))
+        t.append("\t\tiifname vmap { %s }" % pairs)
+    t.append("\t\tgoto public")
+    t.append("\t}")
+    for p in PROFILES:
+        t.append("\tchain %s {" % p)
+        if not conf.profiles[p]:
+            t.append("\t\t# the firewall is off on %s networks" % p)
+            t.append("\t\taccept")
+        else:
+            if p != "public":
+                t.append("\t\ticmp type echo-request accept")
+                t.append("\t\ticmpv6 type echo-request accept")
+            t.append("\t\ttcp dport @%s_block_tcp drop" % p)
+            t.append("\t\tudp dport @%s_block_udp drop" % p)
+            t.append("\t\ttcp dport @%s_allow_tcp accept" % p)
+            t.append("\t\tudp dport @%s_allow_udp accept" % p)
+            t.append("\t\tcounter drop")
+        t.append("\t}")
+    t.append("}")
+    return "\n".join(t) + "\n"
+
+
+def nft(args, text=None):
+    try:
+        r = subprocess.run([NFT] + args, input=text, capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, PATH=PATH + ":" + ENV("PATH", "")))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+    return r.returncode, (r.stdout if r.returncode == 0 else r.stderr)
+
+
+def load(text):
+    """Replace the table in one transaction: never a moment without it."""
+    rc, err = nft(["-f", "-"], "table inet %s\ndelete table inet %s\n%s" % (TABLE, TABLE, text))
+    if rc:
+        raise Fail("failed", "nftables refused the rules: %s" % err.strip()[:300])
+
+
+def remove_table():
+    nft(["delete", "table", "inet", TABLE])
+
+
+# --- networks -------------------------------------------------------------------------
+
+def nm_split(line):
+    fields, cur, esc = [], [], False
+    for c in line:
+        if esc:
+            cur.append(c)
+            esc = False
+        elif c == "\\":
+            esc = True
+        elif c == ":":
+            fields.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+    fields.append("".join(cur))
+    return fields
+
+
+def nmcli(*args):
+    try:
+        r = subprocess.run([NMCLI, "-t", "-e", "yes"] + list(args), capture_output=True, text=True, timeout=20,
+                           env=dict(os.environ, LC_ALL="C", PATH=PATH + ":" + ENV("PATH", "")),
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if r.returncode:
+        return []
+    return [nm_split(l) for l in r.stdout.splitlines() if l]
+
+
+def read_role():
+    role = {}
+    try:
+        with open(ROLE_FILE) as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    role[k] = v
+    except OSError:
+        pass
+    return role
+
+
+def active_networks(conf):
+    """[(uuid, device, name, type, category)] for the active connections."""
+    out = []
+    role = read_role()
+    realm = role.get("realm", "").lower()
+    for f in nmcli("-f", "UUID,DEVICE,TYPE,NAME", "connection", "show", "--active"):
+        if len(f) < 4 or f[2] == "loopback" or not f[1]:
+            continue
+        uuid_, dev, typ, name = f[:4]
+        cat = conf.networks.get(uuid_, ["public"])[0]
+        if role.get("role") == "dc":
+            cat = "domain"
+        elif role.get("role") == "member" and realm:
+            for d in nmcli("-f", "IP4.DOMAIN,IP6.DOMAIN", "device", "show", dev):
+                if any(x.lower() == realm or x.lower().endswith("." + realm) for x in d[1:] if x):
+                    cat = "domain"
+        out.append((uuid_, dev, name, typ, cat))
+    return out
+
+
+def iface_profiles(networks):
+    return {dev: cat for _u, dev, _n, _t, cat in networks}
+
+
+# --- the person's question ------------------------------------------------------------
+
+def active_seat_uid():
+    try:
+        r = subprocess.run(["loginctl", "show-seat", "seat0", "-p", "ActiveSession", "--value"],
+                           capture_output=True, text=True, timeout=5)
+        sid = r.stdout.strip()
+        if sid:
+            r = subprocess.run(["loginctl", "show-session", sid, "-p", "User", "--value"],
+                               capture_output=True, text=True, timeout=5)
+            return int(r.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def ask_dir(uid):
+    return os.path.join(RUN_DIR, "ask", str(uid))
+
+
+def ensure_ask_dir(uid):
+    d = ask_dir(uid)
+    os.makedirs(os.path.dirname(d), mode=0o755, exist_ok=True)
+    try:
+        st = os.lstat(d)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+            raise OSError("not the person's")
+    except FileNotFoundError:
+        os.mkdir(d, 0o700)
+        if os.geteuid() == 0:
+            os.chown(d, uid, -1)
+    return d
+
+
+# --- the state for Settings, the prompt and Wine's hnetcfg -----------------------------
+
+def status_lines(conf, rules, plan, networks, running=True):
+    out = ["state\t%s" % ("running" if running else "stopped")]
+    out += ["profile\t%s\t%s" % (p, "on" if conf.profiles[p] else "off") for p in PROFILES]
+    current = sorted({n[4] for n in networks}, key=PROFILES.index) or ["public"]
+    out.append("current\t%s" % ",".join(current))
+    out += ["network\t%s\t%s\t%s\t%s\t%s" % (u, d, c, t, clean(n)) for u, d, n, t, c in networks]
+    for u, (c, n) in sorted(conf.networks.items()):
+        if not any(x[0] == u for x in networks):
+            out.append("known\t%s\t%s\t%s" % (u, c, clean(n)))
+    out += ["group\t%s\t%s\t%s" % (g, profiles_text(conf.groups[g]), GROUPS[g][0]) for g in GROUP_ORDER]
+    out += [r.line() for r in rules]
+    for l, allowed, state in plan.decisions:
+        out.append("listen\t%s\t%d\t%s\t%s\t%s\t%s" % (l.proto, l.port, l.kind, state, profiles_text(allowed),
+                                                    clean(l.program or "")))
+    return out
+
+
+def write_atomic(path, text, mode=0o644):
+    tmp = path + ".sg-new"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# --- the daemon ---------------------------------------------------------------------------
+
+SCM_CREDS_SIZE = struct.calcsize("3i")
+
+
+class Daemon:
+    def __init__(self):
+        self.conf_mtime = None
+        self.conf = Config()
+        self.reg_key = None
+        self.registry = {}
+        self.hints = {}             # inode -> {"program", "uid", "pid", "proto", "port", "time"}
+        self.owners = {}            # inode -> (kind, program, uid, pid): found once
+        self.networks = []
+        self.net_time = 0
+        self.net_sig = None
+        self.loaded = None
+        self.listing = None
+        self.check_time = 0
+        self.status = None
+        self.asks = {}              # (uid, program key) -> (id, ask uid)
+        self.asks_program = {}      # (uid, program key) -> the program's path
+        self.logged = set()
+        self.sock = None
+
+    # Wine's notice (wine-sg 1500): a program listened. The socket itself
+    # comes with it (SCM_RIGHTS), which proves it is that program's.
+    def open_notify(self):
+        os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
+        os.chmod(RUN_DIR, 0o755)
+        path = os.path.join(RUN_DIR, "notify")
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+        s.bind(path)
+        os.chmod(path, 0o666)
+        s.setblocking(False)
+        self.sock = s
+
+    def read_notices(self):
+        got = False
+        while True:
+            try:
+                msg, anc, _flags, _addr = self.sock.recvmsg(4096, socket.CMSG_SPACE(4 * 4) +
+                                                            socket.CMSG_SPACE(SCM_CREDS_SIZE))
+            except (BlockingIOError, InterruptedError):
+                return got
+            except OSError:
+                return got
+            fds, creds = [], None
+            for level, typ, data in anc:
+                if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+                    a = array.array("i")
+                    a.frombytes(data[:len(data) - len(data) % a.itemsize])
+                    fds += list(a)
+                elif level == socket.SOL_SOCKET and typ == socket.SCM_CREDENTIALS:
+                    creds = struct.unpack("3i", data[:SCM_CREDS_SIZE])
+            try:
+                if fds and creds:
+                    got |= self.notice(msg, fds[0], creds)
+            finally:
+                for fd in fds:
+                    os.close(fd)
+
+    def notice(self, msg, fd, creds):
+        pid, uid, _gid = creds
+        lines = msg.decode("utf-8", "replace").split("\n")
+        if not lines or lines[0] != "SGFW1" or len(lines) < 2:
+            return False
+        program = lines[1].strip()
+        if not WIN_PATH.match(program) or len(program) > 1024:
+            return False
+        # only Wine speaks for a Windows program (a Linux program is known by
+        # its own executable, and may not claim another's name)
+        if ENV("SG_FIREWALL_TEST") != "1" and not is_wine(process_info(pid)[0]):
+            return False
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISSOCK(st.st_mode):
+                return False
+            s = socket.socket(fileno=os.dup(fd))
+        except OSError:
+            return False
+        try:
+            if s.type == socket.SOCK_STREAM:
+                proto = "tcp"
+            elif s.type == socket.SOCK_DGRAM:
+                proto = "udp"
+            else:
+                return False
+            port = s.getsockname()[1]
+        except OSError:
+            return False
+        finally:
+            s.close()
+        self.hints[st.st_ino] = {"program": program, "uid": uid, "pid": pid, "proto": proto, "port": port,
+                                 "time": time.time()}
+        return True
+
+    def reload_conf(self):
+        try:
+            m = os.stat(CONF).st_mtime_ns
+        except FileNotFoundError:
+            m = None
+        if m != self.conf_mtime:
+            self.conf_mtime = m
+            self.conf = read_config()
+            if m is None:
+                with Locked():
+                    if not os.path.exists(CONF):
+                        write_config(self.conf)
+            return True
+        return False
+
+    def reload_registry(self):
+        key = []
+        for p in (SYSTEM_REG, pushed_path()):
+            try:
+                key.append(os.stat(p).st_mtime_ns)
+            except OSError:
+                key.append(None)
+        if key != self.reg_key:
+            self.reg_key = key
+            self.registry = effective_registry()
+            return True
+        return False
+
+    def reload_networks(self, now):
+        try:
+            sig = tuple(sorted(os.listdir("/sys/class/net")))
+        except OSError:
+            sig = ()
+        if now - self.net_time >= NETWORK_EVERY or sig != self.net_sig:
+            self.net_time, self.net_sig = now, sig
+            self.networks = active_networks(self.conf)
+
+    def answers(self):
+        """A person's Cancel: the program is blocked (and listed, unticked), as on Windows."""
+        changed = False
+        for (uid, key), (aid, ask_uid) in list(self.asks.items()):
+            path = os.path.join(ask_dir(ask_uid), aid + ".cancel")
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            name = ""
+            if stat.S_ISREG(st.st_mode) and st.st_uid == ask_uid and st.st_size < 4096:
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
+                        first = f.read(1024).strip().splitlines()
+                    name = clean(first[0])[:200] if first else ""
+                except OSError:
+                    name = ""
+                program = self.asks_program.get((uid, key))
+                if program:
+                    with Locked():
+                        c = read_config()
+                        if not known_program(c.rules, program):
+                            c.rules.append(Rule(new_id(), True, "block", set(PROFILES), "any", None, program,
+                                                name or display_name(program), "prompt"))
+                            write_config(c)
+                            log("blocked %s (the person chose Cancel)" % program)
+                            changed = True
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return changed
+
+    def update_asks(self, plan, rules):
+        want = {}
+        for l in plan.ask:
+            target = l.owner_uid
+            if target == system_uid() or not person_uid(target):
+                target = active_seat_uid()
+            if target is None or not person_uid(target):
+                continue
+            want[(l.owner_uid, program_key(l.program))] = (l, target)
+        for key, (aid, ask_uid) in list(self.asks.items()):
+            program = self.asks_program.get(key)
+            if program and known_program(rules, program):
+                for ext in (".ask", ".open"):
+                    try:
+                        os.unlink(os.path.join(ask_dir(ask_uid), aid + ext))
+                    except OSError:
+                        pass
+                del self.asks[key]
+                self.asks_program.pop(key, None)
+        for key, (l, target) in want.items():
+            if key in self.asks:
+                continue
+            aid = secrets.token_hex(8)
+            try:
+                d = ensure_ask_dir(target)
+                cats = sorted({n[4] for n in self.networks}, key=PROFILES.index) or ["public"]
+                text = ("program=%s\nkind=%s\nprotocol=%s\nport=%d\ncategory=%s\n" %
+                        (l.program, "windows" if l.kind == "windows" else "linux", l.proto, l.port, cats[0]))
+                tmp = os.path.join(d, "." + aid)
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(text)
+                if os.geteuid() == 0:
+                    os.chown(tmp, target, -1)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, os.path.join(d, aid + ".ask"))
+            except OSError as e:
+                log("could not ask about %s: %s" % (l.program, e))
+                continue
+            self.asks[key] = (aid, target)
+            self.asks_program[key] = l.program
+            log("asking about %s (%s %d) in the session of uid %d" % (l.program, l.proto, l.port, target))
+
+    def tick(self, now):
+        self.reload_conf()
+        self.reload_registry()
+        self.reload_networks(now)
+        if self.answers():
+            self.reload_conf()
+        rules = all_rules(self.conf, self.registry)
+        listeners = identify(scan_listeners(), self.hints, cache=self.owners)
+        live = {l.inode for l in listeners}
+        for ino in list(self.owners):
+            if ino not in live:
+                del self.owners[ino]
+        for ino in list(self.hints):
+            if ino not in live and now - self.hints[ino]["time"] > 30:
+                del self.hints[ino]
+        plan = evaluate(self.conf, rules, listeners)
+        for l, allowed, state in plan.decisions:
+            if state == "blocked" and (l.proto == "tcp" or l.port < EPHEMERAL):
+                key = (l.proto, l.port, l.program)
+                if key not in self.logged:
+                    self.logged.add(key)
+                    log("inbound %s %d to %s is blocked (no rule allows it)" % (l.proto, l.port, l.program or "an unknown program"))
+        text = ruleset(self.conf, plan, iface_profiles(self.networks))
+        if text != self.loaded or now - self.check_time > 10:
+            self.check_time = now
+            listing = nft(["list", "table", "inet", TABLE])
+            if text != self.loaded or listing[0] or listing[1] != self.listing:
+                try:
+                    load(text)
+                    if self.loaded is not None and text == self.loaded:
+                        log("the firewall's table was changed or removed by something else; put back")
+                    self.loaded = text
+                    self.listing = nft(["list", "table", "inet", TABLE])[1]
+                except Fail as e:
+                    log(e.message)
+        self.update_asks(plan, rules)
+        st = "\n".join(status_lines(self.conf, rules, plan, self.networks)) + "\n"
+        if st != self.status:
+            try:
+                write_atomic(os.path.join(RUN_DIR, "status"), st)
+                self.status = st
+            except OSError as e:
+                log("status not written: %s" % e)
+
+    def run(self):
+        os.makedirs(RUN_DIR, mode=0o755, exist_ok=True)
+        # questions from before a restart are asked again
+        try:
+            for uid in os.listdir(os.path.join(RUN_DIR, "ask")):
+                d = os.path.join(RUN_DIR, "ask", uid)
+                for n in os.listdir(d):
+                    try:
+                        os.unlink(os.path.join(d, n))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        self.open_notify()
+        stop = []
+        signal.signal(signal.SIGTERM, lambda *a: stop.append(1))
+        signal.signal(signal.SIGINT, lambda *a: stop.append(1))
+        log("started")
+        next_tick = 0
+        while not stop:
+            now = time.monotonic()
+            timeout = max(0.0, next_tick - now)
+            try:
+                r, _, _ = select.select([self.sock], [], [], timeout)
+            except InterruptedError:
+                continue
+            soon = False
+            if r:
+                soon = self.read_notices()
+                # a notice: look again shortly (the socket is in /proc/net now)
+                next_tick = min(next_tick, time.monotonic() + 0.2) if soon else next_tick
+            if time.monotonic() >= next_tick:
+                try:
+                    self.tick(time.time())
+                except Exception as e:      # never die: the table stays as it was
+                    log("error: %r" % e)
+                next_tick = time.monotonic() + TICK
+        try:
+            write_atomic(os.path.join(RUN_DIR, "status"), "state\tstopped\n")
+        except OSError:
+            pass
+        log("stopped")
+
+
+def display_name(program):
+    base = re.split(r"[\\/]", program)[-1]
+    return base[:-4] if base.lower().endswith(".exe") else base
+
+
+def new_id():
+    return secrets.token_hex(4)
+
+
+# --- commands ----------------------------------------------------------------------------
+
+def need_root():
+    if os.geteuid() != 0 and ENV("SG_FIREWALL_TEST") != "1":
+        raise Fail("denied", "Changing the firewall needs an administrator.")
+
+
+def check_text(s, what):
+    if len(s) > 1024 or any(c in s for c in "\t\r\n\0"):
+        raise Fail("invalid", "%s cannot contain tabs or line breaks." % what)
+    return s
+
+
+def check_program(p):
+    if p in ("", "*"):
+        return None
+    check_text(p, "A program's path")
+    if not (WIN_PATH.match(p) or LINUX_PATH.match(p)):
+        raise Fail("invalid", "A program is its full path, such as C:\\Program Files\\App\\app.exe or /usr/bin/app.")
+    return p
+
+
+def cmd_rule_add(a):
+    if len(a) not in (6, 7):
+        raise Fail("invalid", "rule-add ACTION PROFILES PROTOCOL PORTS PROGRAM NAME [SOURCE]")
+    action, profiles, proto, ports, program, name = a[:6]
+    source = a[6] if len(a) == 7 else "user"
+    if action not in ("allow", "block"):
+        raise Fail("invalid", "A rule allows or blocks.")
+    if proto not in PROTOCOLS:
+        raise Fail("invalid", "The protocol is tcp, udp or any.")
+    if source not in ("user", "prompt", "upgrade", "netsh"):
+        raise Fail("invalid", "Unknown source.")
+    prof = parse_profiles(profiles)
+    p = parse_ports(ports)
+    prog = check_program(program)
+    if prog is None and p is None:
+        raise Fail("invalid", "A rule names a program, ports, or both.")
+    check_text(name, "A rule's name")
+    with Locked():
+        c = read_config()
+        if prog and p is None:
+            # one rule per program, as the allowed-apps list shows it
+            for r in c.rules:
+                if r.program and program_key(r.program) == program_key(prog) and r.ports is None:
+                    r.enabled, r.action, r.profiles = bool(prof), action, prof or r.profiles
+                    if name:
+                        r.name = name
+                    write_config(c)
+                    log("rule %s for %s changed: %s on %s" % (r.id, prog, action, profiles_text(prof)))
+                    return [r.id]
+        r = Rule(new_id(), bool(prof), action, prof or set(PROFILES), proto, p, prog,
+                 name or (display_name(prog) if prog else "Port " + ports_text(p)), source)
+        c.rules.append(r)
+        write_config(c)
+    log("rule %s added: %s %s %s %s %s on %s (%s)" % (r.id, action, proto, ports_text(p), prog or "", name,
+                                                      profiles_text(prof), source))
+    return [r.id]
+
+
+def cmd_rule_set(a):
+    if len(a) != 4:
+        raise Fail("invalid", "rule-set ID ENABLED ACTION PROFILES")
+    rid, enabled, action, profiles = a
+    if enabled not in ("0", "1") or action not in ("allow", "block"):
+        raise Fail("invalid", "rule-set ID 0|1 allow|block PROFILES")
+    prof = parse_profiles(profiles)
+    with Locked():
+        c = read_config()
+        if rid.startswith("reg:"):
+            rid = rid[4:]
+            if not REG_ID_RE.match(rid):
+                raise Fail("invalid", "No such rule.")
+            c.overrides[rid] = {"removed": False, "enabled": enabled == "1" and bool(prof), "action": action,
+                                "profiles": prof or set(PROFILES)}
+        else:
+            for r in c.rules:
+                if r.id == rid:
+                    r.enabled, r.action = enabled == "1" and bool(prof), action
+                    if prof:
+                        r.profiles = prof
+                    break
+            else:
+                raise Fail("notfound", "No such rule.")
+        write_config(c)
+    log("rule %s set: %s %s on %s" % (a[0], "on" if enabled == "1" else "off", action, profiles_text(prof)))
+    return []
+
+
+def cmd_rule_remove(a):
+    if len(a) != 1:
+        raise Fail("invalid", "rule-remove ID")
+    rid = a[0]
+    with Locked():
+        c = read_config()
+        if rid.startswith("reg:"):
+            if not REG_ID_RE.match(rid[4:]):
+                raise Fail("invalid", "No such rule.")
+            c.overrides[rid[4:]] = {"removed": True}
+        else:
+            n = len(c.rules)
+            c.rules = [r for r in c.rules if r.id != rid]
+            if len(c.rules) == n:
+                raise Fail("notfound", "No such rule.")
+        write_config(c)
+    log("rule %s removed" % rid)
+    return []
+
+
+def cmd_group(a):
+    if len(a) != 2 or a[0] not in GROUPS:
+        raise Fail("invalid", "group %s PROFILES" % "|".join(GROUP_ORDER))
+    prof = parse_profiles(a[1])
+    with Locked():
+        c = read_config()
+        c.groups[a[0]] = prof
+        write_config(c)
+    log("%s allowed on %s" % (GROUPS[a[0]][0], profiles_text(prof)))
+    return []
+
+
+def cmd_profile(a):
+    if len(a) != 2 or a[0] not in PROFILES + ("all",) or a[1] not in ("on", "off"):
+        raise Fail("invalid", "profile domain|private|public|all on|off")
+    with Locked():
+        c = read_config()
+        for p in (PROFILES if a[0] == "all" else (a[0],)):
+            c.profiles[p] = a[1] == "on"
+        write_config(c)
+    log("the firewall is %s for %s networks" % (a[1], a[0]))
+    return []
+
+
+def cmd_network(a):
+    if len(a) not in (2, 3) or a[1] not in ("private", "public"):
+        raise Fail("invalid", "network UUID private|public [NAME]")
+    if not re.match(r"^[0-9A-Za-z-]{1,64}$", a[0]):
+        raise Fail("invalid", "A network is its connection's UUID.")
+    name = check_text(a[2] if len(a) == 3 else "", "A network's name")
+    with Locked():
+        c = read_config()
+        old = c.networks.get(a[0], ["", ""])
+        c.networks[a[0]] = [a[1], name or old[1]]
+        write_config(c)
+    log("network %s (%s) is %s" % (a[0], name or old[1], a[1]))
+    return []
+
+
+def cmd_reset(a):
+    if a:
+        raise Fail("invalid", "reset")
+    with Locked():
+        c = read_config()
+        d = Config()
+        d.networks = c.networks
+        d.overrides = {rid: {"removed": True} for rid in effective_registry()}
+        write_config(d)
+    log("restored to the defaults")
+    return []
+
+
+def cmd_registry_push(a):
+    if len(a) not in (1, 2) or not REG_ID_RE.match(a[0]):
+        raise Fail("invalid", "registry-push ID [TEXT]")
+    text = a[1] if len(a) == 2 else ""
+    if len(text) > 8192 or any(c in text for c in "\t\r\n\0"):
+        raise Fail("invalid", "A rule's text is one line.")
+    with Locked():
+        keep = [p for p in read_pushed() if time.time() - p[0] < 3600]
+        keep.append((time.time(), a[0], text))
+        write_atomic(pushed_path(), "".join("%f\t%s\t%s\n" % p for p in keep), 0o600)
+        # a program's own rule, added again, is in force again
+        c = read_config()
+        if text and a[0] in c.overrides and c.overrides[a[0]].get("removed"):
+            del c.overrides[a[0]]
+            write_config(c)
+    log("a program %s rule %s" % ("stored" if text else "removed", a[0]))
+    return []
+
+
+def cmd_migrate(a):
+    """The firewall arrives on a machine in use: nothing it served stops."""
+    lines = []
+    with Locked():
+        if os.path.exists(CONF) and "--again" not in a:
+            return ["already set up"]
+        c = read_config()
+        # the networks in use now, and the wired ones (a home's or an
+        # office's): Private. A Wi-Fi network remembered from elsewhere (a
+        # cafe) is Public when next joined, as any new one.
+        active = {f[0] for f in nmcli("-f", "UUID,DEVICE", "connection", "show", "--active") if f}
+        for f in nmcli("-f", "UUID,TYPE,NAME", "connection", "show"):
+            if len(f) >= 3 and f[1] != "loopback" and (f[0] in active or f[1] == "802-3-ethernet"):
+                c.networks[f[0]] = ["private", f[2]]
+                lines.append("network %s is Private (it was in use before the firewall)" % f[2])
+        listeners = identify(scan_listeners(), {})
+        plan = evaluate(c, list(c.rules), listeners)
+        seen = set()
+        for l, allowed, state in plan.decisions:
+            if allowed == set(PROFILES):
+                lines.append("%s %d (%s): allowed already (%s)" % (l.proto, l.port, l.program or "?", "built-in"))
+                continue
+            if l.proto == "udp" and l.port >= EPHEMERAL:
+                continue
+            key = (l.proto, l.port)
+            if key in seen:
+                continue
+            seen.add(key)
+            if l.program and l.kind in ("system", "linux-user"):
+                r = Rule(new_id(), True, "allow", set(PROFILES), l.proto, [(l.port, l.port)], l.program,
+                         "%s (allowed when the firewall arrived)" % display_name(l.program), "upgrade")
+            else:
+                r = Rule(new_id(), True, "allow", set(PROFILES), l.proto, [(l.port, l.port)], None,
+                         "Port %d (open when the firewall arrived)" % l.port, "upgrade")
+            c.rules.append(r)
+            lines.append("%s %d (%s): rule added, all networks" % (l.proto, l.port, l.program or "a program"))
+        write_config(c)
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(os.path.join(STATE_DIR, "upgrade.log"), "a", encoding="utf-8") as f:
+        f.write("# %s: the firewall arrived\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
+        f.write("".join(l + "\n" for l in lines))
+    for l in lines:
+        log("upgrade: " + l)
+    return lines
+
+
+def current_state():
+    conf = read_config()
+    rules = all_rules(conf, effective_registry())
+    return conf, rules
+
+
+def cmd_status(a):
+    p = os.path.join(RUN_DIR, "status")
+    try:
+        with open(p, encoding="utf-8") as f:
+            text = f.read()
+        if text.startswith("state\trunning"):
+            return text.splitlines()
+    except OSError:
+        pass
+    conf, rules = current_state()
+    return status_lines(conf, rules, Plan(), [], running=False)
+
+
+def cmd_ruleset(a):
+    conf, rules = current_state()
+    listeners = identify(scan_listeners(), {})
+    plan = evaluate(conf, rules, listeners)
+    return ruleset(conf, plan, iface_profiles(active_networks(conf))).rstrip("\n").split("\n")
+
+
+def cmd_apply(a):
+    need_root()
+    conf, rules = current_state()
+    plan = evaluate(conf, rules, identify(scan_listeners(), {}))
+    load(ruleset(conf, plan, iface_profiles(active_networks(conf))))
+    return []
+
+
+COMMANDS = {
+    "status": (cmd_status, False),
+    "ruleset": (cmd_ruleset, False),
+    "apply": (cmd_apply, True),
+    "rule-add": (cmd_rule_add, True),
+    "rule-set": (cmd_rule_set, True),
+    "rule-remove": (cmd_rule_remove, True),
+    "group": (cmd_group, True),
+    "profile": (cmd_profile, True),
+    "network": (cmd_network, True),
+    "reset": (cmd_reset, True),
+    "registry-push": (cmd_registry_push, True),
+    "migrate": (cmd_migrate, True),
+}
+
+
+def main(argv):
+    syslog.openlog("sg-firewall")
+    if argv[:1] == ["--daemon"]:
+        if os.geteuid() != 0 and ENV("SG_FIREWALL_TEST") != "1":
+            print("sg-firewall: the daemon runs as root", file=sys.stderr)
+            return 1
+        Daemon().run()
+        return 0
+    if argv[:1] == ["--stop"]:
+        remove_table()
+        try:
+            write_atomic(os.path.join(RUN_DIR, "status"), "state\tstopped\n")
+        except OSError:
+            pass
+        return 0
+    if not argv or argv[0] not in COMMANDS:
+        print("usage: sg-firewall %s" % "|".join(COMMANDS), file=sys.stderr)
+        return 2
+    fn, root = COMMANDS[argv[0]]
+    try:
+        if root:
+            need_root()
+        out = fn(argv[1:])
+        for line in out:
+            print(line)
+        print("OK")
+        return 0
+    except Fail as e:
+        print("ERROR %s %s" % (e.kind, e.message))
+        return EXIT.get(e.kind, 1)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

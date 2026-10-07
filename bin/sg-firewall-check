@@ -1,0 +1,86 @@
+#!/bin/sh
+# shellcheck disable=SC2015  # pass/fail one-liners: both only print
+# Guest gate (run as root; sg-image: SG_GUEST_CHECK=firewall, make
+# firewall-test): Stained Glass Firewall is on in the image, and what the
+# lab needs still gets in.
+#   1. sg-firewall.service runs, its table (inet sg_firewall) is loaded, and
+#      every connection goes through a network's chain (default: Public)
+#   2. its status says it is running, with each kind of network on
+#   3. SSH (sshd listening) is open on every network -- this gate reached
+#      the guest over ssh through it
+#   4. a system service nobody allowed is not let in: its port is in no
+#      network's allowed set, while it listens
+#   5. a port rule (sg-firewall rule-add, as sg-admind runs it) opens its
+#      port on its networks within seconds, and rule-remove closes it
+#   6. a VPN's own table beside ours is left alone, and ours is put back
+#      if something removes it
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+RC=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+in_set() {   # SET PORT: is PORT in that set (an element or inside a range)
+    nft list set inet sg_firewall "$1" 2>/dev/null | tr -d ' \t\n' | sed 's/.*elements={\([^}]*\)}.*/\1/' | tr ',' '\n' |
+        awk -v p="$2" -F- 'NF==1 && $1==p {f=1} NF==2 && p>=$1 && p<=$2 {f=1} END {exit !f}'
+}
+wait_until() {   # SECONDS COMMAND...: true once COMMAND is
+    n=$1; shift
+    i=0
+    while [ $i -lt $((n * 2)) ]; do "$@" && return 0; sleep 0.5; i=$((i + 1)); done
+    return 1
+}
+
+systemctl is-active -q sg-firewall.service && pass "sg-firewall.service runs" || fail "sg-firewall.service: $(systemctl is-active sg-firewall.service)"
+systemctl is-enabled -q sg-firewall.service && pass "...and is enabled at boot" || fail "sg-firewall.service is not enabled"
+if nft list table inet sg_firewall >/dev/null 2>&1; then
+    pass "its table is loaded (inet sg_firewall)"
+    nft list chain inet sg_firewall input 2>/dev/null | grep -q 'goto public' && pass "...an unknown network goes to Public" \
+        || fail "no default to Public"
+    nft list chain inet sg_firewall public 2>/dev/null | grep -q 'drop' && pass "...and Public drops what is not allowed" \
+        || fail "Public does not drop"
+else fail "no inet sg_firewall table"; fi
+ST=/run/stained-glass-firewall/status
+head -1 "$ST" 2>/dev/null | grep -q '^state	running' && pass "its status says running" || fail "status: $(head -1 "$ST" 2>/dev/null)"
+for p in domain private public; do
+    grep -q "^profile	$p	on" "$ST" 2>/dev/null || fail "the firewall is not on for $p networks"
+done
+grep -q '^current	' "$ST" && pass "the networks in use: $(sed -n 's/^current	//p' "$ST")" || fail "no current network kind"
+
+if ss -Htln 2>/dev/null | awk '{print $4}' | grep -q ':22$'; then
+    ok=1
+    for p in domain private public; do in_set "${p}_allow_tcp" 22 || ok=0; done
+    [ $ok = 1 ] && pass "SSH is open on every network (sshd listens)" || fail "SSH is not open everywhere: $(nft list set inet sg_firewall public_allow_tcp 2>&1 | tr '\n' ' ')"
+else fail "sshd does not listen on port 22"; fi
+
+# a system service nobody allowed
+PORT=47123
+python3 -c 'import socket, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", '"$PORT"')); s.listen(1); time.sleep(40)' &
+LP=$!
+sleep 5
+blocked=1
+for p in domain private public; do in_set "${p}_allow_tcp" "$PORT" && blocked=0; done
+[ $blocked = 1 ] && pass "a system service nobody allowed is not let in (port $PORT in no allowed set)" || fail "port $PORT was opened without a rule"
+grep -q "^listen	tcp	$PORT	system	blocked" "$ST" && pass "...and the status says so" || fail "status for $PORT: $(grep "	$PORT	" "$ST")"
+
+# a port rule, as sg-admind runs it
+ID=$(sg-firewall rule-add allow public tcp "$PORT" '*' 'Gate port' | head -1)
+wait_until 10 in_set public_allow_tcp "$PORT" && pass "a port rule opens its port within seconds" || fail "the port rule did not open $PORT"
+in_set private_allow_tcp "$PORT" && fail "a Public-only rule opened Private too" || pass "...on its networks only"
+sg-firewall rule-remove "$ID" >/dev/null
+wait_until 10 sh -c "! nft list set inet sg_firewall public_allow_tcp | grep -q $PORT" && pass "rule-remove closes it" || fail "$PORT stayed open"
+kill "$LP" 2>/dev/null
+
+# beside a VPN's table; put back if removed
+nft add table inet sg_fwcheck_vpn
+nft delete table inet sg_firewall
+wait_until 20 nft list table inet sg_firewall >/dev/null 2>&1 && pass "its table is put back when something removes it" || fail "the table was not put back"
+nft list table inet sg_fwcheck_vpn >/dev/null 2>&1 && pass "a VPN's own table beside it is left alone" || fail "another table was removed"
+nft delete table inet sg_fwcheck_vpn 2>/dev/null
+
+[ "$RC" = 0 ] && echo "sg-firewall-check: PASS" || echo "sg-firewall-check: FAIL"
+exit "$RC"

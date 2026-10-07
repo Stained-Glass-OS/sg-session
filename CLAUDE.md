@@ -59,6 +59,7 @@ separately.
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd`; the first-run setup (OOBE): `sg-oobe`, `sg-oobed` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
+| `bin/sg-firewall` | Stained Glass Firewall: the daemon (sg-firewall.service), its nftables table, its commands (see below) |
 | `bin/sg-wam-msal`, `bin/sg-wam-redirect` | Office's work-account sign-in: the program wine-sg's Web Account Manager runs, and the browser's handler for its final redirect (see below) |
 | `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
@@ -1058,6 +1059,70 @@ socket requests are one JSON line, `{"argv": [...], "secret": "..."}`.
   sg-netd and through nmcli, and Wi-Fi over mac80211_hwsim against an access
   point of the test's own: wrong key, join, a DHCP lease and traffic over the
   air, disconnect, rejoin with the saved key, forget, the radio).
+
+## Stained Glass Firewall: sg-firewall
+
+The inbound firewall, as Windows has one (David 2026-10-07). On by default
+(`sg-firewall.service`, preset-enabled, before `network-pre.target`).
+
+- **Its own table, `inet sg_firewall`**, replaced whole in one nft
+  transaction (`table ...; delete table ...; table ... {}`) on every change.
+  Never `flush ruleset`, never another table: a VPN's kill switch (Eddie's
+  Network Lock) lives beside it. If something removes the table, the daemon
+  puts it back within ~10 s. Stopping the service removes it
+  (`ExecStopPost=sg-firewall --stop`): the administrator's escape hatch.
+- **Default**: established/related, loopback, the ICMP/ICMPv6 that IPv4 and
+  IPv6 need (neighbour discovery, packet too big...), the DHCP client's
+  answers; then each interface goes to its network's chain (`domain`,
+  `private`, `public`; an interface NetworkManager does not name: Public),
+  which accepts the ports in its allowed sets and drops the rest. Ping is
+  answered on Private and Domain only. Outbound is never filtered. This PC's
+  own virtual machines' and containers' bridges (virbr*, docker*, br-*,
+  lxcbr*, lxdbr*, incusbr*, vboxnet*, vmnet*) are let in: their DHCP and DNS
+  come from this PC.
+- **Networks**: NetworkManager connection UUID -> Private/Public in
+  `/etc/stained-glass/firewall.conf`; a new network is Public. Domain: on a
+  domain member, a connection whose DNS search domain is the realm; on a
+  DC, every connection.
+- **Programs, not ports**: nftables cannot tie a packet to a process, so a
+  program rule opens the ports the program listens on, while it listens
+  (the daemon scans `/proc/net/{tcp,udp}{,6}` every 2 s and maps socket
+  inodes to processes). A Windows program's sockets belong to wineserver:
+  Wine tells the daemon whose they are (wine-sg 1500: a datagram to
+  `/run/stained-glass-firewall/notify` with the program's Windows path and
+  the socket itself, SCM_RIGHTS -- the socket is the proof). A Linux program
+  is its executable (a script: the script, not the interpreter).
+- **Built-in groups** (Windows' predefined rules), for system services only
+  (uid < 1000, not a Wine program): Remote access (SSH, every network -- the
+  lab and David's ssh), Remote Desktop (every network, while sg-rdpd
+  listens), File and Printer Sharing and Network Discovery (Private),
+  Domain Controller (every network, while Samba listens).
+- **The question**: a person's program (Windows or Linux) listening with no
+  rule naming it -> `/run/stained-glass-firewall/ask/<uid>/<id>.ask`
+  (0700, the person's); sg-shell's network icon (sg-netflyout) has Settings
+  ask it (`sg-control /firewall-prompt`); Allow access -> elevated ->
+  sg-admind `firewall rule-add ... prompt`; Cancel -> `<id>.cancel` -> the
+  daemon adds a block rule (the app is listed, unticked, as on Windows). A
+  UDP socket on an ephemeral port (>= 32768) asks nothing. SYSTEM's
+  programs (elevated) ask the person at the console.
+- **Rules programs add** (INetFwPolicy2, netsh advfirewall -- wine-sg 0792,
+  1501, 1502) are read from the machine prefix's `system.reg`
+  (FirewallRules key) and pushed at once through sg-admind
+  (`registry-push`); Settings' changes to them are overrides in
+  firewall.conf.
+- **Upgrades** (postinst, from < 0.1.0-175): `sg-firewall migrate` makes the
+  networks in use (and wired ones) Private and gives everything listening
+  now a rule, logged in `/var/lib/stained-glass/firewall/upgrade.log`.
+- **Status** for Settings and hnetcfg: `/run/stained-glass-firewall/status`
+  (tab-separated, world-readable). Changes: root only (`sg-firewall
+  rule-add|rule-set|rule-remove|group|profile|network|reset`), which
+  sg-admind runs for an elevated program.
+
+Gates: `test/firewall-test.py` (rules, registry, ownership, notice, question,
+commands, migration; mutants via `--mutant`, all in `make lint`),
+`test/firewall-netns-test.sh` (two network namespaces and a veth, real
+packets; needs sudo; mutants FW_ACCEPT_ALL, FW_FLUSH, FW_NO_LISTEN), and the
+guest check `bin/sg-firewall-check` (sg-image `make firewall-test`).
 
 ## The administrative tools' Linux side: sg-sysinfo and sg-sysinfod
 

@@ -4,6 +4,8 @@
 disable sg-rdpd.service
 enable sg-netmountd.socket
 enable sg-netd.socket
+# Stained Glass Firewall: on everywhere, as on Windows.
+enable sg-firewall.service
 # The administrative tools' system information: the socket everywhere.
 enable sg-sysinfod.socket
 # Runs on live boots only (ConditionKernelCommandLine).

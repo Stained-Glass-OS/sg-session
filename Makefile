@@ -19,7 +19,8 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-boot-layout bin/sg-file-access-check \
-               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check
+               bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check \
+               bin/sg-firewall-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale
 
@@ -37,6 +38,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo bin/sg-firmware-initrd $(BINDIR)
+	@# Stained Glass Firewall (Python too): the daemon, its commands, sg-admind's tool
+	install -m 0755 bin/sg-firewall $(BINDIR)
 	@# Office's work-account sign-in: wine-sg's Web Account Manager runs sg-wam-msal; sg-wam-redirect is the browser's handler for its final redirect
 	install -m 0755 bin/sg-wam-msal bin/sg-wam-redirect $(BINDIR)
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
@@ -229,7 +232,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0755 kernel/93-sg-reboot-required.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/93-sg-reboot-required.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
-	    systemd/sg-lockd.service systemd/sg-update-prepare.service systemd/sg-defender.service \
+	    systemd/sg-lockd.service systemd/sg-update-prepare.service systemd/sg-defender.service systemd/sg-firewall.service \
 	    systemd/sg-update-prepare.timer systemd/sg-installd.socket \
 	    systemd/sg-installd@.service systemd/sg-rdpd.service \
 	    systemd/sg-netmountd.socket systemd/sg-netmountd@.service \
@@ -264,6 +267,14 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 config/ssh/05-stained-glass.conf $(DESTDIR)/etc/ssh/sshd_config.d/05-stained-glass.conf
 	install -d $(DESTDIR)/etc/udisks2
 	install -m 0644 config/udisks2/mount_options.conf $(DESTDIR)/etc/udisks2/mount_options.conf
+
+# Stained Glass Firewall in a real kernel (needs sudo -n; 77 without), and its
+# mutants, each of which must fail.
+test-firewall:
+	@sh test/firewall-netns-test.sh
+	@for m in FW_ACCEPT_ALL FW_FLUSH FW_NO_LISTEN; do \
+	    if sh test/firewall-netns-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
+	    echo "mutant $$m caught"; done
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
@@ -318,6 +329,9 @@ lint:
 	@! sh test/netlock-deps-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firewall
+	@python3 test/firewall-test.py >/dev/null || python3 test/firewall-test.py
+	@for m in $$(python3 test/firewall-test.py --list-mutants); do ! python3 test/firewall-test.py --mutant $$m >/dev/null 2>&1 || { echo "firewall mutant $$m survived"; exit 1; }; done
 	@python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' bin/sg-wam-msal bin/sg-wam-redirect
 	@python3 test/wam-msal-test.py || [ $$? -eq 77 ]
 	@sh test/print-setup-test.sh
