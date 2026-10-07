@@ -807,15 +807,48 @@ def updates(args):
     if args:
         raise Fail("invalid", "usage: updates [check|progress]")
     out = []
-    text = run(["apt", "list", "--upgradable"], timeout=60, check=False)
-    for line in text.splitlines():
-        # name/suite new-version arch [upgradable from: old-version]
-        m = re.match(r"([^/\s]+)/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]", line)
-        if m:
-            out.append("UPDATE %s\t%s\t%s" % (m.group(1), m.group(3), m.group(2)))
-    out += update_progress()
+    progress = update_progress()
+    if "DOWNLOADING yes" in progress and not os.environ.get("SG_MUTANT_UPDATES_APT_WHILE_DOWNLOADING"):
+        # apt's lists and cache are the download's while it runs: asking apt
+        # waited for the whole download, and Settings with it (David,
+        # 2026-10-07). The download's own plan says what is coming.
+        out += planned_updates()
+    else:
+        text = run(["apt", "list", "--upgradable"], timeout=60, check=False)
+        for line in text.splitlines():
+            # name/suite new-version arch [upgradable from: old-version]
+            m = re.match(r"([^/\s]+)/\S+\s+(\S+)\s+\S+\s+\[upgradable from: ([^\]]+)\]", line)
+            if m:
+                out.append("UPDATE %s\t%s\t%s" % (m.group(1), m.group(3), m.group(2)))
+    out += progress
     out.append("STAGED %s" % yn(os.path.lexists(os.environ.get("SG_SYSTEM_UPDATE", "/system-update"))))
     out += update_problems()
+    return out
+
+
+def planned_updates():
+    """UPDATE lines from the plan sg-update-prepare publishes (FILE SIZE, a
+    file being name_version_arch.deb with the version URL-quoted), each one's
+    installed version read from dpkg's own database -- no apt, no lock."""
+    import urllib.parse
+    state = os.environ.get("SG_UPDATE_STATE", "/run/sg-update")
+    out, seen = [], set()
+    try:
+        with open(os.path.join(state, "plan"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        p = line.split()
+        if not p or not p[0].endswith(".deb") or p[0].count("_") < 2:
+            continue
+        name, ver = p[0][:-4].split("_")[:2]
+        ver = urllib.parse.unquote(ver)
+        if name in seen or not re.fullmatch(r"[a-z0-9][a-z0-9.+-]*", name):
+            continue
+        seen.add(name)
+        old = run(["dpkg-query", "-W", "-f=${Version}", name], timeout=10, check=False).strip()
+        out.append("UPDATE %s\t%s\t%s" % (name, clean(old) or "-", clean(ver)))
     return out
 
 

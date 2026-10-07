@@ -84,6 +84,11 @@ stand_in("busctl", """case "$*" in
   *CanSuspend) echo 's "yes"' ;;
   *CanHibernate) echo 's "challenge"' ;;
 esac""")
+stand_in("dpkg-query", """case "$*" in
+  *libfoo1) printf 1.2-3 ;;
+  *wine-sg) printf 10.0-37 ;;
+  *wine-sg-data) printf 10.0-37 ;;
+esac""")
 stand_in("apt", """cat <<EOF
 Listing...
 libfoo1/stable-security 1.2-3+deb13u1 amd64 [upgradable from: 1.2-3]
@@ -391,6 +396,8 @@ os.makedirs(ENV["SG_UPDATE_STATE"])
 with open(os.path.join(ENV["SG_UPDATE_STATE"], "progress"), "w") as f:
     f.write("libfoo1_1.2-3+deb13u1_amd64.deb 1000 1000\n"
             "wine-sg_10.0-38_amd64.deb 4000 1000\nwine-sg-data_10.0-38_all.deb 500 700\n")
+with open(os.path.join(ENV["SG_UPDATE_STATE"], "plan"), "w") as f:
+    f.write("libfoo1_1.2-3%2bdeb13u1_amd64.deb 1000\nwine-sg_10.0-38_amd64.deb 4000\nwine-sg-data_10.0-38_all.deb 500\n")
 with open(os.path.join(ENV["SG_UPDATE_STATE"], "state"), "w") as f:
     f.write("downloading\n")
 code, lines = ctl("updates", "progress")
@@ -400,6 +407,11 @@ check("updates progress: bytes per package, a partial file counted, never past t
 code, lines = ctl("updates")
 check("updates: the list and the download together", "UPDATE wine-sg\t10.0-37\t10.0-38" in lines and
       "DOWNLOAD wine-sg\t4000\t1000" in lines, lines)
+# while downloading, apt is not asked (its cache is the download's: Settings
+# waited for the whole download) -- the plan says what comes, dpkg what is here
+check("updates while downloading: from the download's plan, apt not asked",
+      "UPDATE libfoo1\t1.2-3\t1.2-3+deb13u1" in lines and "UPDATE wine-sg-data\t10.0-37\t10.0-38" in lines and
+      not any(c.startswith("apt ") for c in calls()), lines)
 with open(os.path.join(ENV["SG_UPDATE_STATE"], "state"), "w") as f:
     f.write("ready\n")
 code, lines = ctl("updates", "progress")
