@@ -1,4 +1,5 @@
 #!/bin/sh
+. "$(dirname "$0")/scratch-home.sh"
 # sg_apply_policy de-tattoos: a policy value removed from the policy set is
 # deleted from the machine registry on the next apply, while values still in
 # force stay. Only the values policy set are touched -- not the branch, not a

@@ -259,10 +259,11 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 
 # Every script is POSIX sh. shellcheck is advisory when absent so a bare
 # checkout still lints as far as it can.
-# Every test that runs Wine sources test/scratch-home.sh first (a HOME of its
+# Every test that runs Wine (sets WINEPREFIX, or runs wineboot) sources
+# test/scratch-home.sh first (a HOME of its
 # own: a prefix links its Desktop, Documents... into HOME).
 lint:
-	@for f in $$(grep -l WINEPREFIX test/*.sh); do \
+	@for f in $$(grep -lE 'WINEPREFIX|wineboot' test/*.sh); do \
 	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done

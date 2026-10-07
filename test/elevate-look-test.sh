@@ -33,13 +33,19 @@ echo "$r" | grep -qx '"AppsUseLightTheme"=dword:00000000' && echo "$r" | grep -q
 [ "$out" = "left unset" ] && pass "and the variables do not reach the program" || fail "left: $out"
 run env SG_USER_APPS_LIGHT='1"
 [HKEY_LOCAL_MACHINE\Evil]' SG_USER_ACCENT='ff3e8910"=x' >/dev/null
-[ ! -e "$T/imported.reg" ] && pass "anything but 0, 1 or eight hex digits is ignored (no injection into the .reg)" \
-    || fail "a hostile value was written: $(cat "$T/imported.reg")"
+# the file is written whatever was given (ShowSystray=0: no stand-in tray on
+# the elevated display, b737bb8) -- but nothing hostile gets into it
+r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
+! echo "$r" | grep -q 'Evil\|=x\|AppsUseLightTheme\|AccentColor' \
+    && pass "anything but 0, 1 or eight hex digits is ignored (no injection into the .reg)" \
+    || fail "a hostile value was written: $r"
 run env SG_USER_APPS_LIGHT=1 >/dev/null
 r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
 echo "$r" | grep -qx '"AppsUseLightTheme"=dword:00000001' && ! echo "$r" | grep -q AccentColor \
     && pass "only what was given is written" || fail "partial: $r"
 run env >/dev/null
-[ ! -e "$T/imported.reg" ] && pass "nothing given, nothing run" || fail "ran wine with nothing to write"
+r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
+echo "$r" | grep -qx '"ShowSystray"=dword:00000000' && ! echo "$r" | grep -q 'LightTheme\|AccentColor' \
+    && pass "nothing given: only the elevated display's no-tray setting is written" || fail "nothing given: $r"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

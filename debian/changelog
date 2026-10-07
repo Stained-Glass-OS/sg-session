@@ -1,3 +1,17 @@
+sg-session (0.1.0-156) unstable; urgency=medium
+
+  * Tests: detattoo-test runs Wine with a HOME of its own
+    (test/scratch-home.sh): it made a real prefix on the real HOME, its
+    Desktop and Documents linked to the person's, with winemenubuilder on.
+    make lint now also holds every test that runs wineboot to that rule,
+    not only those that set WINEPREFIX.
+  * Tests: elevate-look-test follows sg-elevated-run writing its file
+    every time (ShowSystray=0 on the elevated display, b737bb8): it
+    expected no file for hostile or missing values, and failed; it now
+    checks nothing hostile and no look values get into the file.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 04:26:56 -0700
+
 sg-session (0.1.0-155) unstable; urgency=medium
 
   * Remote Desktop sign-ins open the session's keyring. The password check
