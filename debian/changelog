@@ -1,3 +1,11 @@
+sg-session (0.1.0-173) unstable; urgency=medium
+
+  * The sign-in screen, lock screen and administrator prompt start the touch
+    keyboard with /notray (sg-shell 0.1.0-161): no empty tray window on a
+    touch screen's sign-in screen (David, the Surface). greeter-ease-test.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 16:09:21 -0700
+
 sg-session (0.1.0-172) unstable; urgency=medium
 
   * Settings > Updates no longer waits for a download to finish (David: away

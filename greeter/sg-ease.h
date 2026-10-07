@@ -129,7 +129,10 @@ static void sg_ease_stop( void )
 static void sg_ease_start( void )
 {
     if (!sg_ease_available()) return;
-    sg_ease_run( "sg-touchkbd64.exe", L"/background" );
+    /* /notray: no taskbar here -- Wine stood the keyboard's button in an
+     * empty tray window of its own, a white box on the Surface's sign-in
+     * screen (David, 2026-10-07; sg-shell 0.1.0-161) */
+    sg_ease_run( "sg-touchkbd64.exe", L"/background /notray" );
     atexit( sg_ease_stop );
 }
 

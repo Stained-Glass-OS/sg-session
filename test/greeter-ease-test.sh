@@ -80,6 +80,10 @@ end_greeter() {   # the bridge goes away: the screen ends
 greeter
 [ -s "$C/touchkbd.txt" ] && [ "$(tip)" = 0 ] && pass "the touch keyboard runs in the background from the start, hidden" \
     || fail "no touch keyboard in the background: $(head -2 "$C/touchkbd.txt" 2>/dev/null | tr '\n' ' ')"
+# no taskbar here: no button (/notray) -- Wine stood it in an empty tray
+# window of its own, a white box on the Surface's sign-in screen
+grep -q 'tray=0' "$C/touchkbd.txt" && pass "and with no button in a notification area the sign-in screen has not got" \
+    || fail "the touch keyboard's button on the sign-in screen: $(grep -o 'tray=[01]' "$C/touchkbd.txt" | head -1)"
 ease o
 [ "$(osk)" = 1 ] && pass "Ease of Access > On-Screen Keyboard opens it" || fail "no On-Screen Keyboard: $(head -3 "$C/osk.txt" 2>/dev/null | tr '\n' ' ')"
 ease o
