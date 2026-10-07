@@ -889,6 +889,73 @@ sg_program_files_protected() {
     return 0
 }
 
+# The shared folders' own entries are the system's (2026-10-07, found
+# looking at debt D13). Every person is in the Wine group, and the folders were
+# group-writable without the sticky bit: anyone could rename the prefix
+# away and put their own in its place, replace dosdevices\c: (the SYSTEM
+# account's services would then load "C:\windows" from a folder of theirs),
+# delete or replace the registry files and markers, or plant a stamp that
+# skips a protection, or another person's user-<uid>.reg before that person
+# first signs in. Now, at every boot as the machine account:
+#  - ROOT, the prefix, the state folder and .local/.local/share are sticky:
+#    people keep making their own files there (Wine's clients need to write
+#    in the prefix), none renames or deletes what is not theirs;
+#  - dosdevices is the system's alone (people's network drives are their own,
+#    under /run/stained-glass-net, not here);
+#  - what a person (uid >= 1000) put among the system's files there is moved
+#    aside (never the folder owner's own), said in the log -- except their own Wine process agent socket
+#    (.sg-procagent.<uid>) and their own session-<uid>.env in the state folder;
+#  - the system's own files there, and its desktop entries and settings under
+#    .local and .config, are not the group's to change.
+# wine-sg 1475 also refuses a registry file the server did not write.
+# sg_shared_state_hardened ROOT PREFIX STATE
+sg_shared_state_hardened() {
+    [ "${SG_MUTANT_SHARED_STATE_OPEN:-}" = 1 ] && return 0
+    _hr=$1 _hp=$2 _hs=$3
+    _ho=$(stat -c %u "$_hr" 2>/dev/null) || return 0
+    for _hd in "$_hr" "$_hp" "$_hs" "$_hr/.local" "$_hr/.local/share"; do
+        if [ -d "$_hd" ] && [ ! -L "$_hd" ]; then chmod +t,o-w "$_hd" 2>/dev/null || :; fi
+    done
+    if [ -d "$_hp/dosdevices" ] && [ ! -L "$_hp/dosdevices" ]; then
+        chmod g-w,o-w "$_hp/dosdevices" 2>/dev/null || :
+    fi
+    # what people put there: top level of ROOT and the prefix, the drive
+    # letters, and anywhere in the state folder (stamps live in subfolders)
+    {
+        find "$_hr" "$_hp" -mindepth 1 -maxdepth 1 -uid +999 ! -user "$_ho" -print 2>/dev/null
+        [ -d "$_hp/dosdevices" ] && find "$_hp/dosdevices" -mindepth 1 -maxdepth 1 -uid +999 ! -user "$_ho" -print 2>/dev/null
+        [ -d "$_hs" ] && find "$_hs" -mindepth 1 -uid +999 ! -user "$_ho" -print 2>/dev/null
+    } | while IFS= read -r _hx; do
+        _hn=${_hx##*/} _hu=$(stat -c %u "$_hx" 2>/dev/null) || continue
+        case "$_hn" in
+        .untrusted.*) continue ;;
+        ".sg-procagent.$_hu") if [ "${_hx%/*}" = "$_hp" ] && [ -S "$_hx" ]; then continue; fi ;;
+        "session-$_hu.env") if [ "${_hx%/*}" = "$_hs" ] && [ -f "$_hx" ] && [ ! -L "$_hx" ]; then continue; fi ;;
+        esac
+        # moved, not removed: a folder of theirs may not be ours to empty
+        if mv -f -- "$_hx" "${_hx%/*}/.untrusted.$(date +%s).$_hn" 2>/dev/null; then
+            sg_log "WARNING: moved aside '$_hx' (uid $_hu), which a person put among the system's files"
+        else
+            sg_log "WARNING: could not move aside '$_hx' (uid $_hu)"
+        fi
+    done
+    for _hd in "$_hr" "$_hp" "$_hs"; do
+        if [ -d "$_hd" ]; then
+            find "$_hd" -mindepth 1 -maxdepth 1 -user "$_ho" -type f -perm -g=w -exec chmod g-w {} + 2>/dev/null || :
+        fi
+    done
+    if [ -d "$_hs" ]; then
+        find "$_hs" -mindepth 1 -user "$_ho" ! -type l -perm -g=w -exec chmod g-w {} + 2>/dev/null || :
+    fi
+    for _hd in "$_hr/.local/share" "$_hr/.config"; do
+        if [ -d "$_hd" ]; then
+            find "$_hd" -mindepth 1 -user "$_ho" ! -type l -perm -g=w ! -path "$_hr/.local/share/keyrings*" \
+                -exec chmod g-w {} + 2>/dev/null || :
+        fi
+    done
+    return 0
+}
+
 # C:\windows is the system's, as on Windows, where Users may read and run
 # what is there and change none of it. The prefix is made and updated by the
 # SYSTEM account with the Wine group's write (umask 002), so every user could

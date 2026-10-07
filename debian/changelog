@@ -1,3 +1,20 @@
+sg-session (0.1.0-163) unstable; urgency=medium
+
+  * Security: the shared Wine folders' own entries are the system's. Every
+    person is in the Wine group and the folders were group-writable without
+    the sticky bit: anyone could rename the prefix away, replace
+    dosdevices\c: (SYSTEM's services would load C:\windows from a folder of
+    theirs), replace the registry files and markers, or plant a stamp that
+    skips a protection. /var/lib/stained-glass, the prefix, state and
+    .local are sticky; dosdevices is the system's alone; what a person put
+    among the system's files is moved aside at boot (their own agent socket
+    and session file stay); the system's files there are not the group's to
+    change (sg_shared_state_hardened; test/shared-state-test.sh, mutant
+    SG_MUTANT_SHARED_STATE_OPEN). wine-sg 1475 refuses a hive the server did
+    not write.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 11:47:57 -0700
+
 sg-session (0.1.0-162) unstable; urgency=medium
 
   * Remote Desktop: frames go compressed. An encoder of our own for RDP 6.0

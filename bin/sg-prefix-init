@@ -181,6 +181,8 @@ fi
 
 if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
+    # first: nothing below may trust what a person put among these files
+    sg_shared_state_hardened "$SG_ROOT" "$SG_PREFIX" "$SG_STATE"
     repair_empty_system_files
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
     # whatever process starts it first. Start one here -- at boot, as the
@@ -222,7 +224,7 @@ mkdir -p "$SG_PREFIX" "$SG_STATE" "$SG_LOG_DIR"
 # systemd leaves it group-read-only, so set the mode explicitly rather than
 # leaving it to a later conditional.
 if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
-    chmod 2770 "$SG_PREFIX" "$SG_STATE" 2>/dev/null || true
+    chmod 3770 "$SG_PREFIX" "$SG_STATE" 2>/dev/null || true
 fi
 
 # Mark the prefix as shared between Unix users before wineboot runs, so the
@@ -325,11 +327,12 @@ if getent passwd "$SG_USER" >/dev/null 2>&1 || getent passwd "$SG_SYSTEM_USER" >
     getent passwd "$SG_SYSTEM_USER" >/dev/null 2>&1 && _owner="$SG_SYSTEM_USER"
     if getent group "$SG_WINE_GROUP" >/dev/null 2>&1; then
         chown -R "$_owner:$SG_WINE_GROUP" "$SG_ROOT" "$SG_LOG_DIR" 2>/dev/null || true
-        chmod 2770 "$SG_ROOT" "$SG_PREFIX"
+        chmod 3770 "$SG_ROOT" "$SG_PREFIX"
     else
         chown -R "$_owner" "$SG_ROOT" "$SG_LOG_DIR" 2>/dev/null || true
     fi
 fi
 
+sg_shared_state_hardened "$SG_ROOT" "$SG_PREFIX" "$SG_STATE"
 : > "$STAMP"
 sg_log "prefix initialized"
