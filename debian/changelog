@@ -1,3 +1,18 @@
+sg-session (0.1.0-151) unstable; urgency=medium
+
+  * "Try Stained Glass OS" starts the live session again (release s20's
+    install-test: Setup came back instead). Since 0.1.0-148 a PAM module
+    after pam_unix (the keyring's pam_exec expose_authtok) asks the
+    passwordless live account for its password; the bridge's automatic
+    sign-in gave up at the question. It now answers with the password the
+    account has -- none -- after pam_unix has let it in; still only the live
+    account on a live boot. Test: live-autologin-test (mutant
+    SG_MUTANT_AUTOLOGIN_NO_ANSWER).
+  * The Ease of Access button (0.1.0-149) is not a tab stop: the screens'
+    focus and keys are exactly as before it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 17:40:00 -0700
+
 sg-session (0.1.0-150) unstable; urgency=medium
 
   * Updates are never blocked by a third-party package source configured

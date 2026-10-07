@@ -137,11 +137,14 @@ static int greetd_send( const char *json )
     return write_all( greetd_fd, json, len );
 }
 
+static char *g_pending;   /* a message read ahead (the live sign-in) */
+
 static char *greetd_recv( void )
 {
     uint32_t len;
     char *buf;
 
+    if (g_pending) { buf = g_pending; g_pending = NULL; return buf; }
     if (read_all( greetd_fd, &len, sizeof(len) ) < 0) return NULL;
     if (len > (1u << 20)) return NULL;
     if (!(buf = malloc( len + 1 ))) return NULL;
@@ -335,6 +338,24 @@ static int handle_greetd_reply( const char *cmd_for_session )
     return done;
 }
 
+/* greetd's next message, when it is an auth_message (its kind into KIND);
+ * anything else is kept for handle_greetd_reply (g_pending) */
+
+static char *greetd_peek_auth_message( char *kind, size_t len )
+{
+    char *msg = greetd_recv();
+    char type[64];
+
+    if (!msg) return NULL;
+    if (json_string( msg, "type", type, sizeof(type) ) && !strcmp( type, "auth_message" ))
+    {
+        if (!json_string( msg, "auth_message_type", kind, len )) snprintf( kind, len, "?" );
+        return msg;
+    }
+    g_pending = msg;
+    return NULL;
+}
+
 /* The live session: "Try Stained Glass OS" on the installation media signs
  * in its live account, which has no password, with no greeter at all. Only
  * on a live boot (the media's "live" entry) and only that account -- the
@@ -343,7 +364,11 @@ static int handle_greetd_reply( const char *cmd_for_session )
 static int autologin( const char *user, const char *session_cmd )
 {
     char cmdline[4096] = "", buf[512], *tok, *save = NULL;
+#ifdef SG_TEST_CMDLINE   /* test builds only (test/live-autologin-test.sh) */
+    FILE *f = fopen( SG_TEST_CMDLINE, "r" );
+#else
     FILE *f = fopen( "/proc/cmdline", "r" );
+#endif
     int live = 0, r;
 
     if (f) { if (!fgets( cmdline, sizeof(cmdline), f )) cmdline[0] = 0; fclose( f ); }
@@ -357,6 +382,26 @@ static int autologin( const char *user, const char *session_cmd )
     if ((greetd_fd = greetd_connect()) < 0) return 1;
     snprintf( buf, sizeof(buf), "{\"type\":\"create_session\",\"username\":\"%s\"}", user );
     if (greetd_send( buf ) < 0) return 1;
+#ifndef SG_MUTANT_AUTOLOGIN_NO_ANSWER
+    /* A module after the password asks for it again: pam_exec's
+     * expose_authtok (the keyring's sg-keyring-first, 0.1.0-148) when
+     * pam_unix let the passwordless account in without one. The answer is
+     * the password the account has -- none; pam_unix has already decided
+     * (an account with a password is asked by pam_unix first, and an empty
+     * answer fails it). Before, the live session never started ("Try
+     * Stained Glass OS" brought Setup back: release s20). */
+    {
+        int i;
+        for (i = 0; i < 4; i++)
+        {
+            char *msg = greetd_peek_auth_message( buf, sizeof(buf) );
+            if (!msg) break;
+            free( msg );
+            logmsg( "the live account was asked for a password (%s): none", buf );
+            if (greetd_send( "{\"type\":\"post_auth_message_response\",\"response\":\"\"}" ) < 0) return 1;
+        }
+    }
+#endif
     if ((r = handle_greetd_reply( session_cmd )) > 0)
     {
         logmsg( "signed in the live session" );

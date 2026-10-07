@@ -331,6 +331,8 @@ lint:
 	@sh test/greeter-ease-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine, the PE builds or sg-shell's)
 	@sh test/xtype-test.sh || [ $$? -eq 77 ]
 	@sh test/greeter-lastuser-test.sh || [ $$? -eq 77 ]
+	@sh test/live-autologin-test.sh || [ $$? -eq 77 ]
+	@! SG_BRIDGE_CFLAGS=-DSG_MUTANT_AUTOLOGIN_NO_ANSWER sh test/live-autologin-test.sh >/dev/null
 	@sh test/greeter-lastuser-ui-test.sh || [ $$? -eq 77 ]
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-pdf
 	@for f in pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py pdf/sgpdf_forms.py pdf/sgpdf_sign.py pdf/sgpdf_create.py; do \

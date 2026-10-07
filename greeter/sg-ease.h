@@ -136,7 +136,9 @@ static void sg_ease_start( void )
 static HWND sg_ease_button( HWND parent, int x, int y, int size, int id, HINSTANCE inst )
 {
     if (!sg_ease_available()) return NULL;
-    return CreateWindowExA( 0, "BUTTON", "Ease of Access", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+    /* not a tab stop: the screen's keys and its focus are as they were (Setup
+     * and the first-run setup are driven by keys, the gates too) */
+    return CreateWindowExA( 0, "BUTTON", "Ease of Access", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                             x, y, size, size, parent, (HMENU)(INT_PTR)id, inst, NULL );
 }
 

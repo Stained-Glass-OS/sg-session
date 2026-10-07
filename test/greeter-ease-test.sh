@@ -56,7 +56,7 @@ printf 'I: Bus=0019\nN: Name="Power Button"\nB: EV=3\nB: KEY=10000000000000 0\n\
 export SG_SHELL_DIR="$T/shell" SG_GREETER_CURTAIN=0 SG_TOUCHKBD_TOUCH=1 SG_TOUCHKBD_DEVICES='C:\devices.txt' \
     SG_TOUCHKBD_DUMP='C:\touchkbd.txt' SG_OSK_DUMP='C:\osk.txt'
 
-running() { ps -eo args | grep -c "[s]g-$1"; }
+running() { ps -eo args | grep "sg-$1" | grep -c "$(basename "$T")"; }   # this test's own
 osk() { sed -n 's/^VISIBLE //p' "$C/osk.txt" 2>/dev/null | tr -d '\r' | head -1; }
 tip() { sed -n 's/^WINDOW \([01]\).*/\1/p' "$C/touchkbd.txt" 2>/dev/null | tr -d '\r' | head -1; }
 key() { sed -n "s/^KEY $1 //p" "$C/touchkbd.txt" 2>/dev/null | tr -d '\r' | head -1; }
@@ -72,7 +72,7 @@ greeter() {
 }
 end_greeter() {   # the bridge goes away: the screen ends
     kill "$SP" 2>/dev/null; SP=
-    i=0; while [ $i -lt 30 ] && [ "$(running greeter64)" != 0 ]; do sleep 0.5; i=$((i + 1)); done
+    i=0; while [ $i -lt 30 ] && ps -eo args | grep -v grep | grep -q "$EXE"; do sleep 0.5; i=$((i + 1)); done
     sleep 2
 }
 
