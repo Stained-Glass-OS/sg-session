@@ -1,3 +1,11 @@
+sg-session (0.1.0-167) unstable; urgency=medium
+
+  * SG Office is no longer installed by default (David: Microsoft Office
+    installs now; SG Office is in SG Store): the sg-office dependency goes.
+    Machines that have it keep it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:12:24 -0700
+
 sg-session (0.1.0-166) unstable; urgency=medium
 
   * Updates download soon after boot (3 minutes, spread over 10) rather than
