@@ -1,3 +1,11 @@
+sg-session (0.1.0-166) unstable; urgency=medium
+
+  * Updates download soon after boot (3 minutes, spread over 10) rather than
+    15 minutes to over an hour later: a restart installs only downloaded
+    updates (David, the Surface: 8 updates found, a restart installed none).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:05:19 -0700
+
 sg-session (0.1.0-165) unstable; urgency=medium
 
   * AppImages: one opened from a Linux program (Linux Firefox's downloads)

@@ -2,11 +2,15 @@
 Description=Stained Glass OS: check for updates daily
 
 [Timer]
-# Not at boot, when the machine is busiest and the network may not be up yet.
-OnBootSec=15min
+# Not at boot itself, when the machine is busiest and the network may not be up
+# yet -- but soon after: Settings shows updates found before they are
+# downloaded, and a restart installs only what is downloaded (David,
+# 2026-10-07: the Surface's 8 updates waited over an hour, and a restart in
+# between installed nothing).
+OnBootSec=3min
 OnUnitActiveSec=1d
-# Spread a fleet's requests across an hour instead of every machine at once.
-RandomizedDelaySec=1h
+# Spread a fleet's requests over ten minutes instead of every machine at once.
+RandomizedDelaySec=10min
 # A machine that was off at the scheduled time checks soon after it starts.
 Persistent=true
 
