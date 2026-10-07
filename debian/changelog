@@ -1,3 +1,22 @@
+sg-session (0.1.0-170) unstable; urgency=medium
+
+  * The kiosk (David: "a tablet that boots to the Sonos player"): sg-kiosk
+    starts the kiosk app of the account that signs in automatically
+    (/etc/stained-glass/autologon.conf, written by sg-shell's Settings >
+    Accounts > Kiosk through sg-admind), maximized, and again a few seconds
+    after it closes, for as long as the session lasts; a Windows program
+    through sg-shell's sg-kiosk64.exe, a Linux app's Exec line directly.
+    An app that keeps closing at once is retried once a minute. The kiosk
+    account's taskbar hides itself (auto-hide), its own setting kept aside
+    and put back without a kiosk app.
+  * The account that signs in automatically does not lock when its screen
+    turns off or the PC sleeps (sg-settingsctl).
+  * Gates: test/kiosk-test.sh (stand-ins; mutant KIOSK_NO_RESTART),
+    test/kiosk-e2e.sh (a real headless session, `make test-kiosk-e2e`; its
+    --mutant fails), settingsctl-test (mutant AUTOLOGON_LOCKS).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 15:00:00 -0700
+
 sg-session (0.1.0-169) unstable; urgency=medium
 
   * Administrators read the system journal (David): sg-admins gets the

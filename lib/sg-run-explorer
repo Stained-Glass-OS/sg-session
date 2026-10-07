@@ -159,6 +159,13 @@ SG_SCALE=$(sg_auto_scale "${GEOM%x*}" "${GEOM#*x}")
 export SG_SCALE
 sg_linux_scale_env "$SG_SCALE"
 
+# The kiosk app (Settings > Accounts > Kiosk): its account's taskbar hides
+# itself at the bottom edge, set before the shell reads it -- and the
+# person's own setting comes back once there is no kiosk app (sg-kiosk).
+if [ -x "$SG_LIB/sg-kiosk" ] && [ "$("$SG_LIB/sg-kiosk" prepare 2>/dev/null)" = kiosk ]; then
+    sg_log "kiosk app on for $(id -un): the taskbar hides itself"
+fi
+
 # The work area for Linux programs: the screen less the taskbar (sg-common.sh).
 [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && sg_x11_workarea "${GEOM%x*}" "${GEOM#*x}"
 
@@ -321,6 +328,11 @@ sg_shell_helpers() {
     done
     sg_start_vdagent
     sg_shell_helpers
+    # the kiosk app, opened full screen and again whenever it closes, for as
+    # long as this session lasts (sg-kiosk; nothing unless this account has one)
+    if [ -x "$SG_LIB/sg-kiosk" ]; then
+        SG_KIOSK_PARENT=$$ "$SG_LIB/sg-kiosk" run </dev/null &
+    fi
     # Settings' night light and screen/sleep timers (sg-settingsctl): the
     # user's choices, applied again for this session.
     if command -v sg-settingsctl >/dev/null 2>&1; then

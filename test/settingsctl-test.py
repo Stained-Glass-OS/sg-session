@@ -306,6 +306,37 @@ check("sleep: locks, then systemctl suspend", code == 0 and
       [x.split(" ")[0] + " " + x.split(" ")[1] for x in c] == ["sg-lockctl LOCK", "systemctl suspend"], c)
 code, lines = ctl("sleep", "hibernate", env=LENV)
 check("sleep hibernate: systemctl hibernate", code == 0 and "systemctl hibernate" in calls(), lines)
+
+# ---- the account that signs in automatically (a kiosk tablet): no lock
+import pwd as _pwd
+AUTOCONF = os.path.join(tmp, "autologon.conf")
+with open(AUTOCONF, "w") as f:
+    f.write("user=%s\nkiosk-name=App\nkiosk-desktop=/x.desktop\n" % _pwd.getpwuid(os.getuid()).pw_name)
+
+
+def autologon_lock_free(env):
+    calls()
+    ctl("power", "--screen", "10", env=env)
+    time.sleep(0.3)
+    c1 = calls()
+    ctl("sleep", env=env)
+    c2 = calls()
+    idle = [x for x in c1 if x.startswith("swayidle")]
+    return (bool(idle) and not any("sg-lockctl" in x for x in idle) and any("timeout 600 wlopm --off" in x for x in idle)
+            and "sg-lockctl LOCK" not in c2 and "systemctl suspend" in c2), (c1, c2)
+
+
+AENV = dict(LENV, SG_AUTOLOGON_CONF=AUTOCONF)
+ok, detail = autologon_lock_free(AENV)
+check("the automatic sign-in's account: the screen turns off and the PC sleeps without locking", ok, detail)
+ok, detail = autologon_lock_free(dict(AENV, SG_MUTANT_AUTOLOGON_LOCKS="1"))
+check("MUTANT AUTOLOGON_LOCKS (it locks anyway) is caught", not ok, detail)
+with open(AUTOCONF, "w") as f:
+    f.write("user=somebody-else\n")
+ok, detail = autologon_lock_free(AENV)
+check("...another account's automatic sign-in: this one still locks", not ok, detail)
+ctl("power", "--screen", "0", "--sleep", "0", env=LENV)
+calls()
 open(os.path.join(tmp, "polkit-no"), "w").close()
 code, lines = ctl("sleep", env=LENV)
 check("sleep refused by polkit is reported", code == 1 and lines[-1].startswith("ERROR failed systemctl"), lines)

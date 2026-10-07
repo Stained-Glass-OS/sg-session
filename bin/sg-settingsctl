@@ -534,9 +534,28 @@ def power_state(c):
     return int(p.get("screen", 10)), int(p.get("sleep", 0))
 
 
+def autologon_account():
+    """This account signs in automatically when the PC starts (Settings >
+    Accounts > Kiosk; sg-admind keeps it in /etc/stained-glass/autologon.conf)."""
+    try:
+        import pwd
+        with open(os.environ.get("SG_AUTOLOGON_CONF", "/etc/stained-glass/autologon.conf")) as f:
+            for line in f:
+                if line.startswith("user="):
+                    return line.strip()[5:] == pwd.getpwuid(os.getuid()).pw_name
+    except (OSError, KeyError):
+        pass
+    return False
+
+
 def lock_command():
     """The command that locks this session (sg-lockctl to the compositor's
-    control socket), or None outside a Stained Glass session."""
+    control socket), or None outside a Stained Glass session -- and for the
+    account that signs in automatically: anyone who turns the PC on is in it
+    anyway, and a kiosk tablet must not wake to a password nobody there
+    knows (its screen still turns off and the PC still sleeps)."""
+    if autologon_account() and os.environ.get("SG_MUTANT_AUTOLOGON_LOCKS") != "1":
+        return None
     lockctl = tool("sg-lockctl")
     if lockctl and os.environ.get("SG_LOCK_CONTROL"):
         return "%s LOCK" % lockctl

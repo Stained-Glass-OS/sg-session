@@ -1,0 +1,276 @@
+#!/usr/bin/python3
+# sg-kiosk -- the kiosk app: the one app an automatically signed-in account
+# opens full screen, and opens again when it closes (Settings > Accounts >
+# Kiosk; what Windows calls assigned access). sg-run-explorer runs it in
+# every session; it does nothing unless /etc/stained-glass/autologon.conf
+# (sg-shell's sg-admind writes it) names this account and a kiosk app.
+#
+#   sg-kiosk prepare   before the shell starts: the kiosk account's taskbar
+#                      hides itself at the bottom edge (auto-hide), so the
+#                      app has the whole screen; the person's own setting is
+#                      kept aside and put back once there is no kiosk app.
+#                      Prints "kiosk" when the kiosk app is on.
+#   sg-kiosk run       starts the app and starts it again SG_KIOSK_DELAY
+#                      seconds (5) after it closes, for as long as the
+#                      session lasts. An app that keeps closing at once is
+#                      started once a minute after five quick exits.
+#   sg-kiosk show      prints the kiosk settings this account has (if any)
+#
+# A Windows program starts through sg-shell's sg-kiosk64.exe, which opens it
+# maximized and waits for it (and for a program it hands over to, a launcher
+# that starts the real app and exits); a Linux app's .desktop Exec line is
+# run directly and waited for (gio launch does not wait).
+#
+# The way out is the usual one: Ctrl+Alt+Del > Sign out (the sign-in screen;
+# greetd does not sign in automatically twice in one boot), or the Start key.
+#
+# Environment (the gate's): SG_AUTOLOGON_CONF, SG_KIOSK_DELAY,
+# SG_KIOSK_QUICK (seconds; a run shorter than this is a quick exit, 30),
+# SG_KIOSK_SLOW (60), SG_KIOSK_PARENT (the session's process: the app is not
+# started again once it is gone; default our parent), SG_KIOSK_LAUNCHER (the
+# Windows launcher's command, default "wine <shell>/sg-kiosk64.exe"),
+# SG_KIOSK_STATE (where the person's taskbar setting is kept aside),
+# SG_KIOSK_WINE (wine, for reg). SG_MUTANT_KIOSK_NO_RESTART=1: the gate's
+# mutant (the app is not started again).
+#
+# Copyright (C) 2026 Stained Glass OS contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import os
+import pwd
+import shlex
+import subprocess
+import sys
+import time
+
+CONF = os.environ.get("SG_AUTOLOGON_CONF", "/etc/stained-glass/autologon.conf")
+SHELL_DIR = os.environ.get("SG_SHELL_DIR", "/usr/libexec/stained-glass/shell")
+TASKBAR_KEY = r"HKCU\Software\Stained Glass\Taskbar"
+
+
+def log(msg):
+    sys.stderr.write("sg-kiosk: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def me():
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def read_conf():
+    conf = {}
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    conf[k] = v
+    except OSError:
+        pass
+    return conf
+
+
+def kiosk_conf():
+    """this account's kiosk app, or None"""
+    conf = read_conf()
+    if conf.get("user") != me():
+        return None
+    if not conf.get("kiosk-app") and not conf.get("kiosk-desktop"):
+        return None
+    return conf
+
+
+# ---- the taskbar ------------------------------------------------------------
+def state_file():
+    d = os.environ.get("SG_KIOSK_STATE") or os.path.join(
+        os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state"),
+        "stained-glass")
+    return os.path.join(d, "kiosk-taskbar")
+
+
+def wine():
+    return shlex.split(os.environ.get("SG_KIOSK_WINE", "wine"))
+
+
+def reg(*args):
+    try:
+        return subprocess.run(wine() + ["reg"] + list(args), capture_output=True, text=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log("reg %s: %s" % (args[0], e))
+        return None
+
+
+def autohide_now():
+    r = reg("query", TASKBAR_KEY, "/v", "AutoHide")
+    if not r or r.returncode != 0:
+        return "none"
+    for line in r.stdout.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[0] == "AutoHide":
+            try:
+                return str(int(f[-1], 0))
+            except ValueError:
+                return "none"
+    return "none"
+
+
+def set_autohide(value):
+    if value == "none":
+        reg("delete", TASKBAR_KEY, "/v", "AutoHide", "/f")
+    else:
+        reg("add", TASKBAR_KEY, "/v", "AutoHide", "/t", "REG_DWORD", "/d", value, "/f")
+
+
+def prepare():
+    path = state_file()
+    if kiosk_conf():
+        if not os.path.exists(path):
+            saved = autohide_now()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(saved + "\n")
+        set_autohide("1")
+        print("kiosk")
+        return 0
+    if os.path.exists(path):
+        # no kiosk app any more: the person's own taskbar again
+        with open(path) as f:
+            saved = f.read().strip() or "none"
+        set_autohide(saved)
+        os.unlink(path)
+        log("no kiosk app: the taskbar's auto-hide is back to %s" % saved)
+    return 0
+
+
+# ---- starting the app ---------------------------------------------------------
+FIELD_CODES = {"%f", "%F", "%u", "%U", "%d", "%D", "%n", "%N", "%i", "%c", "%k", "%v", "%m"}
+
+
+def desktop_command(path):
+    """a .desktop file's Exec line as argv (field codes dropped), and Path"""
+    exec_line, workdir, section = None, None, None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("["):
+                section = line
+                continue
+            if section != "[Desktop Entry]":
+                continue
+            if line.startswith("Exec=") and exec_line is None:
+                exec_line = line[5:]
+            elif line.startswith("Path=") and workdir is None:
+                workdir = line[5:] or None
+    if not exec_line:
+        raise ValueError("%s has no Exec line" % path)
+    argv = []
+    for a in shlex.split(exec_line):
+        if a in FIELD_CODES:
+            continue
+        argv.append(a.replace("%%", "%"))
+    if not argv:
+        raise ValueError("%s has an empty Exec line" % path)
+    return argv, workdir
+
+
+def windows_command(conf):
+    launcher = os.environ.get("SG_KIOSK_LAUNCHER")
+    if launcher:
+        base = shlex.split(launcher)
+    elif os.path.isfile(os.path.join(SHELL_DIR, "sg-kiosk64.exe")):
+        base = ["wine", os.path.join(SHELL_DIR, "sg-kiosk64.exe")]
+    else:
+        # an sg-shell without the launcher: start's /wait, maximized
+        args = shlex.split(conf.get("kiosk-args", ""), posix=False)
+        return ["wine", "start", "/wait", "/max", "", conf["kiosk-app"]] + args
+    return base + [conf["kiosk-app"], conf.get("kiosk-dir", ""), conf.get("kiosk-args", "")]
+
+
+def session_alive(parent):
+    try:
+        os.kill(parent, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def run_once(conf):
+    """start the app and wait for it; its exit code, or None if it did not start"""
+    if conf.get("kiosk-desktop"):
+        try:
+            argv, workdir = desktop_command(conf["kiosk-desktop"])
+        except (OSError, ValueError) as e:
+            log("the kiosk app cannot be started: %s" % e)
+            return None
+        if not workdir or not os.path.isdir(workdir):
+            workdir = os.path.expanduser("~")
+    else:
+        argv, workdir = windows_command(conf), None
+    log("starting %s: %s" % (conf.get("kiosk-name", "the kiosk app"), " ".join(argv)))
+    try:
+        return subprocess.run(argv, cwd=workdir, stdin=subprocess.DEVNULL).returncode
+    except OSError as e:
+        log("the kiosk app could not be started: %s" % e)
+        return None
+
+
+def run():
+    conf = kiosk_conf()
+    if not conf:
+        return 0
+    parent = int(os.environ.get("SG_KIOSK_PARENT") or os.getppid())
+    delay = float(os.environ.get("SG_KIOSK_DELAY", "5"))
+    quick_s = float(os.environ.get("SG_KIOSK_QUICK", "30"))
+    slow = float(os.environ.get("SG_KIOSK_SLOW", "60"))
+    quick = 0
+    while session_alive(parent):
+        started = time.monotonic()
+        rc = run_once(conf)
+        ran = time.monotonic() - started
+        if not session_alive(parent):
+            break
+        log("%s closed (exit %s after %.0f s)" % (conf.get("kiosk-name", "the kiosk app"), rc, ran))
+        if os.environ.get("SG_MUTANT_KIOSK_NO_RESTART") == "1":
+            break
+        quick = quick + 1 if (rc is None or ran < quick_s) else 0
+        wait = delay if quick < 5 else slow
+        if quick == 5:
+            log("it keeps closing at once: starting it again once every %.0f s" % slow)
+        end = time.monotonic() + wait
+        while time.monotonic() < end and session_alive(parent):
+            time.sleep(min(0.5, max(0.0, end - time.monotonic())))
+        # the kiosk settings can change while the session lasts (an
+        # administrator's Settings, from another session)
+        conf = kiosk_conf()
+        if not conf:
+            log("no kiosk app any more")
+            break
+    return 0
+
+
+def show():
+    conf = kiosk_conf()
+    if conf:
+        for k in ("kiosk-name", "kiosk-app", "kiosk-args", "kiosk-dir", "kiosk-desktop"):
+            if conf.get(k):
+                print("%s=%s" % (k, conf[k]))
+    return 0
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "prepare":
+        return prepare()
+    if cmd == "run":
+        return run()
+    if cmd == "show":
+        return show()
+    sys.stderr.write("usage: sg-kiosk prepare|run|show\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
