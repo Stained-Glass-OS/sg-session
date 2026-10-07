@@ -1,0 +1,241 @@
+#!/usr/bin/python3
+"""sg-wam-msal: the Linux side of the Stained Glass Web Account Manager provider.
+
+The wine-sg provider (windows.security.authentication.web.core) hands every
+token request for a work or school account to this program, which asks
+Microsoft's own MSAL library to answer it. MSAL opens the real sign-in page in
+the person's browser (so passwords, second factors and federation are
+Microsoft's page's business, never ours) and keeps its own token cache for
+silent requests.
+
+  sg-wam-msal < REQUEST.json
+
+Needs python3-msal. The token cache is ~/.local/share/stained-glass/wam/msal-cache.bin
+(mode 0600). A browser sign-in ends on ms-appx-web://Microsoft.AAD.BrokerPlugin/<client id>,
+the redirect Office's own application registration accepts; sg-wam-redirect is that
+scheme's handler and passes the final URL back to this program over a socket in
+$XDG_RUNTIME_DIR (mode 0600), so the authorization code never leaves the person's session.
+
+REQUEST: {"mode": "silent"|"interactive"|"accounts", "authority": URL,
+          "client_id": GUID, "scopes": [..], "login_hint": str,
+          "force_prompt": bool, "account_id": str}
+RESULT:  {"ok": true, "result": <MSAL token response + "account">} or
+         {"ok": false, "error": str, "error_description": str, "interaction_required": bool}
+The result is one line on standard output, "SGWAM-RESULT:" and the JSON (the caller
+reads standard output and standard error together, so the marker finds it).
+"""
+import base64
+import json
+import os
+import socket
+import subprocess
+import sys
+import urllib.parse
+
+import msal
+
+CACHE_DIR = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "stained-glass", "wam")
+CACHE_FILE = os.path.join(CACHE_DIR, "msal-cache.bin")
+RESERVED = {"openid", "profile", "offline_access"}
+
+
+def load_cache():
+    cache = msal.SerializableTokenCache()
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache.deserialize(f.read())
+    except OSError:
+        pass
+    return cache
+
+
+def save_cache(cache):
+    if not cache.has_state_changed:
+        return
+    os.makedirs(CACHE_DIR, mode=0o700, exist_ok=True)
+    tmp = "%s.%d.tmp" % (CACHE_FILE, os.getpid())  # Word runs several helpers at once
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(cache.serialize())
+    os.replace(tmp, CACHE_FILE)
+
+
+def broker_redirect(client_id):
+    return "ms-appx-web://Microsoft.AAD.BrokerPlugin/" + client_id
+
+
+def socket_path():
+    # the person's own runtime folder (0700): a socket of a known name in /tmp
+    # could be taken first by another user (the code would still need our PKCE
+    # verifier, but the sign-in would never finish)
+    rt = os.environ.get("XDG_RUNTIME_DIR")
+    if not rt or not os.path.isdir(rt) or os.stat(rt).st_uid != os.getuid():
+        raise RuntimeError("no private runtime folder (XDG_RUNTIME_DIR) for the sign-in's redirect")
+    return os.path.join(rt, "sg-wam-redirect-%d.sock" % os.getuid())
+
+
+def interactive_sign_in(app, req, scopes):
+    """Auth-code + PKCE in the person's browser. Office's application registration takes no
+    loopback redirect, so the browser ends on its broker redirect, which sg-wam-redirect
+    (registered for the scheme) hands back over a socket."""
+    redirect = broker_redirect(req["client_id"])
+    kw = {"redirect_uri": redirect}
+    if req.get("login_hint"):
+        kw["login_hint"] = req["login_hint"]
+    if req.get("force_prompt"):
+        kw["prompt"] = "select_account"
+    flow = app.initiate_auth_code_flow(scopes, **kw)
+    if "auth_uri" not in flow:
+        return flow
+    path = socket_path()
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX)
+    srv.bind(path)
+    os.chmod(path, 0o600)
+    srv.listen(1)
+    srv.settimeout(300)
+    try:
+        subprocess.Popen(["xdg-open", flow["auth_uri"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        while True:
+            conn, _ = srv.accept()
+            with conn:
+                url = conn.makefile("rb").read(65536).decode("utf-8", "replace")
+            if url.lower().startswith(redirect.lower()):
+                break
+    except socket.timeout:
+        return {"error": "access_denied", "error_description": "sign-in was cancelled or timed out"}
+    finally:
+        srv.close()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    q = urllib.parse.urlsplit(url).query
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q).items()}
+    return app.acquire_token_by_auth_code_flow(flow, params)
+
+
+def account_ids_from_hint(hint):
+    """Office names the account it wants as "O.<base64 protobuf>" in the login hint: field 1 is the
+    account's object id, field 2 its tenant id. Returns (oid, tid), or (None, None) for anything else."""
+    if not hint.startswith("O."):
+        return None, None
+    try:
+        raw = base64.urlsafe_b64decode(hint[2:] + "=" * (-len(hint[2:]) % 4))
+    except ValueError:
+        return None, None
+    fields, i = {}, 0
+    while i + 2 <= len(raw):
+        tag, size = raw[i], raw[i + 1]  # short strings only: ids are 36 bytes
+        if tag & 7 != 2 or size > 0x7f or i + 2 + size > len(raw):
+            break
+        fields[tag >> 3] = raw[i + 2:i + 2 + size].decode("ascii", "replace").lower()
+        i += 2 + size
+    return fields.get(1), fields.get(2)
+
+
+def find_account(app, req):
+    accounts = app.get_accounts()
+    want = req.get("account_id")
+    raw_hint = req.get("login_hint") or ""
+    oid, tid = account_ids_from_hint(raw_hint)
+    hint = "" if oid else raw_hint.lower()
+    if oid:
+        # Office named one account: another account is not an answer, whoever else is signed in
+        for acc in accounts:
+            if (acc.get("local_account_id") or "").lower() == oid and \
+               (not tid or (acc.get("home_account_id") or "").lower().endswith("." + tid)):
+                return acc
+        return None
+    for acc in accounts:
+        if want and acc.get("home_account_id") == want:
+            return acc
+    for acc in accounts:
+        if hint and (acc.get("username") or "").lower() == hint:
+            return acc
+    if not want and not hint and len(accounts) == 1:
+        return accounts[0]
+    return None
+
+
+def fill_from_cache(app, res, acc, scopes):
+    """Office reads the id token, client info and scopes out of every answer. MSAL returns them only
+    for a fresh sign-in, not for a token it served from its cache, so take them from the cache."""
+    if not acc:
+        return
+    cache = app.token_cache
+    home = acc.get("home_account_id")
+    if not res.get("id_token"):
+        for e in cache.find(msal.TokenCache.CredentialType.ID_TOKEN, query={"home_account_id": home}):
+            res["id_token"] = e.get("secret")
+            break
+    if not res.get("client_info") and home and "." in home:
+        uid, utid = home.split(".", 1)  # client info is {"uid","utid"}, which is how the account id is made
+        raw = json.dumps({"uid": uid, "utid": utid}, separators=(",", ":")).encode()
+        res["client_info"] = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    if not res.get("scope"):
+        asked = {s.lower() for s in scopes}
+        for e in cache.find(msal.TokenCache.CredentialType.ACCESS_TOKEN, query={"home_account_id": home}):
+            if asked & set((e.get("target") or "").lower().split()):
+                res["scope"] = e["target"]
+                break
+        else:
+            res["scope"] = " ".join(scopes)
+
+
+def describe(acc):
+    return {"home_account_id": acc.get("home_account_id"), "username": acc.get("username"),
+            "environment": acc.get("environment"), "realm": acc.get("realm"),
+            "local_account_id": acc.get("local_account_id")}
+
+
+def run(req):
+    cache = load_cache()
+    app = msal.PublicClientApplication(req["client_id"], authority=req["authority"], token_cache=cache)
+    # MSAL adds openid/profile/offline_access itself; passing them is an error
+    scopes = [s for s in req.get("scopes", []) if s.lower() not in RESERVED]
+    mode = req["mode"]
+
+    if mode == "accounts":
+        return {"ok": True, "result": {"accounts": [describe(a) for a in app.get_accounts()]}}
+
+    if mode == "silent":
+        acc = find_account(app, req)
+        if not acc:
+            return {"ok": False, "error": "no_account", "error_description": "no signed-in account",
+                    "interaction_required": True}
+        res = app.acquire_token_silent(scopes, account=acc)
+        save_cache(cache)
+        if not res:
+            return {"ok": False, "error": "no_token", "error_description": "no cached token", "interaction_required": True}
+    else:
+        res = interactive_sign_in(app, req, scopes)
+        save_cache(cache)
+
+    if "access_token" in res:
+        acc = find_account(app, {"login_hint": (res.get("id_token_claims") or {}).get("preferred_username")}) \
+            or find_account(app, req)
+        res = dict(res)
+        fill_from_cache(app, res, acc, scopes)
+        res["account"] = describe(acc) if acc else None
+        return {"ok": True, "result": res}
+    err = res.get("error", "unknown")
+    return {"ok": False, "error": err, "error_description": res.get("error_description", ""),
+            "interaction_required": err in ("interaction_required", "invalid_grant", "login_required",
+                                            "consent_required")}
+
+
+def main():
+    try:
+        out = run(json.load(sys.stdin))
+    except Exception as e:  # report, never crash the caller
+        out = {"ok": False, "error": type(e).__name__, "error_description": str(e), "interaction_required": False}
+    sys.stdout.write("SGWAM-RESULT:" + json.dumps(out) + "\n")
+    sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

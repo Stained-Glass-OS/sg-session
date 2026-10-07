@@ -1,3 +1,13 @@
+sg-session (0.1.0-168) unstable; urgency=medium
+
+  * Office's work-account sign-in (PR #1): sg-wam-msal, the Linux side of
+    wine-sg 1477-1479's Web Account Manager provider, asks Microsoft's MSAL
+    (python3-msal); the sign-in page opens in the person's browser and its
+    redirect (ms-appx-web:) comes back through sg-wam-redirect over a socket
+    in the person's runtime folder (never /tmp). test/wam-msal-test.py.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:26:16 -0700
+
 sg-session (0.1.0-167) unstable; urgency=medium
 
   * SG Office is no longer installed by default (David: Microsoft Office

@@ -6,7 +6,9 @@
 # handler, from Windows programs. PDF files open in SG PDF (package sg-pdf),
 # through the Windows side's .pdf association. A downloaded AppImage opens
 # the Install an AppImage window (sg-shell's sg-store64.exe --appimage),
-# never runs on its own.
+# never runs on its own. The end of a Microsoft sign-in (ms-appx-web:, the redirect
+# Office's own application registration accepts) goes to sg-wam-redirect, which
+# hands it to the sign-in program waiting for it.
 [Default Applications]
 application/x-ms-dos-executable=sg-windows-file.desktop
 application/x-msdownload=sg-windows-file.desktop
@@ -15,6 +17,7 @@ application/x-msi=sg-windows-file.desktop
 application/x-ms-shortcut=sg-windows-file.desktop
 application/vnd.appimage=sg-appimage-install.desktop
 application/x-iso9660-appimage=sg-appimage-install.desktop
+x-scheme-handler/ms-appx-web=sg-wam-redirect.desktop;
 x-scheme-handler/mailto=sg-mail.desktop;thunderbird.desktop;
 application/pdf=sg-pdf.desktop;
 application/x-pdf=sg-pdf.desktop;
