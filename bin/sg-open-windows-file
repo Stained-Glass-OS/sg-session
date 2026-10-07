@@ -4,9 +4,17 @@
 # runs in the session's Wine, as a double-click in File Explorer would (David
 # 2026-10-02: Linux Firefox "is not sure how to handle" an .exe). The handler
 # for those types (sg-windows-file.desktop).
+#
+# sg-open-windows-file --appimage FILE: a downloaded AppImage (a Linux
+# program in one file) opens SG Store's "Install an AppImage" window, which
+# installs it for the user (sg-shell's sg-appimage) -- never runs it
+# (sg-appimage-install.desktop). Not through start: an AppImage without its
+# .AppImage name would be started as the Linux program it is.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
-[ $# -ge 1 ] || { echo "usage: sg-open-windows-file FILE" >&2; exit 2; }
+appimage=0
+[ "${1:-}" = --appimage ] && { appimage=1; shift; }
+[ $# -ge 1 ] || { echo "usage: sg-open-windows-file [--appimage] FILE" >&2; exit 2; }
 # shellcheck source=lib/sg-common.sh
 . /usr/lib/stained-glass/sg-common.sh
 env_file=$(sg_session_env)
@@ -18,4 +26,5 @@ case "$1" in
     file://*) f=$(printf '%s' "${1#file://}" | sed 's/%20/ /g') ;;
     *) f=$1 ;;
 esac
+[ "$appimage" = 1 ] && exec wine "${SG_STORE_EXE:-/usr/libexec/stained-glass/shell/sg-store64.exe}" --appimage "$f"
 exec wine start /unix "$f"

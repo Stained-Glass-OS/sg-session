@@ -1,3 +1,15 @@
+sg-session (0.1.0-165) unstable; urgency=medium
+
+  * AppImages: one opened from a Linux program (Linux Firefox's downloads)
+    opens SG Store's "Install an AppImage" window (sg-open-windows-file
+    --appimage; sg-appimage-install.desktop, the default for
+    application/vnd.appimage in mimeapps.list) -- never runs it.
+    Gate: test/windows-file-test.sh; mutant APPIMAGE_VIA_START.
+  * SG Defender also watches ~/Applications, where AppImages are installed.
+    Gate: test/defender-test.sh; mutant NO_APPLICATIONS.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 13:10:00 -0700
+
 sg-session (0.1.0-164) unstable; urgency=medium
 
   * Remote Desktop: console shadow (E1 pattern A). A client asking for the

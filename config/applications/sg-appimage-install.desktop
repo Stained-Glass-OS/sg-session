@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install AppImage
+Comment=Installs a downloaded AppImage for you: your Applications folder and Start
+Exec=sg-open-windows-file --appimage %f
+Icon=application-x-executable
+NoDisplay=true
+Terminal=false
+MimeType=application/vnd.appimage;application/x-iso9660-appimage;

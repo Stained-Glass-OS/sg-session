@@ -9,7 +9,9 @@
 # off in Settings for whoever needs the memory back (its definitions stay
 # loaded: about a gigabyte, worth it).
 #
-# Runs as root. Watches every account's Downloads and Desktop (inotify): a
+# Runs as root. Watches every account's Downloads and Desktop, and
+# Applications -- where AppImages are installed (sg-shell's sg-appimage
+# copies a download there) -- (inotify): a
 # file written there, or moved in, that could run -- a Windows or Linux
 # program, an installer, a script, an archive that may hold one, an Office
 # document that may hold macros -- is scanned by clamd (clamdscan --fdpass:
@@ -50,7 +52,7 @@ STATE = os.environ.get("SG_DEFENDER_STATE", "/var/lib/stained-glass/defender")
 NOTICES = os.environ.get("SG_DEFENDER_NOTICES", "/var/lib/stained-glass/defender/notices")
 HOMES = os.environ.get("SG_DEFENDER_HOMES")          # test: watch these homes only (":"-separated)
 SCAN = os.environ.get("SG_DEFENDER_SCAN", "clamdscan --fdpass --no-summary --infected").split()
-WATCHED = ("Downloads", "Desktop")
+WATCHED = ("Downloads", "Desktop", "Applications")
 
 # what could run, by name
 RUNNABLE = {
@@ -294,7 +296,7 @@ def main():
     status_write(st)
     pending = {}        # path -> (uid, tries, due)
     last_homes = 0
-    log("watching Downloads and Desktop%s" % ("" if st["enabled"] else " (turned off)"))
+    log("watching Downloads, Desktop and Applications%s" % ("" if st["enabled"] else " (turned off)"))
     while True:
         now = time.monotonic()
         if now - last_homes > 30:

@@ -190,6 +190,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# Windows programs opened from Linux programs (Firefox's downloads): sg-open-windows-file
 	install -D -m 0644 config/applications/sg-windows-file.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-windows-file.desktop
+	@# a downloaded AppImage: the Install an AppImage window (sg-open-windows-file --appimage)
+	install -D -m 0644 config/applications/sg-appimage-install.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-appimage-install.desktop
 	install -D -m 0644 config/applications/sg-mimeapps.list $(DESTDIR)$(PREFIX)/share/applications/mimeapps.list
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
 	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol

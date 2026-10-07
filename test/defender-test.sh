@@ -10,7 +10,9 @@
 #   4. a download in progress (.part) is scanned once renamed, not before
 #   5. a program in a new folder under Downloads, and one on the Desktop
 #   6. turned off (enabled=0): nothing is scanned
-# Mutants: NO_QUARANTINE, SCAN_EVERYTHING, NO_PARTIAL_WAIT.
+#   7. an AppImage installed into ~/Applications (sg-shell's sg-appimage:
+#      a copy of the download, renamed into place) is scanned there too
+# Mutants: NO_QUARANTINE, SCAN_EVERYTHING, NO_PARTIAL_WAIT, NO_APPLICATIONS.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 T=$(mktemp -d)
@@ -26,7 +28,7 @@ if grep -q EICAR-STANDARD "$f" 2>/dev/null; then echo "$f: Eicar-Test-Signature 
 exit 0
 EOS
 chmod +x "$T/clamdscan"
-mkdir -p "$T/home/Downloads" "$T/home/Desktop"
+mkdir -p "$T/home/Downloads" "$T/home/Desktop" "$T/home/Applications"
 start() {   # script
     SG_DEFENDER_CONF="$T/defender.conf" SG_DEFENDER_STATE="$T/state" SG_DEFENDER_NOTICES="$T/notices" \
     SG_DEFENDER_HOMES="$T/home" SG_DEFENDER_SCAN="$T/clamdscan" python3 "$1" 2>"$T/log" & DP=$!
@@ -80,6 +82,18 @@ mutant() {   # name sed-expression check-description
 mutant NO_QUARANTINE 's/qid = quarantine(path, uid, verdict\[1\])/qid = None/' '[ -e "$T/home/Downloads/m.exe" ]'
 mutant SCAN_EVERYTHING 's/or not runnable(path):/:/' '[ "$(scanned m.txt)" != 0 ]'
 mutant NO_PARTIAL_WAIT 's/    if name.endswith(PARTIAL):/    if False:/' '[ "$(scanned m2.exe.part)" != 0 ]'
+# 7. an AppImage installed for the user: written beside, renamed into ~/Applications
+appimage() {   # check
+    printf '\177ELF%s' "$EICAR" > "$T/home/Applications/.sg-appimage.tmp1"
+    mv "$T/home/Applications/.sg-appimage.tmp1" "$T/home/Applications/Foo-x86_64.AppImage"; sleep 3
+}
+start "$HERE/bin/sg-defender"; appimage
+[ ! -e "$T/home/Applications/Foo-x86_64.AppImage" ] && echo "PASS  an AppImage installed into ~/Applications is scanned there (caught)" \
+    || { echo "FAIL  ~/Applications not watched: $(ls -a "$T/home/Applications")"; RC=1; }
+kill $DP; sleep 0.5; rm -f "$T"/home/Applications/*
+sed 's/WATCHED = ("Downloads", "Desktop", "Applications")/WATCHED = ("Downloads", "Desktop")/' "$HERE/bin/sg-defender" > "$T/mut.py"; start "$T/mut.py"; appimage
+[ -e "$T/home/Applications/Foo-x86_64.AppImage" ] && echo "PASS  MUTANT NO_APPLICATIONS caught" || { echo "FAIL  MUTANT NO_APPLICATIONS not caught"; RC=1; }
+kill $DP; sleep 0.5
 # ClamAV runs as background work (its drop-ins): not ahead of the first-run setup
 for u in clamav-daemon clamav-freshclam; do
     f="$HERE/systemd/$u.service.d/50-sg-background.conf"

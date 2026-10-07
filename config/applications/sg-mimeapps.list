@@ -4,13 +4,17 @@
 # still comes first. Mail links (mailto:) open SG Mail (package sg-mail),
 # else Thunderbird -- from Linux programs and, through Wine's mailto
 # handler, from Windows programs. PDF files open in SG PDF (package sg-pdf),
-# through the Windows side's .pdf association.
+# through the Windows side's .pdf association. A downloaded AppImage opens
+# the Install an AppImage window (sg-shell's sg-store64.exe --appimage),
+# never runs on its own.
 [Default Applications]
 application/x-ms-dos-executable=sg-windows-file.desktop
 application/x-msdownload=sg-windows-file.desktop
 application/vnd.microsoft.portable-executable=sg-windows-file.desktop
 application/x-msi=sg-windows-file.desktop
 application/x-ms-shortcut=sg-windows-file.desktop
+application/vnd.appimage=sg-appimage-install.desktop
+application/x-iso9660-appimage=sg-appimage-install.desktop
 x-scheme-handler/mailto=sg-mail.desktop;thunderbird.desktop;
 application/pdf=sg-pdf.desktop;
 application/x-pdf=sg-pdf.desktop;
