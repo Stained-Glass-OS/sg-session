@@ -126,6 +126,12 @@ def rgb(s, default=(0, 0, 0)):
     return ((v >> 16 & 255) / 255.0, (v >> 8 & 255) / 255.0, (v & 255) / 255.0)
 
 
+def ink_width(base, pressure):
+    """a pen's line width at a pressure (0..1): half pressure is the chosen width, a light touch
+    a quarter of it, a firm one 1.75 times"""
+    return max(0.3, base * (0.25 + 1.5 * pressure))
+
+
 def floats(s, n=None):
     try:
         v = [float(x) for x in s.replace(",", " ").split()]
@@ -1224,12 +1230,16 @@ class Engine:
             if kind == "arrow":
                 a.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_OPEN_ARROW)
         elif kind == "ink":
-            strokes = []
-            for s in o.get("ink", "").split(";"):
+            # pressure=P P ...;P ... (0..1 per point, a pen's): the line's width follows it
+            strokes, press = [], []
+            plist = o.get("pressure", "").split(";") if o.get("pressure") else []
+            for k, s in enumerate(o.get("ink", "").split(";")):
                 v = floats(s)
                 pts = [tuple(self.ui_point(p, (v[i], v[i + 1]))) for i in range(0, len(v) - 1, 2)]
                 if len(pts) >= 2:
                     strokes.append(pts)
+                    pv = floats(plist[k]) if k < len(plist) else []
+                    press.append([min(1.0, max(0.0, x)) for x in pv] if len(pv) == len(pts) else None)
             if not strokes:
                 raise Refusal("invalid", "no strokes")
             a = p.add_ink_annot(strokes)
@@ -1257,9 +1267,80 @@ class Engine:
             a.set_opacity(max(0.05, min(1.0, float(o["opacity"]))))
         a.set_info(title=o.get("author") or self.author, content=text)
         a.update()
+        if kind == "ink" and any(press):
+            base = float(o.get("width") or 2)
+            widths = [[ink_width(base, x) for x in pv] if pv else [base] * len(st) for st, pv in zip(strokes, press)]
+            self._ink_variable(p, a, widths)
         xref = a.xref
         self.changed()
         return self.state("xref=%d" % xref)
+
+    def _ink_widths(self, a):
+        """an ink comment's widths per point (written by _ink_variable), or None"""
+        t, v = self.doc.xref_get_key(a.xref, "SGInkWidths")
+        if t != "array":
+            return None
+        rows = re.findall(r"\[([^\[\]]*)\]", v[1:-1])
+        return [[float(x) for x in r.split()] for r in rows] or None
+
+    def _ink_variable(self, p, a, widths):
+        """a pen's ink: the stroke's width follows the pressure. Saved as a standard Ink annotation
+        (its InkList, /BS /W the mean width, so a reader that draws it anew draws it evenly) whose
+        appearance is the variable-width stroke: each point a disc of its width, each segment the
+        quadrilateral between two discs, all filled at once (nonzero: one shape, even at partial
+        opacity). The widths stay in /SGInkWidths so a move or a colour change keeps them."""
+        strokes = a.vertices or []
+        if len(strokes) != len(widths) or any(len(s) != len(w) for s, w in zip(strokes, widths)):
+            return
+        to_pdf = ~p.transformation_matrix
+        path, xs, ys = [], [], []
+
+        def disc(c, r):
+            k = 0.5523 * r
+            x, y = c
+            path.append("%.2f %.2f m" % (x + r, y))
+            path.append("%.2f %.2f %.2f %.2f %.2f %.2f c" % (x + r, y + k, x + k, y + r, x, y + r))
+            path.append("%.2f %.2f %.2f %.2f %.2f %.2f c" % (x - k, y + r, x - r, y + k, x - r, y))
+            path.append("%.2f %.2f %.2f %.2f %.2f %.2f c" % (x - r, y - k, x - k, y - r, x, y - r))
+            path.append("%.2f %.2f %.2f %.2f %.2f %.2f c h" % (x + k, y - r, x + r, y - k, x + r, y))
+            xs.extend((x - r, x + r))
+            ys.extend((y - r, y + r))
+        for st, ws in zip(strokes, widths):
+            pts = [tuple(fitz.Point(q) * to_pdf) for q in st]
+            for q, w in zip(pts, ws):
+                disc(q, w / 2)
+            for (p0, w0), (p1, w1) in zip(zip(pts, ws), zip(pts[1:], ws[1:])):
+                dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+                ln = math.hypot(dx, dy)
+                if ln < 1e-3:
+                    continue
+                nx, ny = -dy / ln, dx / ln          # left of the direction: the quad turns as the discs do
+                r0, r1 = w0 / 2, w1 / 2
+                path.append("%.2f %.2f m %.2f %.2f l %.2f %.2f l %.2f %.2f l h" % (
+                    p0[0] - nx * r0, p0[1] - ny * r0, p1[0] - nx * r1, p1[1] - ny * r1,
+                    p1[0] + nx * r1, p1[1] + ny * r1, p0[0] + nx * r0, p0[1] + ny * r0))
+        if not xs:
+            return
+        bbox = (min(xs) - 1, min(ys) - 1, max(xs) + 1, max(ys) + 1)
+        col = (a.colors or {}).get("stroke") or (0, 0, 0)
+        op = a.opacity if a.opacity is not None and 0 <= a.opacity < 1 else None
+        body = ("q %s%.3f %.3f %.3f rg\n%s\nf Q\n" % ("/H gs " if op is not None else "", col[0], col[1], col[2],
+                                                    "\n".join(path))).encode()
+        doc = self.doc
+        t, v = doc.xref_get_key(a.xref, "AP/N")
+        if t != "xref":
+            return
+        ap = int(v.split()[0])
+        doc.update_stream(ap, body)
+        doc.xref_set_key(ap, "BBox", "[%.2f %.2f %.2f %.2f]" % bbox)
+        doc.xref_set_key(ap, "Matrix", "[1 0 0 1 0 0]")
+        doc.xref_set_key(ap, "Resources", "<</ExtGState<</H<</CA %.3f/ca %.3f>>>>>>" % (op, op) if op is not None
+                         else "<<>>")
+        doc.xref_set_key(a.xref, "Rect", "[%.2f %.2f %.2f %.2f]" % bbox)
+        doc.xref_set_key(a.xref, "BS", "<</W %.2f/S/S>>" % (sum(sum(w) for w in widths) /
+                                                          max(1, sum(len(w) for w in widths))))
+        doc.xref_set_key(a.xref, "SGInkWidths", "[" + " ".join("[" + " ".join("%.2f" % x for x in w) + "]"
+                                                              for w in widths) + "]")
 
     def _annot_line(self, p, a, replies=0, status=""):
         t = a.type[1]
@@ -1340,6 +1421,7 @@ class Engine:
         border = (a.border or {}).get("width")
         m = fitz.Matrix(1, 0, 0, 1, dx, dy)
         verts = a.vertices or []
+        widths = None
         if t in (fitz.PDF_ANNOT_HIGHLIGHT, fitz.PDF_ANNOT_UNDERLINE, fitz.PDF_ANNOT_STRIKE_OUT, fitz.PDF_ANNOT_SQUIGGLY):
             quads = [fitz.Quad(*[fitz.Point(v) * m for v in verts[i:i + 4]]) for i in range(0, len(verts) - 3, 4)]
             add = {fitz.PDF_ANNOT_HIGHLIGHT: p.add_highlight_annot, fitz.PDF_ANNOT_UNDERLINE: p.add_underline_annot,
@@ -1347,6 +1429,7 @@ class Engine:
             p.delete_annot(a)
             na = add(quads=quads)
         elif t == fitz.PDF_ANNOT_INK:
+            widths = self._ink_widths(a)
             strokes = [[tuple(fitz.Point(v) * m) for v in s] for s in verts]
             p.delete_annot(a)
             na = p.add_ink_annot(strokes)
@@ -1365,6 +1448,8 @@ class Engine:
             na.set_opacity(opacity)
         na.set_info(title=info.get("title", ""), content=info.get("content", ""))
         na.update()
+        if t == fitz.PDF_ANNOT_INK and widths:
+            self._ink_variable(p, na, widths)
 
     def setannot(self, n, xref, *opts):
         p = self.page(n)
@@ -1378,7 +1463,10 @@ class Engine:
                 a.update(text_color=rgb(o["color"]))
             else:
                 a.set_colors(stroke=rgb(o["color"]))
+        widths = self._ink_widths(a) if a.type[0] == fitz.PDF_ANNOT_INK else None
         a.update()
+        if widths:
+            self._ink_variable(p, a, widths)
         self.changed()
         return self.state()
 
@@ -1710,8 +1798,9 @@ class Engine:
         S = self._sign_mod()
         o = kv(opts)
         out, pfx, password = unesc(out), unesc(pfx), unesc(password)
-        if self.encrypted or (self.security and self.security[0] != "none"):
-            raise Refusal("invalid", "an encrypted document cannot be signed here; remove its security first")
+        if self.security is not None:
+            # a new password or none at all takes effect when it is saved: sign what is saved
+            raise Refusal("invalid", "save the document first: its security changes when it is saved")
         if not self.allowed(fitz.PDF_PERM_FORM) and not self.allowed(fitz.PDF_PERM_MODIFY):
             raise Refusal("secured", "the document's security does not allow signing")
         field = o.get("field")
@@ -1727,14 +1816,20 @@ class Engine:
             kw = dict(page_no=p.number, rect=r, field_name=o.get("name") or "Signature")
         # the bytes signed: the file as saved when nothing changed since (earlier signatures stay
         # valid); otherwise the document as it is now
+        # (an encrypted document keeps its encryption: the update is encrypted with its key, from
+        # the password it was opened with, which stays in this process's memory)
         if not self.dirty and self.path and os.path.isfile(self.path):
             with open(self.path, "rb") as f:
                 base = f.read()
+        elif self.encrypted:
+            base = self.doc.tobytes(garbage=3, deflate=True, encryption=fitz.PDF_ENCRYPT_KEEP)
         else:
             base = self.doc.tobytes(garbage=3, deflate=True, use_objstms=1)
         if field:
             # the field's number in the bytes signed
             d2 = fitz.open("pdf", base)
+            if d2.needs_pass:
+                d2.authenticate(self.password or "")
             name = w.field_name
             hit = [x for x in d2[p.number].widgets() if x.field_name == name and
                    x.field_type == fitz.PDF_WIDGET_TYPE_SIGNATURE]
@@ -1751,7 +1846,7 @@ class Engine:
         try:
             signer = S.sign_file(base, out, fitz, pfx=pfx, password=password, reason=o.get("reason", ""),
                                  location=o.get("location", ""), contact=o.get("contact", ""),
-                                 picture_png=png, **kw)
+                                 picture_png=png, doc_password=self.password, **kw)
         except S.SignError as e:
             raise Refusal("invalid", str(e))
         except OSError as e:

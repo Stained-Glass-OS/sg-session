@@ -1,3 +1,33 @@
+sg-session (0.1.0-154) unstable; urgency=medium
+
+  * SG PDF's engine: a pen's ink with its pressure. "annot ink" takes
+    pressure=P ... (0..1 a point, as SG PDF now sends for a pen): the stroke
+    is saved as a standard Ink annotation (InkList; /BS /W the mean width,
+    so a reader that redraws it draws it evenly) whose appearance is the
+    variable-width stroke -- a disc at each point as wide as the pen
+    pressed (a quarter of the chosen width at the lightest, 1.75 times at
+    the firmest), the quadrilaterals between, filled at once -- and its
+    widths kept in /SGInkWidths, so moving it or changing its colour keeps
+    them. MuPDF and poppler both draw it thin-to-thick.
+  * Certificate-signing an encrypted document: it was refused ("remove its
+    security first"). Now the signature is appended as before, encrypted
+    with the document's own key (sgpdf_sign._Crypt: the standard security
+    handler, RC4 and AES-128 per object for revisions 2-4, AES-256 for 5/6,
+    the key derived from the password the document was opened with --
+    user's or owner's -- in memory only), so the file keeps its password
+    and permissions; /Contents is left unencrypted as the standard says.
+    A changed document is signed as it is now, still encrypted; a security
+    change not yet saved asks to save first.
+  * Gate test/pdf-inkcrypt-test.py (in make test): pen widths in the saved
+    file, MuPDF and poppler rendering, move and recolour; AES-256, AES-128
+    and RC4-128 opened with the user's and the owner's password, signed:
+    appended byte for byte, still encrypted, pdfsig valid with the password,
+    qpdf --check, the reason and field name encrypted in the file and right
+    decrypted. Mutants test/pdf-inkcrypt-mutants.sh: INK_EVEN, INK_FORGET,
+    CRYPT_PLAIN, CRYPT_KEY, CRYPT_CONTENTS, CRYPT_REFUSE -- all killed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 20:27:02 -0700
+
 sg-session (0.1.0-153) unstable; urgency=medium
 
   * sg-session-check: the leaked-shell check matches explorer.exe as a

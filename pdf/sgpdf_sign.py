@@ -234,14 +234,17 @@ def appearance(w, h, lines, picture=None):
 
 
 def sign_file(base, out_path, fitz, field_xref=None, page_no=None, rect=None, field_name=None,
-              pfx=None, password=None, reason="", location="", contact="", picture_png=None, when=None):
+              pfx=None, password=None, reason="", location="", contact="", picture_png=None, when=None,
+              doc_password=None):
     """append a signature to the PDF bytes `base`, write the signed file to out_path.
     Either field_xref (an empty signature field) or page_no + rect (points, unrotated page) +
-    field_name for a new field. picture_png: the person's signature drawn beside the text."""
+    field_name for a new field. picture_png: the person's signature drawn beside the text.
+    doc_password: an encrypted document's password (the update is encrypted with its key)."""
     key, cert, chain = load_id(pfx, password)
     doc = fitz.open("pdf", base)
-    if doc.needs_pass or doc.is_encrypted:
-        raise SignError("an encrypted document cannot be signed here; remove its security first")
+    if doc.needs_pass and not doc.authenticate(doc_password or ""):
+        raise SignError("the document's password is needed to sign it")
+    crypt, encrypt_ref = _crypt_of(doc, base, doc_password)
     when = when or datetime.datetime.now().astimezone().replace(microsecond=0)
     signer = id_name(cert)
     size = doc.xref_length()
@@ -362,8 +365,11 @@ def sign_file(base, out_path, fitz, field_xref=None, page_no=None, rect=None, fi
     offsets = {}
     for num in sorted(objs):
         offsets[num] = len(out)
-        out += b"%d 0 obj\n" % num + objs[num] + b"\nendobj\n"
-    trailer_keys = _trailer(doc)
+        body = objs[num]
+        if crypt:
+            body = crypt.encrypt_object(num, body, keep_after="Contents" if num == sig_xref else None)
+        out += b"%d 0 obj\n" % num + body + b"\nendobj\n"
+    trailer_keys = _trailer(doc) + encrypt_ref
     xref_pos = len(out)
     size_new = max(next_obj[0], size)
     if _is_xref_stream(base, prev):
@@ -574,6 +580,243 @@ def _trailer(doc):
 
 def _is_xref_stream(data, pos):
     return not data[pos:pos + 4] == b"xref"
+
+
+# ---- encrypted documents --------------------------------------------------------------------------------
+#
+# A document with a password is signed as it is: the update's objects are
+# encrypted with the document's own key (ISO 32000's standard security
+# handler: RC4 or AES-128 per object, AES-256 for revision 5/6), so it keeps
+# its password and its permissions, and the person's password opens the new
+# revision as it opened the old. The key is derived here from the password
+# the document was opened with, in memory only. As the standard says, the
+# signature's /Contents is not encrypted (it is signed bytes, not text), the
+# cross-reference stream is not, and nothing else in the update is left
+# plain.
+
+_PAD = bytes.fromhex("28BF4E5E4E758A4164004E56FFFA01082E2E00B6D0683E802F0CA9FE6453697A")
+
+
+def _rc4(key, data):
+    s = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + s[i] + key[i % len(key)]) & 255
+        s[i], s[j] = s[j], s[i]
+    out = bytearray(len(data))
+    i = j = 0
+    for k, b in enumerate(data):
+        i = (i + 1) & 255
+        j = (j + s[i]) & 255
+        s[i], s[j] = s[j], s[i]
+        out[k] = b ^ s[(s[i] + s[j]) & 255]
+    return bytes(out)
+
+
+def _aes_cbc(key, iv, data, encrypt=True):
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    c = Cipher(algorithms.AES(key), modes.CBC(iv))
+    x = c.encryptor() if encrypt else c.decryptor()
+    return x.update(data) + x.finalize()
+
+
+def _pdf_string_bytes(tok):
+    """the bytes of a PDF string token, (literal) or <hex>"""
+    tok = tok.strip()
+    if tok.startswith("<"):
+        h = re.sub(r"\s", "", tok[1:-1])
+        if len(h) % 2:
+            h += "0"
+        return bytes.fromhex(h)
+    out, i, body = bytearray(), 0, tok[1:-1]
+    esc = {"n": 10, "r": 13, "t": 9, "b": 8, "f": 12, "(": 40, ")": 41, "\\": 92}
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body):
+            d = body[i + 1]
+            if d in esc:
+                out.append(esc[d])
+                i += 2
+            elif d in "01234567":
+                m = re.match(r"[0-7]{1,3}", body[i + 1:])
+                out.append(int(m.group(0), 8) & 255)
+                i += 1 + len(m.group(0))
+            elif d in "\r\n":
+                i += 2
+                if d == "\r" and i < len(body) and body[i] == "\n":
+                    i += 1
+            else:
+                out.append(ord(d) & 255)
+                i += 2
+        else:
+            out.append(ord(c) & 255)
+            i += 1
+    return bytes(out)
+
+
+def _hash_r6(pw, salt, udata, r):
+    if r == 5:
+        return hashlib.sha256(pw + salt + udata).digest()
+    k = hashlib.sha256(pw + salt + udata).digest()
+    i = 0
+    while True:
+        k1 = (pw + k + udata) * 64
+        e = _aes_cbc(k[:16], k[16:32], k1)
+        h = {0: hashlib.sha256, 1: hashlib.sha384, 2: hashlib.sha512}[sum(e[:16]) % 3]
+        k = h(e).digest()
+        i += 1
+        if i >= 64 and e[-1] <= i - 32:
+            break
+    return k[:32]
+
+
+class _Crypt:
+    """the document's file key and how it encrypts strings and streams"""
+
+    def __init__(self, enc, id0, password):
+        def get(key, default=None):
+            v = dict(enc).get(key)
+            return default if v is None else v
+        if get("Filter", "").strip() != "/Standard":
+            raise SignError("the document is encrypted with a security handler other than the standard one")
+        self.v = int(get("V", "0"))
+        self.r = int(get("R", "2"))
+        o, u = _pdf_string_bytes(get("O", "<>")), _pdf_string_bytes(get("U", "<>"))
+        self.length = int(get("Length", "40")) // 8 if self.v > 1 else 5
+        self.stm = self.strm = "rc4"
+        if self.v >= 4:
+            cfs = dict(_top_level_entries(get("CF", "<<>>").strip()[2:-2]))
+
+            def method(name):
+                name = name.strip().lstrip("/")
+                if name in ("", "Identity"):
+                    return "none"
+                cfm = dict(_top_level_entries(cfs.get(name, "<<>>").strip()[2:-2])).get("CFM", "/None").strip()
+                return {"/V2": "rc4", "/AESV2": "aes128", "/AESV3": "aes256", "/None": "none"}.get(cfm, "unknown")
+            self.stm, self.strm = method(get("StmF", "/Identity")), method(get("StrF", "/Identity"))
+            if "unknown" in (self.stm, self.strm):
+                raise SignError("the document's encryption method is not one this program writes")
+            if self.v == 4:
+                self.length = 16
+        pw = (password or "").encode("utf-8")
+        if self.r >= 5:
+            pw = pw[:127]
+            oe, ue = _pdf_string_bytes(get("OE", "<>")), _pdf_string_bytes(get("UE", "<>"))
+            if _hash_r6(pw, u[32:40], b"", self.r) == u[:32]:
+                self.key = _aes_cbc(_hash_r6(pw, u[40:48], b"", self.r), b"\0" * 16, ue, False)
+            elif _hash_r6(pw, o[32:40], u[:48], self.r) == o[:32]:
+                self.key = _aes_cbc(_hash_r6(pw, o[40:48], u[:48], self.r), b"\0" * 16, oe, False)
+            else:
+                raise SignError("the document's password is not right")
+            return
+        p = int(get("P", "0")) & 0xFFFFFFFF
+        meta = get("EncryptMetadata", "true").strip() != "false"
+        n = self.length
+
+        def user_key(upw):
+            h = hashlib.md5((upw + _PAD)[:32] + o[:32] + p.to_bytes(4, "little") + id0 +
+                            (b"\xff\xff\xff\xff" if self.r >= 4 and not meta else b"")).digest()
+            if self.r >= 3:
+                for _ in range(50):
+                    h = hashlib.md5(h[:n]).digest()
+            return h[:n]
+
+        def user_ok(key):
+            if self.r == 2:
+                return _rc4(key, _PAD) == u[:32]
+            x = hashlib.md5(_PAD + id0).digest()
+            for i in range(20):
+                x = _rc4(bytes(b ^ i for b in key), x)
+            return x == u[:16]
+        k = user_key(pw[:32])
+        if not user_ok(k):
+            # the owner's password: it unlocks the user's (Algorithm 7)
+            h = hashlib.md5((pw[:32] + _PAD)[:32]).digest()
+            if self.r >= 3:
+                for _ in range(50):
+                    h = hashlib.md5(h).digest()
+            okey = h[:n]
+            x = o[:32]
+            if self.r == 2:
+                x = _rc4(okey, x)
+            else:
+                for i in range(19, -1, -1):
+                    x = _rc4(bytes(b ^ i for b in okey), x)
+            k = user_key(x)
+            if not user_ok(k):
+                raise SignError("the document's password is not right")
+        self.key = k
+
+    def _obj_key(self, num, gen, aes):
+        if self.r >= 5:
+            return self.key
+        h = hashlib.md5(self.key + num.to_bytes(4, "little")[:3] + gen.to_bytes(2, "little") +
+                        (b"sAlT" if aes else b"")).digest()
+        return h[:min(len(self.key) + 5, 16)]
+
+    def encrypt(self, data, num, gen=0, stream=False):
+        method = self.stm if stream else self.strm
+        if method == "none":
+            return data
+        if method == "rc4":
+            return _rc4(self._obj_key(num, gen, False), data)
+        iv = os.urandom(16)
+        padn = 16 - len(data) % 16
+        return iv + _aes_cbc(self._obj_key(num, gen, True), iv, data + bytes([padn]) * padn)
+
+    def encrypt_strings(self, text, num, keep_after=None):
+        """the object's text with every string encrypted (written as hex); a string right after
+        the key keep_after (the signature's /Contents) is left as it is"""
+        out, i, n = [], 0, len(text)
+        while i < n:
+            c = text[i]
+            if c == "(" or (c == "<" and not text.startswith("<<", i)):
+                j = _skip_string(text, i) if c == "(" else text.index(">", i) + 1
+                tok = text[i:j]
+                if keep_after and re.search(r"/%s\s*$" % keep_after, text[:i]):
+                    out.append(tok)
+                else:
+                    out.append("<" + self.encrypt(_pdf_string_bytes(tok), num).hex().upper() + ">")
+                i = j
+            elif c == "<":
+                out.append("<<")
+                i += 2
+            else:
+                out.append(c)
+                i += 1
+        return "".join(out)
+
+    def encrypt_object(self, num, obj, keep_after=None):
+        """an object as written in the update (bytes), encrypted: its strings, and its stream's data
+        with /Length made the encrypted length"""
+        k = obj.find(b">>\nstream\n")
+        if k < 0:
+            return self.encrypt_strings(obj.decode("latin-1"), num, keep_after).encode("latin-1")
+        head = obj[:k + 2].decode("latin-1")
+        data = obj[k + len(b">>\nstream\n"):obj.rindex(b"\nendstream")]
+        enc = self.encrypt(data, num, stream=True)
+        head = re.sub(r"/Length \d+", "/Length %d" % len(enc), self.encrypt_strings(head, num))
+        return head.encode("latin-1") + b"\nstream\n" + enc + b"\nendstream"
+
+
+def _crypt_of(doc, base, password):
+    """(the document's _Crypt, its trailer's /Encrypt entry), or (None, "") for a plain document"""
+    t, v = doc.xref_get_key(-1, "Encrypt")
+    if t in ("null", "") or not v or v == "null":
+        return None, ""
+    m = list(re.finditer(rb"/Encrypt\s*(\d+)\s+(\d+)\s+R", base))
+    if m:
+        ref = "/Encrypt %d %d R" % (int(m[-1].group(1)), int(m[-1].group(2)))
+        enc_text = doc.xref_object(int(m[-1].group(1)), compressed=True)
+    else:
+        enc_text = v if t == "dict" else doc.xref_get_key(-1, "Encrypt")[1]
+        enc_text = re.sub(r"\s+", " ", enc_text)
+        ref = "/Encrypt" + enc_text
+    enc = _top_level_entries(enc_text.strip()[2:-2])
+    t, ids = doc.xref_get_key(-1, "ID")
+    toks = re.findall(r"<[0-9A-Fa-f\s]*>|\((?:\\.|[^\\)])*\)", ids or "")
+    id0 = _pdf_string_bytes(toks[0]) if toks else b""
+    return _Crypt(enc, id0, password), ref
 
 
 # ---- checking signatures -------------------------------------------------------------------------------------
