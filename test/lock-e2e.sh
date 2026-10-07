@@ -95,11 +95,23 @@ inj -M logo -D l -m logo -s 4 -U l
 # session is still unlocked, and legitimately reaches it.
 sleep 1
 before=$(user_keys | wc -l)
+# The lock screen's X server admits only the lock account (sg-lock-ui gives
+# it a cookie, 8c4cef4): its display and cookie are the lock UI's, in its
+# own directory under TMPDIR ($T). A copy of the cookie outlives the lock
+# screen, for the teardown check below. (Looking on every display without
+# the cookie found none: "no lock screen appeared" since 8c4cef4.)
 _w=0; LN=""
 while [ $_w -lt 60 ]; do
-    for d in /tmp/.X11-unix/X*; do
-        n=":${d##*/X}"; [ "$n" = "$XD" ] && continue
-        DISPLAY="$n" xdotool search --name 'Sign in' >/dev/null 2>&1 && { LN="$n"; break 2; }
+    for a in "$T"/sg-lock-*/Xauthority; do
+        [ -s "$a" ] || continue
+        cp "$a" "$T/lock.xauth"
+        # its own number or the next free one (sg-lock-ui); the cookie is
+        # for any display, so only those are tried
+        for d in /tmp/.X11-unix/X*; do
+            n=":${d##*/X}"; [ "$n" = "$XD" ] && continue
+            [ "${d##*/X}" -ge "$LOCKN" ] 2>/dev/null || continue
+            DISPLAY="$n" XAUTHORITY="$T/lock.xauth" xdotool search --name 'Sign in' >/dev/null 2>&1 && { LN="$n"; break 3; }
+        done
     done
     sleep 1; _w=$((_w+1))
 done
@@ -109,7 +121,7 @@ if [ -s "$T/drop/$(id -un)" ]; then
     staged=$(ls "$T"/sg-lockpic-* 2>/dev/null | head -1)
     [ -n "$staged" ] && cmp -s "$staged" "$T/pic.png" && pass "the user's lock-screen picture is staged for the lock UI" \
         || fail "the user's lock-screen picture was not staged"
-    if [ -n "$LN" ] && command -v convert >/dev/null && xwd -display "$LN" -root -silent 2>/dev/null | convert xwd:- "$T/lock.png" 2>/dev/null; then
+    if [ -n "$LN" ] && command -v convert >/dev/null && XAUTHORITY="$T/lock.xauth" xwd -display "$LN" -root -silent 2>/dev/null | convert xwd:- "$T/lock.png" 2>/dev/null; then
         v=$(convert "$T/lock.png" -format '%[fx:int(255*p{20,20}.r)] %[fx:int(255*p{20,20}.g)] %[fx:int(255*p{20,20}.b)]' info: 2>/dev/null)
         [ "$v" = "16 160 144" ] && pass "the lock screen shows the picture ($v)" || fail "the lock screen shows $v, not the picture"
         [ -n "${ARTIFACTS:-}" ] && mkdir -p "$ARTIFACTS" && cp "$T/lock.png" "$ARTIFACTS/lock-screen.png"
@@ -140,7 +152,7 @@ inj 'correct-horse' -k Return
 sleep 5
 [ "$(ctl STATUS)" = "OK unlocked" ] && pass "the right password unlocks" || fail "the right password did not unlock"
 sleep 2
-if [ -n "$LN" ] && DISPLAY="$LN" xdotool search --name 'Sign in' >/dev/null 2>&1; then
+if [ -n "$LN" ] && DISPLAY="$LN" XAUTHORITY="$T/lock.xauth" xdotool search --name 'Sign in' >/dev/null 2>&1; then
     fail "the lock screen is still up after unlocking"
 else pass "the lock screen is torn down after unlocking"; fi
 if [ -s "$T/drop/$(id -un)" ]; then

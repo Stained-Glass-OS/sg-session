@@ -1,3 +1,13 @@
+sg-session (0.1.0-159) unstable; urgency=medium
+
+  * Tests: lock-e2e (make test-lock) finds the lock screen with the lock UI's
+    own X cookie: its X server admits only the lock account since 8c4cef4,
+    so the gate saw no lock screen ("no lock screen appeared") and its
+    "torn down after unlocking" check could not fail. It now tries only the
+    lock UI's display numbers, never the person's own display.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 08:18:55 -0700
+
 sg-session (0.1.0-158) unstable; urgency=medium
 
   * SG PDF: a signature whose own last byte is 0x00 checks valid -- the
