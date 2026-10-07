@@ -395,8 +395,17 @@ sg_system_access() {
 # SG Store's Open, D-Bus-activated). So GTK, Qt, SDL, Firefox and Electron
 # are told to use X11 -- in this environment, the user's systemd manager and
 # D-Bus activation, which start most desktop programs.
+# XDG_SESSION_TYPE=x11 is what Electron 39 and later (and Chromium's own
+# "auto") go by: they ignore ELECTRON_OZONE_PLATFORM_HINT and choose Wayland
+# when the session type says wayland -- which wlroots sets in the compositor
+# for everything it starts (the Claude desktop app, David 2026-10-06: no
+# taskbar button, over the taskbar, lost after Alt+Tab). sg-run-explorer
+# calls this again inside the compositor for that reason. Its programs do
+# draw on X11 here; the compositor's own Wayland helpers go by
+# WAYLAND_DISPLAY, which stays. SDL 3 reads SDL_VIDEO_DRIVER, SDL 2
+# SDL_VIDEODRIVER.
 #   sg_linux_app_env
-SG_LINUX_APP_ENV="GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11"
+SG_LINUX_APP_ENV="GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11"
 sg_linux_app_env() {
     _names=""
     for _kv in $SG_LINUX_APP_ENV; do

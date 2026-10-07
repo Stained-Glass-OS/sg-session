@@ -80,6 +80,21 @@ else
     fail "explorer.exe is not running"
 fi
 
+# Linux programs the shell starts (Start, SG Store's Run, the Run box) open
+# on X11, where the taskbar frames them: their environment -- the shell's --
+# says the session type is x11. wlroots sets it to wayland in the compositor,
+# and Electron 39+ went native Wayland by it, over the taskbar with no button
+# (the Claude desktop app, David 2026-10-06; sg-common.sh sg_linux_app_env).
+_xp=$(pgrep -u "$_me" -f 'explorer\.exe' | head -1)
+if [ -n "$_xp" ] && [ -r "/proc/$_xp/environ" ]; then
+    _st=$(tr '\0' '\n' < "/proc/$_xp/environ" | sed -n 's/^XDG_SESSION_TYPE=//p')
+    if [ "$_st" = x11 ]; then
+        pass "the shell's programs are told the session is x11 (Electron opens on X11)"
+    else
+        fail "the shell's programs see XDG_SESSION_TYPE='$_st': Electron 39+ opens native Wayland, over the taskbar"
+    fi
+fi
+
 # The interactive shell belongs on WinSta0 as the session user, never in the
 # service session (session 0). wine-sg patch 0007 refuses a shell there; this
 # guards that it held. A leaked shell would run under the account that hosts the

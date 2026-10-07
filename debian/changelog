@@ -1,3 +1,21 @@
+sg-session (0.1.0-152) unstable; urgency=medium
+
+  * Linux programs started from the shell open on X11 again when they are
+    Electron 39 or later (the Claude desktop app, VS Code, Signal...): they
+    ignore ELECTRON_OZONE_PLATFORM_HINT and go by XDG_SESSION_TYPE, which
+    the compositor (wlroots) sets to "wayland" for everything it starts.
+    Claude came up as a native Wayland window over the taskbar, with no
+    taskbar button, not in Alt+Tab, and lost after Alt+Tab (David
+    2026-10-06). sg_linux_app_env now also sets XDG_SESSION_TYPE=x11 and
+    SDL 3's SDL_VIDEO_DRIVER=x11, and sg-run-explorer applies it again
+    inside the compositor (and for the user's systemd manager and D-Bus
+    activation); WAYLAND_DISPLAY stays for the compositor's own helpers.
+    sg-compositor 0.2.0+sg44 manages any native Wayland window that still
+    appears. Test: test/linux-app-env-test.sh (mutants NOENV,
+    SESSION_TYPE); sg-session-check checks the shell's environment.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 17:20:00 -0700
+
 sg-session (0.1.0-151) unstable; urgency=medium
 
   * "Try Stained Glass OS" starts the live session again (release s20's

@@ -58,10 +58,11 @@ fi
 # them, gives them title bars, Minimize and taskbar buttons, and honours what
 # client-drawn title bars ask (GTK 4's). Natively on Wayland, GTK 4 and Qt
 # windows came up at the screen's corner with none of that (zenity). Set for
-# everything started from here -- the Start menu's Linux apps among it.
-: "${GDK_BACKEND:=x11}"
-: "${QT_QPA_PLATFORM:=xcb}"
-export GDK_BACKEND QT_QPA_PLATFORM
+# everything started from here -- the Start menu's Linux apps, SG Store's
+# Run among it -- and again for the user's systemd manager and D-Bus: the
+# compositor (wlroots) has just set XDG_SESSION_TYPE=wayland for everything
+# it starts, and Electron 39+ goes by that alone (sg-common.sh).
+sg_linux_app_env
 
 # The resolution and scale the user chose in Settings > Display, per monitor
 # (sg-settingsctl keeps them): put back before the desktop is measured, so it
