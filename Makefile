@@ -352,6 +352,8 @@ lint:
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
+	@sh test/netbrowse-test.sh
+	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
 	@sh test/kernel-entries-test.sh
 	@sh test/boot-layout-test.sh
 	@for m in verify live bootroot marker; do ! sh test/boot-layout-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-layout-test: mutant $$m passed"; exit 1; }; done
@@ -364,7 +366,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

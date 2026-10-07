@@ -1,5 +1,5 @@
 #!/bin/sh
-# sg-netbrowse computers OUT | shares OUT SERVER
+# sg-netbrowse computers OUT | shares OUT SERVER | shares2 OUT SERVER
 #
 # What File Explorer's Network folder shows (wine-sg 0469), one name per line
 # in OUT (UTF-8), for the signed-in user:
@@ -9,22 +9,32 @@
 #   shares     SERVER's shared folders (smbclient; the user's Kerberos ticket
 #              on a domain, else as a guest). Hidden shares (ending in $),
 #              as Windows hides them.
+#   shares2    the same, each "name<TAB>comment" (the share's comment, as
+#              the server gives it): File Explorer's Comments column (wine-sg
+#              1471). An older sg-netbrowse exits 2 for it, unknown.
 # Always exits 0: an empty list is an answer.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
 what=${1:-}; out=${2:-}
-[ -n "$out" ] || { echo "usage: sg-netbrowse computers OUT | shares OUT SERVER" >&2; exit 2; }
+[ -n "$out" ] || { echo "usage: sg-netbrowse computers OUT | shares OUT SERVER | shares2 OUT SERVER" >&2; exit 2; }
 tmp="$out.tmp"
 : > "$tmp"
 case "$what" in
-shares)
+shares|shares2)
     server=${3:-}
     case "$server" in ''|-*|*[!A-Za-z0-9._-]*) mv "$tmp" "$out"; exit 0 ;; esac
     auth=-N
     if [ -r /etc/stained-glass/role ] && grep -q '^realm=.' /etc/stained-glass/role && klist -s 2>/dev/null; then auth=--use-kerberos=required; fi
+    # smbclient -g: Disk|name|comment (a comment may hold a | of its own)
     timeout 10 smbclient -g -L "//$server" "$auth" 2>/dev/null |
-        awk -F'|' '$1 == "Disk" && $2 !~ /\$$/ { print $2 }' >> "$tmp"
+        awk -F'|' -v comments="$([ "$what" = shares2 ] && echo 1)" '
+            $1 == "Disk" && $2 !~ /\$$/ {
+                if (!comments) { print $2; next }
+                c = $3; for (i = 4; i <= NF; i++) c = c "|" $i
+                gsub(/[\t\r]/, " ", c)
+                print $2 "\t" c
+            }' >> "$tmp"
     ;;
 computers)
     {

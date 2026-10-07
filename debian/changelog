@@ -1,3 +1,11 @@
+sg-session (0.1.0-160) unstable; urgency=medium
+
+  * sg-netbrowse: shares2 gives each share with its comment ("name<TAB>
+    comment"), for File Explorer's Comments column (wine-sg 1471; it was
+    empty). test/netbrowse-test.sh with a stand-in smbclient, and a mutant.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 08:34:30 -0700
+
 sg-session (0.1.0-159) unstable; urgency=medium
 
   * Tests: lock-e2e (make test-lock) finds the lock screen with the lock UI's
