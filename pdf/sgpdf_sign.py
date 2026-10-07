@@ -865,7 +865,10 @@ def check_signature(data, byte_range, contents_hex=None):
             res["detail"] = "the signature's value is not where its byte range says"
             return res
         raw = bytes.fromhex(hexs[1:-1].decode("ascii").strip())
-        ci = cms.ContentInfo.load(raw.rstrip(b"\x00") if raw.endswith(b"\x00\x00") else raw, strict=False)
+        # the zeros padding it to its room are left to the parser (strict=False
+        # stops at the end of the DER): cutting them cut a signature's own last
+        # byte when it was 0x00 (test/pdf-sigpad-test.py)
+        ci = cms.ContentInfo.load(raw, strict=False)
         sd = ci["content"]
         si = sd["signer_infos"][0]
         hash_name = si["digest_algorithm"]["algorithm"].native

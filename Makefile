@@ -346,6 +346,8 @@ lint:
 	@/usr/bin/python3 test/pdf-edit-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@/usr/bin/python3 test/pdf-pro-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@/usr/bin/python3 test/pdf-inkcrypt-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@/usr/bin/python3 test/pdf-sigpad-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@! SG_MUTANT_SIGPAD=1 /usr/bin/python3 test/pdf-sigpad-test.py >/dev/null 2>&1
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-fetch
 	@python3 test/fetch-test.py; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/drivers-test.sh

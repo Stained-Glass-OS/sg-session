@@ -1,3 +1,13 @@
+sg-session (0.1.0-158) unstable; urgency=medium
+
+  * SG PDF: a signature whose own last byte is 0x00 checks valid -- the
+    zeros padding /Contents were cut before parsing, and took that byte
+    with them (one signature in 256 read as invalid; the release's
+    pdf-inkcrypt-test failed so now and then). test/pdf-sigpad-test.py,
+    mutant SG_MUTANT_SIGPAD.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 08:21:03 -0700
+
 sg-session (0.1.0-157) unstable; urgency=medium
 
   * tmpfiles: /var/lib/stained-glass/.local and .local/share (the session
