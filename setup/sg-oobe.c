@@ -602,7 +602,16 @@ static void go_next( void )
         break;
     }
     case P_ACCOUNT: submit_account(); break;
-    case P_PRIVACY: set_page( P_BROWSER ); break;
+    case P_PRIVACY:
+        /* Firefox comes installed (David, 2026-10-07: Office's sign-in opens
+         * in the browser): no browser to pick here; others are in SG Store */
+#ifndef SG_MUTANT_OOBE_ASKS_BROWSER
+        g_browser = NBROWSERS - 1;   /* "none": nothing more to install */
+        finish();
+#else
+        set_page( P_BROWSER );
+#endif
+        break;
     case P_BROWSER:
         if ((i = list_selected()) >= 0) g_browser = i;
         finish();

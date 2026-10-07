@@ -11,15 +11,18 @@
 #   - the region preselected from Setup's keyboard; United Kingdom chosen
 #   - US keyboard, a second layout (German) added
 #   - a Wi-Fi network joined with its key: the key on sg-netctl's stdin only
-#   - no account page; Location switched on; Firefox chosen
+#   - no account page; Location switched on; no browser page (Firefox comes
+#     installed)
 #   - applied: the keyboard file (us,de, Start key + Space), the
-#     choices record, HKLM's ConsentStore and no diagnostic data, the browser
+#     choices record, HKLM's ConsentStore and no diagnostic data, no browser
 #     service started, the pending marker gone, the window closed
 # Second run -- no administrator, offline, no networks:
 #   - the network page can be skipped, the account page appears; mismatched
 #     passwords are refused; the account is made in the right groups with its
 #     password on chpasswd's stdin
-#   - offline, no browser can be chosen: none is installed
+#   - offline: no browser page either, none installed
+# Mutant: sg-oobe.c built with -DSG_MUTANT_OOBE_ASKS_BROWSER (the browser
+# page back) fails it.
 # And sg-oobed on its own: nothing once the first-run setup is done, and a
 # value outside its lists is refused with nothing written.
 #
@@ -179,9 +182,7 @@ if [ "$1" = first ]; then
     page privacy; shot first privacy
     k space                            # Location on
     sleep 0.3; shot first privacy-location
-    k Return                           # Accept
-    page browser; shot first browser
-    k Return                           # Next, with Firefox
+    k Return                           # Accept: Firefox comes installed, no browser page
     page applying
     w=0; until grep -q 'page done$' "$LOG" || [ "$w" -gt 60 ]; do sleep 0.3; w=$((w + 1)); done
     shot first done
@@ -206,8 +207,6 @@ else
     ty 'right4pass'; k Return
     page privacy; shot second privacy
     k Return                           # Accept as they are
-    page browser; shot second browser-offline
-    k Return
     page applying
     w=0; until grep -q 'page done$' "$LOG" || [ "$w" -gt 60 ]; do sleep 0.3; w=$((w + 1)); done
 fi
@@ -247,10 +246,12 @@ if grep -q 'microphone\]' "$T/hklm.reg" 2>/dev/null && grep -A1 'microphone\]' "
         && grep -A1 'location\]' "$T/hklm.reg" | grep -q '"Value"="Allow"' && grep -q '"AllowTelemetry"=dword:00000000' "$T/hklm.reg"; then
     pass "HKLM gets the device's microphone and location switches and AllowTelemetry 0"
 else fail "HKLM: $(cat "$T/hklm.reg" 2>/dev/null)"; fi
-if [ "$(get BROWSER)" = linux:firefox ] && [ "$(cat "$T/oobe-browser" 2>/dev/null)" = linux:firefox ] \
-        && grep -qx 'start --no-block sg-oobe-browser.service' "$T/systemctl.log" 2>/dev/null; then
-    pass "Firefox's Linux build, the suggestion, is handed to the browser installation service"
-else fail "browser: conf '$(get BROWSER)' request '$(cat "$T/oobe-browser" 2>/dev/null)' systemctl '$(cat "$T/systemctl.log" 2>/dev/null)'"; fi
+# Firefox comes installed (sg-session 0.1.0-170): no browser page, nothing
+# handed to the browser installation service
+if [ "$(get BROWSER)" = none ] && [ ! -e "$T/oobe-browser" ] && ! grep -q sg-oobe-browser "$T/systemctl.log" 2>/dev/null \
+        && ! grep -q 'page browser$' "$T/bridge-first.log"; then
+    pass "no browser page (Firefox comes installed); no browser installation started"
+else fail "browser: conf '$(get BROWSER)' request '$(cat "$T/oobe-browser" 2>/dev/null)' page $(grep -c 'page browser$' "$T/bridge-first.log")"; fi
 if [ ! -e "$T/etc/stained-glass/oobe.pending" ] && [ "$(cat "$T/closed-first" 2>/dev/null)" = closed ]; then
     pass "done: the pending marker is gone and the first-run setup closed itself"
 else fail "after finishing: pending $(test -e "$T/etc/stained-glass/oobe.pending" && echo still there) window $(cat "$T/closed-first" 2>/dev/null)"; fi

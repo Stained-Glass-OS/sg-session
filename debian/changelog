@@ -1,3 +1,13 @@
+sg-session (0.1.0-171) unstable; urgency=medium
+
+  * Firefox comes installed (David: Office's sign-in opens in the browser):
+    Depends on firefox-esr | firefox, and the first-run setup asks no more
+    which browser to download (others are in SG Store). oobe-e2e: no browser
+    page, nothing handed to the browser service; mutant
+    SG_MUTANT_OOBE_ASKS_BROWSER.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:44:41 -0700
+
 sg-session (0.1.0-170) unstable; urgency=medium
 
   * The kiosk (David: "a tablet that boots to the Sonos player"): sg-kiosk
