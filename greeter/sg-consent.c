@@ -10,6 +10,11 @@
  *       An administrator asked: Yes / No.
  *   sg-consent.exe /consent cred <requester> <program...>
  *       A standard user asked: an administrator's name and password.
+ *   sg-consent.exe /consent shadow <requester> view|control
+ *       Over Remote Desktop, <requester> (an administrator) asks to see --
+ *       or see and control -- this session, which stays at the console
+ *       (console shadow, E1 pattern A): Yes / No, answered by the person at
+ *       the console.
  *
  * Protocol on the pipes it was started with, line-based:
  *
@@ -48,7 +53,7 @@ static HANDLE g_in, g_out;
 static HWND g_main, g_user, g_pass, g_status, g_yes, g_no;
 static HFONT g_font_big, g_font, g_font_bold;
 static HBRUSH g_bg, g_panel, g_accent_br;
-static BOOL g_cred_mode, g_done, g_waiting;
+static BOOL g_cred_mode, g_shadow_mode, g_done, g_waiting;
 static char g_requester[128], g_program[1024];
 static RECT g_panel_rc;
 static WPARAM g_armed;       /* the answer key whose press we saw */
@@ -264,6 +269,7 @@ static BOOL parse_cmdline( const char *cmd )
     p = cmd + 9;
     if (!strncmp( p, "admin ", 6 )) { g_cred_mode = FALSE; p += 6; }
     else if (!strncmp( p, "cred ", 5 )) { g_cred_mode = TRUE; p += 5; }
+    else if (!strncmp( p, "shadow ", 7 )) { g_cred_mode = FALSE; g_shadow_mode = TRUE; p += 7; }
     else return FALSE;
     n = strcspn( p, " " );
     if (!n || n >= sizeof(g_requester)) return FALSE;
@@ -329,28 +335,51 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     py = (sh - ph) / 2;
     SetRect( &g_panel_rc, px, py, px + PANEL_W, py + ph );
 
-    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", "Permission required", WS_POPUP | WS_VISIBLE,
-                              0, 0, sw, sh, NULL, NULL, inst, NULL );
+    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", g_shadow_mode ? "Remote Desktop request" : "Permission required",
+                              WS_POPUP | WS_VISIBLE, 0, 0, sw, sh, NULL, NULL, inst, NULL );
 
     y = py + 22;
-    make_label( g_main, "Stained Glass needs your permission", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
-    y += 28;
-    make_label( g_main, "Do you want to allow this app to make changes to your device?",
-                px + 24, y, PANEL_W - 48, 56, g_font_big, 0 );
-    y += 62;
-    /* the program's name in bold, and the whole command below it, as
-     * Windows' "Program location": a long one ("msiexec.exe /i C:\...\x.msi")
-     * was cut to its first words */
-    program_name( name, sizeof(name) );
-    make_label( g_main, name, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
-    y += 26;
-    snprintf( line, sizeof(line), "Program location: %s", g_program );
-    wnd = make_label( g_main, line, px + 24, y, PANEL_W - 48, 56, g_font, 0x7ff );
-    SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL );
-    y += 60;
-    snprintf( line, sizeof(line), "Requested by %s. It will run as an administrator.", g_requester );
-    make_label( g_main, line, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
-    y += 30;
+    if (g_shadow_mode)
+    {
+        /* Someone asks, over Remote Desktop, to watch (or work in) this
+         * session while its user stays here. The requester's name is the
+         * account Remote Desktop signed in, not anything they typed. */
+        BOOL control = !strcmp( g_program, "control" );
+        make_label( g_main, "Remote Desktop", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 28;
+        snprintf( line, sizeof(line), control ? "%s wants to view and control your session remotely. Do you accept?"
+                                              : "%s wants to view your session remotely. Do you accept?", g_requester );
+        make_label( g_main, line, px + 24, y, PANEL_W - 48, 84, g_font_big, 0 );
+        y += 90;
+        make_label( g_main, control ? "They will see your screen and can use the keyboard and mouse along with you."
+                                    : "They will see everything on your screen, but cannot type or click.",
+                    px + 24, y, PANEL_W - 48, 40, g_font, 0x7ff );
+        y += 44;
+        make_label( g_main, "A coloured frame shows while it lasts. Ctrl+Alt+Del ends it.",
+                    px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 30;
+    }
+    else
+    {
+        make_label( g_main, "Stained Glass needs your permission", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 28;
+        make_label( g_main, "Do you want to allow this app to make changes to your device?",
+                    px + 24, y, PANEL_W - 48, 56, g_font_big, 0 );
+        y += 62;
+        /* the program's name in bold, and the whole command below it, as
+         * Windows' "Program location": a long one ("msiexec.exe /i C:\...\x.msi")
+         * was cut to its first words */
+        program_name( name, sizeof(name) );
+        make_label( g_main, name, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
+        y += 26;
+        snprintf( line, sizeof(line), "Program location: %s", g_program );
+        wnd = make_label( g_main, line, px + 24, y, PANEL_W - 48, 56, g_font, 0x7ff );
+        SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL );
+        y += 60;
+        snprintf( line, sizeof(line), "Requested by %s. It will run as an administrator.", g_requester );
+        make_label( g_main, line, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 30;
+    }
 
     if (g_cred_mode)
     {

@@ -1,3 +1,19 @@
+sg-session (0.1.0-164) unstable; urgency=medium
+
+  * Remote Desktop: console shadow (E1 pattern A). A client asking for the
+    alternate shell "shadow [user] [/control]" views -- or views and
+    controls -- the session live at the console, whose user stays there.
+    Your own session needs your password; another user's needs an
+    administrator's, and the person at the console to accept a prompt on
+    the secure surface (sg-brokerd, sg-consent.exe /consent shadow). The
+    console shows a frame while it is viewed (sg-compositor 0.2.0+sg48;
+    an older one refuses SHADOW, and the login is refused); disconnecting
+    or Ctrl+Alt+Del at the console ends it and changes nothing else.
+    Gate: make test-rdp-shadow; mutants SG_MUTANT_SHADOW_NO_CONSENT,
+    SG_MUTANT_SHADOW_VIEW_INPUT.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 12:09:23 -0700
+
 sg-session (0.1.0-163) unstable; urgency=medium
 
   * Security: the shared Wine folders' own entries are the system's. Every

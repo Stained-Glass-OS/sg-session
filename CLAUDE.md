@@ -1791,6 +1791,40 @@ CLAUDE.md. In the gate, the console phase first stops the prefix's
 wineserver: a Wine desktop that belonged to a vanished X server makes the next
 Wine process on another one die of BadWindow.
 
+**Console shadow (pattern A, E1)**: the console session viewed where it is,
+its user still there, as Windows' shadow. The client asks with its
+alternate shell: `shadow [user] [/control]` (`xfreerdp3 /shell:"shadow bob
+/control"`, an .rdp file's `alternate shell:s:shadow /control`). The
+monitor, after PAM: your own console session needs nothing more; another
+user's needs the requester in `sg-admins` (`SG_ADMIN_GROUP`) and the person
+at the console to say yes -- the monitor asks sg-brokerd (request `@shadow`,
+root only), which puts the console on its secure surface (SECURE) and shows
+`sg-consent.exe /consent shadow <requester> view|control` ("bob wants to
+view your session remotely. Do you accept?", No focused, 30 s then no). Then
+`SHADOW view|control` with a socketpair end to the console compositor (see
+its CLAUDE.md): an amber frame shows on the console while it lasts; a view
+connection is offered no virtual keyboard or pointer (the stream comes up
+view-only, `sg_stream_view_only`); disconnecting or Ctrl+Alt+Del at the
+console ends it and nothing else changes (no lock, unlike E1b). Not taken
+over, no second session, no keyring step.
+
+- **`make test-rdp-shadow`** (`test/rdp-shadow-e2e.sh`) is the gate:
+  own-session view (frame on console and client, pixel-exact, client input
+  ignored, console keyboard still works, disconnect leaves it unlocked), a
+  non-administrator refused unasked, an administrator's request asked on the
+  secure surface (stand-in prompt), no -> refused and console as it was,
+  yes + /control -> typing and clicks arrive, Ctrl+Alt+Del ends it, unknown
+  user refused. With `SG_PREFIX` (a Wine prefix) it also drives the real
+  prompt (picture in `build/rdp-shadow-prompt.png`). Gate-only hooks:
+  `SG_RDP_TEST_CONSOLE_USER`, `SG_RDP_TEST_ADMINS` (with
+  `SG_RDP_SESSION_CMD`), `SG_RDP_BROKER_SOCK`. Mutants:
+  `SG_MUTANT_SHADOW_NO_CONSENT` (sg-rdp-authd), `SG_MUTANT_SHADOW_VIEW_INPUT`
+  (sg-compositor).
+- The monitor serves one request at a time, so a pending consent (up to
+  30 s) holds other logins back that long.
+- The stream captures the newest output: with several monitors at the
+  console that is the last one plugged in, not all of them.
+
 `rdp/sg-rdp-stream.c` is the stream: screencopy frames (pointer drawn in,
 `copy_with_damage` paces it), 64x64 tiles compared with the last frame sent,
 changed ones as bitmap updates. Input: RDP

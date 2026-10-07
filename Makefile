@@ -368,7 +368,7 @@ lint:
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
 		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
-		    test/rdp-stream-e2e.sh test/scratch-home.sh || exit 1; \
+		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
 		echo "shellcheck not installed; skipping (advisory)"; \
@@ -573,7 +573,7 @@ test-security: security
 #
 # Built when FreeRDP's server library is present. Installed with its unit
 # disabled: Remote Desktop is off until an administrator turns it on.
-.PHONY: rdp test-rdp test-rdp-stream
+.PHONY: rdp test-rdp test-rdp-stream test-rdp-shadow
 rdp:
 	@pkg-config --exists freerdp-server3 winpr3 || { echo "SKIP: freerdp3-dev not installed"; exit 0; }
 	@mkdir -p build
@@ -658,6 +658,13 @@ test-keyring-recover-mutants:
 	    echo "mutant $$m killed"; done
 
 .PHONY: test-pamcheck
+# Console shadow (E1 pattern A): a real FreeRDP client asks for "shadow" and
+# views -- or, after the console's yes on its secure surface, controls -- a
+# headless console session where it is (mutants: SG_MUTANT_SHADOW_VIEW_INPUT
+# in sg-compositor, SG_MUTANT_SHADOW_NO_CONSENT in sg-rdp-authd).
+test-rdp-shadow: rdp procagent vkbd
+	@sh test/rdp-shadow-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
 test-pamcheck: rdp
 	@sh test/pamcheck-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 

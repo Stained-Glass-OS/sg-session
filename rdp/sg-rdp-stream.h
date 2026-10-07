@@ -39,6 +39,10 @@ int sg_stream_after_wait( struct sg_stream *s );
 /* Start sending frames to the peer: the first is the whole screen. */
 void sg_stream_start( struct sg_stream *s, rdpContext *context );
 
+/* True when the compositor granted capture but no input: a view-only
+ * console shadow. Input calls then do nothing. */
+int sg_stream_view_only( struct sg_stream *s );
+
 /* What the frames go as, once started: for the log. */
 const char *sg_stream_codec( struct sg_stream *s );
 

@@ -298,7 +298,7 @@ static int surface_command(const struct surface *sf, const char *cmd, char *repl
  * in the seat dir, so the path alone proves nothing. The gate names the
  * sockets directly (SG_BROKER_CONTROL/SG_BROKER_PRIV); the peer check holds
  * either way. */
-static int find_surface(uid_t uid, struct surface *sf)
+static int find_surface_in(uid_t uid, struct surface *sf, int console_only)
 {
     const char *c = getenv("SG_BROKER_CONTROL"), *pv = getenv("SG_BROKER_PRIV");
     struct ucred cred; socklen_t clen = sizeof(cred);
@@ -317,7 +317,7 @@ static int find_surface(uid_t uid, struct surface *sf)
         snprintf(root, sizeof(root), "%.*s", slash ? (int)(slash - g_seat_dir) : 1, slash ? g_seat_dir : ".");
         snprintf(seats[0], sizeof(seats[0]), "%s", g_seat_dir);
         snprintf(seats[1], sizeof(seats[1]), "%s/rdp-%u", root, (unsigned)uid);
-        for (fd = -1, i = 0; i < 2 && fd < 0; i++) {
+        for (fd = -1, i = 0; i < (console_only ? 1 : 2) && fd < 0; i++) {
             if ((size_t)snprintf(sf->control, sizeof(sf->control), "%s/%u/control.sock", seats[i], (unsigned)uid) >= sizeof(sf->control) ||
                 (size_t)snprintf(sf->priv, sizeof(sf->priv), "%s/%u/priv.sock", seats[i], (unsigned)uid) >= sizeof(sf->priv))
                 return 0;
@@ -334,6 +334,11 @@ static int find_surface(uid_t uid, struct surface *sf)
     close(fd);
     if (!ok) logmsg("consent: %s is not the requester's compositor", sf->control);
     return ok;
+}
+
+static int find_surface(uid_t uid, struct surface *sf)
+{
+    return find_surface_in(uid, sf, 0);
 }
 
 /* What the prompt shows as the program. The requester chose every byte of it,
@@ -513,6 +518,64 @@ out:
     if (surface_command(&sf, "RELEASE\n", reply, sizeof(reply)))
         logmsg("consent: RELEASE failed; the compositor keeps its state");
     return allowed;
+}
+
+/* ---- console shadow consent (E1 pattern A) ------------------------------
+ * Over Remote Desktop an administrator asks to view -- or view and control --
+ * another user's session where it is, at the console. sg-rdp-authd's root
+ * monitor has checked who asks; the person at the console answers here, on
+ * their compositor's secure surface, where nothing in their session can
+ * answer for them: "<requester> wants to view your session remotely" (Yes /
+ * No, No focused; Escape, closing or 30 s of silence say no). Only the
+ * console seat: a Remote Desktop session has nobody in front of it.
+ * Returns 1 for yes. */
+static int obtain_shadow_consent(const char *requester, uid_t target, const char *mode)
+{
+    const char *test = getenv("SG_BROKER_TEST"), *env;
+    struct surface sf;
+    struct consent_ui ui = { 0, -1, -1 };
+    char reply[64], line[256];
+    int timeout = 30, allowed = 0;
+    time_t deadline;
+
+    if (test) {
+        const char *d = getenv("SG_BROKER_TEST_CONSENT");
+        return d && (!strcmp(d, "yes") || !strcmp(d, "y"));
+    }
+    if ((env = getenv("SG_SHADOW_CONSENT_TIMEOUT")) && atoi(env) > 0) timeout = atoi(env);
+    if (!find_surface_in(target, &sf, 1)) { logmsg("shadow: uid %u has no console session; refusing", (unsigned)target); return 0; }
+    if (surface_command(&sf, "SECURE\n", reply, sizeof(reply)) || strcmp(reply, "OK secure")) {
+        /* a locked console, say: nobody there to ask */
+        logmsg("shadow: the compositor refused SECURE (%s); refusing", reply);
+        return 0;
+    }
+    if (consent_ui_start(&ui, &sf, "shadow", requester, mode) < 0) {
+        logmsg("shadow: cannot start the prompt; refusing");
+        goto out;
+    }
+    deadline = time(NULL) + timeout;
+    if (consent_read_line(ui.from, line, sizeof(line), deadline) == 0) {
+        if (!strcmp(line, "ALLOW")) allowed = 1;
+        else if (!strcmp(line, "DENY")) logmsg("shadow: declined at the console");
+        else logmsg("shadow: unexpected reply from the prompt; refusing");
+    } else logmsg("shadow: no answer at the console in %ds; refusing", timeout);
+out:
+    consent_ui_stop(&ui);
+    if (surface_command(&sf, "RELEASE\n", reply, sizeof(reply)))
+        logmsg("shadow: RELEASE failed; the compositor keeps its state");
+    return allowed;
+}
+
+/* The requester's name as the prompt will show it: an account name, nothing
+ * else (it comes from a root process, but the prompt is no place to find
+ * out otherwise). */
+static int plain_name(const char *s)
+{
+    if (!*s || strlen(s) > 64) return 0;
+    for (; *s; s++)
+        if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || strchr("-_.", *s)))
+            return 0;
+    return 1;
 }
 
 /* ---- launching the elevated program as SYSTEM --------------------------
@@ -753,6 +816,40 @@ int main(void)
         while (p < end && *p) { if (argc < (int)(sizeof(argv)/sizeof(argv[0])) - 1) argv[argc++] = p; p += strlen(p) + 1; }
         envp[envc] = NULL; argv[argc] = NULL;
         if (argc == 0) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
+
+        /* Console shadow consent (sg-rdp-authd's monitor): cwd "@shadow",
+         * SHADOW_REQUESTER, SHADOW_MODE (view|control), SHADOW_UID. Only
+         * root may ask -- or, where the broker does not run as the SYSTEM
+         * account (the gate), the broker's own account. The answer grants
+         * nothing by itself: the monitor makes the connection. */
+        if (!strcmp(cwd, "@shadow")) {
+            const char *who_asks = NULL, *mode = NULL;
+            long target = -1;
+            int i, ok = 0;
+
+            if (cred.uid != 0 && !(cred.uid == geteuid() && strcmp(rpw->pw_name, g_system_user))) {
+                logmsg("shadow: refused a request from %s, not the Remote Desktop service", rpw->pw_name);
+            } else {
+                for (i = 0; i < envc; i++) {
+                    if (!strncmp(envp[i], "SHADOW_REQUESTER=", 17)) who_asks = envp[i] + 17;
+                    else if (!strncmp(envp[i], "SHADOW_MODE=", 12)) mode = envp[i] + 12;
+                    else if (!strncmp(envp[i], "SHADOW_UID=", 11)) target = strtol(envp[i] + 11, NULL, 10);
+                }
+                if (who_asks && plain_name(who_asks) && mode && (!strcmp(mode, "view") || !strcmp(mode, "control")) &&
+                    target > 0) {
+                    logmsg("shadow: %s asks to %s the console session of uid %ld", who_asks,
+                           !strcmp(mode, "view") ? "view" : "view and control", target);
+                    ok = obtain_shadow_consent(who_asks, (uid_t)target, mode);
+                    logmsg("shadow: %s", ok ? "accepted at the console" : "not accepted");
+                }
+            }
+            status = ok ? 0 : 1;
+            write_full(conn, &status, 1);
+            close(conn);
+            if (errfd >= 0) close(errfd);
+            if (getenv("SG_BROKER_ONCE")) break;
+            continue;
+        }
 
         admin = is_admin_name(rpw->pw_name);
 

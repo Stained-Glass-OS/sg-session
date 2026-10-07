@@ -57,6 +57,7 @@ struct sg_stream
     size_t size;
     uint8_t *prev;               /* what the client has, same layout as data */
     int have_prev, reading, gone;
+    int view_only;               /* no keyboard or pointer was granted */
 
     rdpContext *context;
     int planar;                  /* the client takes RDP 6.0 planar bitmaps */
@@ -169,16 +170,23 @@ struct sg_stream *sg_stream_new( int fd, char *err, size_t errlen )
         goto fail;
     }
     /* An ordinary connection is not offered these at all: sg-compositor hides
-     * them from everything but privileged clients. */
-    if (!s->screencopy || !s->pointer_manager || !s->keyboard_manager)
+     * them from everything but privileged clients. Input injection is also
+     * withheld from a view-only console shadow (E1 pattern A): then the
+     * stream only shows. */
+    if (!s->screencopy)
     {
-        snprintf( err, errlen, "the compositor did not grant capture and input (not a privileged connection?)" );
+        snprintf( err, errlen, "the compositor did not grant capture (not a privileged connection?)" );
         goto fail;
     }
     if (!s->shm || !s->seat || !s->output || s->out_w <= 0 || s->out_h <= 0)
     {
         snprintf( err, errlen, "the session has no screen" );
         goto fail;
+    }
+    if (!s->pointer_manager || !s->keyboard_manager)
+    {
+        s->view_only = 1;
+        return s;
     }
     /* Absolute positions are on the captured output, not the whole layout. */
     if (s->pointer_manager_version >= 2)
@@ -580,9 +588,11 @@ static void send_modifiers( struct sg_stream *s )
         xkb_state_serialize_layout( s->state, XKB_STATE_LAYOUT_EFFECTIVE ) );
 }
 
+int sg_stream_view_only( struct sg_stream *s ) { return s->view_only; }
+
 void sg_stream_key( struct sg_stream *s, uint32_t evdev, int down )
 {
-    if (s->gone || !evdev || evdev >= MAX_KEYS) return;
+    if (s->gone || s->view_only || !evdev || evdev >= MAX_KEYS) return;
     if (!down && !s->keys_down[evdev]) return;    /* never release what was not pressed */
     s->keys_down[evdev] = (uint8_t)down;
     xkb_state_update_key( s->state, evdev + 8, down ? XKB_KEY_DOWN : XKB_KEY_UP );
@@ -600,7 +610,7 @@ void sg_stream_unicode( struct sg_stream *s, uint32_t codepoint )
     xkb_keycode_t kc;
     xkb_level_index_t level;
 
-    if (s->gone || sym == XKB_KEY_NoSymbol) return;
+    if (s->gone || s->view_only || sym == XKB_KEY_NoSymbol) return;
     for (level = 0; level < 2; level++)
         for (kc = xkb_keymap_min_keycode( s->keymap ); kc <= xkb_keymap_max_keycode( s->keymap ); kc++)
         {
@@ -618,7 +628,7 @@ void sg_stream_unicode( struct sg_stream *s, uint32_t codepoint )
 
 void sg_stream_motion( struct sg_stream *s, uint32_t x, uint32_t y )
 {
-    if (s->gone) return;
+    if (s->gone || s->view_only) return;
     if (x >= (uint32_t)s->out_w) x = (uint32_t)s->out_w - 1;
     if (y >= (uint32_t)s->out_h) y = (uint32_t)s->out_h - 1;
     zwlr_virtual_pointer_v1_motion_absolute( s->pointer, now_ms(), x, y, (uint32_t)s->out_w, (uint32_t)s->out_h );
@@ -629,7 +639,7 @@ void sg_stream_motion( struct sg_stream *s, uint32_t x, uint32_t y )
 void sg_stream_button( struct sg_stream *s, uint32_t button, int down )
 {
     uint32_t bit;
-    if (s->gone || button < BTN_LEFT || button > BTN_TASK) return;
+    if (s->gone || s->view_only || button < BTN_LEFT || button > BTN_TASK) return;
     bit = 1u << (button - BTN_LEFT);
     if (!down && !(s->buttons_down & bit)) return;
     if (down) s->buttons_down |= bit; else s->buttons_down &= ~bit;
@@ -643,7 +653,7 @@ void sg_stream_wheel( struct sg_stream *s, int horizontal, int steps )
 {
     uint32_t axis = horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL;
     uint32_t t = now_ms();
-    if (s->gone || !steps) return;
+    if (s->gone || s->view_only || !steps) return;
     zwlr_virtual_pointer_v1_axis_source( s->pointer, WL_POINTER_AXIS_SOURCE_WHEEL );
     zwlr_virtual_pointer_v1_axis_discrete( s->pointer, t, axis, wl_fixed_from_int( 15 * steps ), steps );
     zwlr_virtual_pointer_v1_frame( s->pointer );

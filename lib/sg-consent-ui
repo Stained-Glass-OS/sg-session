@@ -22,7 +22,7 @@ unset WAYLAND_DISPLAY SG_WINSTATION
 mode="${1:?mode}"
 requester="${2:?requester}"
 program="${3:-}"
-case "$mode" in admin|cred) ;; *) echo DENY; exit 2 ;; esac
+case "$mode" in admin|cred|shadow) ;; *) echo DENY; exit 2 ;; esac
 
 N="${SG_CONSENT_DISPLAY_NUM:-${SG_LOCK_DISPLAY_NUM:-99}}"
 while [ -e "/tmp/.X${N}-lock" ] || [ -e "/tmp/.X11-unix/X${N}" ]; do N=$((N + 1)); done

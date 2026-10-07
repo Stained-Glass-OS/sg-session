@@ -19,6 +19,17 @@
  * When the client disconnects, that connection closes and the session goes
  * back to the console, locked.
  *
+ * Or the console session is *shadowed* (pattern A, Windows' "shadow"): asked
+ * for with the alternate shell "shadow [user] [/control]" (xfreerdp /shell:,
+ * an .rdp file's "alternate shell:s:"), the connection views -- with
+ * /control, views and drives -- the session live at the console, whose user
+ * stays there and keeps working. Your own session needs only your password;
+ * another user's needs an administrator's, and the person at the console to
+ * say yes on the secure surface (sg-brokerd's prompt). The compositor
+ * (SHADOW) frames the screen while it lasts and withholds input from a view-
+ * only viewer; disconnecting -- or Ctrl+Alt+Del at the console -- ends it and
+ * changes nothing else.
+ *
  * Privilege separation, as in sshd. The code that parses RDP from the network
  * is the most exposed code in the system, so it must not run as root -- but
  * checking an arbitrary user's password needs root. So at startup, while still
@@ -104,6 +115,8 @@ enum session_status
     SESSION_AT_CONSOLE,     /* signed in at the console, and it could not be taken over */
     SESSION_NOT_ALLOWED,    /* no account, or not a Stained Glass user */
     SESSION_FAILED,         /* it could not be started */
+    SESSION_NO_CONSOLE,     /* shadow: nobody of that name at the console */
+    SESSION_DECLINED,       /* shadow: the person at the console said no (or nothing) */
 };
 /* The TLS certificate and key, read once at startup while still root -- the
  * sshd host-key model. After the privilege drop the listener holds them in
@@ -188,6 +201,8 @@ static int monitor_check( const char *helper, const char *user, const char *pass
 /* ---- the monitor's sessions ------------------------------------------- */
 
 static const char *g_seat_root = "/run/stained-glass-seat";
+static const char *g_broker_sock = "/run/stained-glass-broker/broker.sock";
+static const char *g_admin_group = "sg-admins";
 
 static int connect_unix( const char *path )
 {
@@ -303,6 +318,170 @@ static int take_over_console( const char *control, uid_t uid )
     close( fd );
     close( sv[0] );   /* the compositor has its own copy */
     return sv[1];
+}
+
+/* ---- console shadow (pattern A) ---------------------------------------- */
+
+/* Ask the broker to put the question to the person at the console, on the
+ * secure surface: "<requester> wants to view (and control) your session".
+ * The broker's socket is in its own root-made runtime directory; it answers
+ * one byte, 0 for yes. Anything else, or no answer, is no. */
+static int ask_console_consent( const char *requester, uid_t target, int control )
+{
+    char blob[600], uidenv[64];
+    uint32_t len;
+    unsigned char verdict = 1;
+    int fd, n;
+    struct pollfd p;
+
+    snprintf( uidenv, sizeof(uidenv), "SHADOW_UID=%u", (unsigned)target );
+    n = snprintf( blob, sizeof(blob), "@shadow%cSHADOW_REQUESTER=%s%cSHADOW_MODE=%s%c%s%c%cRemote Desktop%c", 0,
+                  requester, 0, control ? "control" : "view", 0, uidenv, 0, 0, 0 );
+    if (n <= 0 || n >= (int)sizeof(blob)) return 0;
+    len = (uint32_t)n;
+    if ((fd = connect_unix( g_broker_sock )) < 0)
+    {
+        logmsg( "SESSION shadow: no broker to ask the console (%s)", g_broker_sock );
+        return 0;
+    }
+    if (write_full( fd, &len, sizeof(len) ) || write_full( fd, blob, len )) { close( fd ); return 0; }
+    /* the broker's own timeout is shorter; this only guards against a hang */
+    p.fd = fd; p.events = POLLIN; p.revents = 0;
+    if (poll( &p, 1, 150 * 1000 ) != 1 || read( fd, &verdict, 1 ) != 1) verdict = 1;
+    close( fd );
+#ifdef SG_MUTANT_SHADOW_NO_CONSENT
+    verdict = 0;
+#endif
+    return verdict == 0;
+}
+
+/* Ask the console compositor (SHADOW, on its control socket, which it
+ * serves as that user) to take one end of a socketpair as a viewer. Returns
+ * the other end, for the stream. */
+static int start_shadow( const char *control, uid_t uid, int control_input )
+{
+    char req[32], reply[128] = "", cbuf[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = { .iov_base = req };
+    struct msghdr mh = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = cbuf, .msg_controllen = sizeof(cbuf) };
+    struct cmsghdr *cm;
+    int sv[2], fd;
+    ssize_t n;
+
+    iov.iov_len = (size_t)snprintf( req, sizeof(req), "SHADOW %s\n", control_input ? "control" : "view" );
+    if ((fd = connect_session( control, uid )) < 0) return -1;
+    if (socketpair( AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv ) < 0) { close( fd ); return -1; }
+    memset( cbuf, 0, sizeof(cbuf) );
+    cm = CMSG_FIRSTHDR( &mh );
+    cm->cmsg_level = SOL_SOCKET;
+    cm->cmsg_type = SCM_RIGHTS;
+    cm->cmsg_len = CMSG_LEN( sizeof(int) );
+    memcpy( CMSG_DATA( cm ), &sv[0], sizeof(int) );
+    if (sendmsg( fd, &mh, MSG_NOSIGNAL ) < 0 || (n = read( fd, reply, sizeof(reply) - 1 )) <= 0 ||
+        strncmp( reply, "OK shadow ", 10 ))
+    {
+        reply[strcspn( reply, "\n" )] = 0;
+        logmsg( "SESSION shadow refused by the compositor: %s", reply[0] ? reply : "no answer" );
+        close( fd ); close( sv[0] ); close( sv[1] );
+        return -1;
+    }
+    reply[strcspn( reply, "\n" )] = 0;
+    logmsg( "SESSION console session shadowed: %s", reply + 3 );
+    close( fd );
+    close( sv[0] );
+    return sv[1];
+}
+
+/* In the gate (SG_RDP_SESSION_CMD) every session is the daemon's own
+ * account's; SG_RDP_TEST_CONSOLE_USER names the account the console session
+ * stands for, SG_RDP_TEST_ADMINS the requesters who count as administrators.
+ * Never set in a unit file. */
+static int test_listed( const char *var, const char *user )
+{
+    const char *list = getenv( var ), *p;
+    size_t n = strlen( user );
+    if (!list) return 0;
+    for (p = list; *p; )
+    {
+        size_t k = strcspn( p, ", " );
+        if (k == n && !strncmp( p, user, n )) return 1;
+        p += k;
+        while (*p == ',' || *p == ' ') p++;
+    }
+    return 0;
+}
+
+/* "shadow [user] [/control]": view (or control) the console session of
+ * `user`, the requester's own by default. */
+static int shadow_for( const char *user, const char *spec, int *status )
+{
+    int test = getenv( "SG_RDP_SESSION_CMD" ) != NULL, control = 0, same, admin, fd;
+    char target[MAXFIELD] = "", buf[MAXFIELD], console[700], *tok, *save = NULL;
+    struct passwd *tpw, *rpw;
+    uid_t tuid;
+
+    *status = SESSION_NOT_ALLOWED;
+    snprintf( buf, sizeof(buf), "%s", spec );
+    for (tok = strtok_r( buf, " \t", &save ); tok; tok = strtok_r( NULL, " \t", &save ))
+    {
+        if (!strcasecmp( tok, "shadow" )) continue;
+        if (!strcasecmp( tok, "/control" )) control = 1;
+        else if (tok[0] != '/' && !target[0]) snprintf( target, sizeof(target), "%s", tok );
+    }
+    if (!target[0]) snprintf( target, sizeof(target), "%s", user );
+    same = !strcmp( target, user );
+
+    if (test)
+    {
+        const char *cu = getenv( "SG_RDP_TEST_CONSOLE_USER" );
+        if (!cu || strcmp( target, cu ) || !(tpw = getpwuid( getuid() )))
+        {
+            *status = SESSION_NO_CONSOLE;
+            return -1;
+        }
+        tuid = tpw->pw_uid;
+        admin = test_listed( "SG_RDP_TEST_ADMINS", user );
+    }
+    else
+    {
+        if (!(rpw = getpwnam( user )) || rpw->pw_uid == 0 || !user_in_group( rpw, "sgwine" )) return -1;
+        admin = user_in_group( rpw, g_admin_group );
+        if (!(tpw = getpwnam( target )))
+        {
+            *status = SESSION_NO_CONSOLE;
+            return -1;
+        }
+        tuid = tpw->pw_uid;
+    }
+    /* Someone else's session: administrators only, as on Windows. */
+    if (!same && !admin)
+    {
+        logmsg( "SESSION shadow refused: %s is not an administrator (asked for %s)", user, target );
+        return -1;
+    }
+    snprintf( console, sizeof(console), "%s/seat0/%u/control.sock", g_seat_root, (unsigned)tuid );
+    if ((fd = connect_session( console, tuid )) < 0)
+    {
+        logmsg( "SESSION shadow: %s is not signed in at the console", target );
+        *status = SESSION_NO_CONSOLE;
+        return -1;
+    }
+    close( fd );
+    /* and the person at the console agrees -- on the secure surface, where
+     * nothing in their session can answer for them */
+    if (!same && !ask_console_consent( user, tuid, control ))
+    {
+        logmsg( "SESSION shadow of %s declined at the console (asked by %s)", target, user );
+        *status = SESSION_DECLINED;
+        return -1;
+    }
+    if ((fd = start_shadow( console, tuid, control )) < 0)
+    {
+        *status = SESSION_FAILED;
+        return -1;
+    }
+    logmsg( "SESSION shadow user=%s of=%s mode=%s", user, target, control ? "control" : "view" );
+    *status = SESSION_ATTACHED;
+    return fd;
 }
 
 /* Find or start the user's remote session; returns a connection to its
@@ -454,8 +633,8 @@ static void monitor_loop( int fd, const char *helper )
 {
     for (;;)
     {
-        unsigned ulen, plen, hlen, size[2];
-        char user[MAXFIELD], pass[MAXFIELD], rhost[INET6_ADDRSTRLEN] = "";
+        unsigned ulen, plen, hlen, slen, size[2];
+        char user[MAXFIELD], pass[MAXFIELD], rhost[INET6_ADDRSTRLEN] = "", spec[MAXFIELD] = "";
         unsigned char addr[sizeof(struct in6_addr)];
         unsigned char ok;
         int status = SESSION_FAILED, session = -1;
@@ -470,7 +649,10 @@ static void monitor_loop( int fd, const char *helper )
         if (read_full( fd, &hlen, sizeof(hlen) ) < 0) _exit( 0 );
         if (hlen >= sizeof(rhost)) _exit( 1 );
         if (read_full( fd, rhost, hlen ) < 0) _exit( 0 );
-        user[ulen] = 0; pass[plen] = 0; rhost[hlen] = 0;
+        if (read_full( fd, &slen, sizeof(slen) ) < 0) _exit( 0 );
+        if (slen >= sizeof(spec)) _exit( 1 );
+        if (read_full( fd, spec, slen ) < 0) _exit( 0 );
+        user[ulen] = 0; pass[plen] = 0; rhost[hlen] = 0; spec[slen] = 0;
         /* only an address, never a name to look up */
         if (inet_pton( AF_INET, rhost, addr ) != 1 && inet_pton( AF_INET6, rhost, addr ) != 1) rhost[0] = 0;
 
@@ -479,6 +661,7 @@ static void monitor_loop( int fd, const char *helper )
          * network cannot reach, so it cannot be skipped by reconnecting. */
         if (!ok) sleep( 2 );
         /* Only for a password PAM accepted, and only that user's session. */
+        else if (spec[0]) session = shadow_for( user, spec, &status );
         else session = session_for( user, size[0], size[1], &status );
         /* The session's keyring opens with the password, as a sign-in at the
          * console opens it (greetd's pam_gnome_keyring). The password check
@@ -489,7 +672,7 @@ static void monitor_loop( int fd, const char *helper )
          * pam_gnome_keyring in the remote stack hands it over through the
          * daemon's control socket, as the lock screen's does. */
 #ifndef SG_MUTANT_RDP_KEYRING
-        if (session >= 0 && !monitor_check( helper, user, pass, rhost, 1 ))
+        if (session >= 0 && !spec[0] && !monitor_check( helper, user, pass, rhost, 1 ))
             logmsg( "SESSION keyring not opened for user=%s", user );
 #endif
         explicit_bzero( pass, sizeof(pass) );
@@ -523,16 +706,16 @@ static int recv_verdict( int sock, unsigned char msg[2], int *fd )
 /* Returns 1 if the password is right; then *session is a connection to the
  * user's session, or -1 with *status saying why there is none. */
 static int ask_monitor( const char *user, const char *pass, const char *rhost, unsigned width, unsigned height,
-                        int *session, int *status )
+                        const char *spec, int *session, int *status )
 {
     unsigned ulen = (unsigned)strlen( user ), plen = (unsigned)strlen( pass ), size[2] = { width, height };
-    unsigned hlen = rhost ? (unsigned)strlen( rhost ) : 0;
+    unsigned hlen = rhost ? (unsigned)strlen( rhost ) : 0, slen = (unsigned)strlen( spec );
     unsigned char msg[2] = { 0, SESSION_FAILED };
     int res = -1;
 
     *session = -1;
     *status = SESSION_FAILED;
-    if (ulen >= MAXFIELD || plen >= MAXFIELD) return 0;
+    if (ulen >= MAXFIELD || plen >= MAXFIELD || slen >= MAXFIELD) return 0;
     if (hlen >= INET6_ADDRSTRLEN) hlen = 0;
     EnterCriticalSection( &g_monitor_lock );
     if (!write_full( g_monitor_fd, &ulen, sizeof(ulen) ) &&
@@ -542,6 +725,8 @@ static int ask_monitor( const char *user, const char *pass, const char *rhost, u
         !write_full( g_monitor_fd, size, sizeof(size) ) &&
         !write_full( g_monitor_fd, &hlen, sizeof(hlen) ) &&
         !write_full( g_monitor_fd, hlen ? rhost : "", hlen ) &&
+        !write_full( g_monitor_fd, &slen, sizeof(slen) ) &&
+        !write_full( g_monitor_fd, spec, slen ) &&
         !recv_verdict( g_monitor_fd, msg, session ))
         res = msg[0];
     LeaveCriticalSection( &g_monitor_lock );
@@ -593,11 +778,21 @@ static BOOL authenticate( freerdp_peer *peer )
     else
     {
         sg_peer_context *ctx = (sg_peer_context *)peer->context;
+        const char *shell = freerdp_settings_get_string( settings, FreeRDP_AlternateShell );
         int session = -1, status = SESSION_FAILED;
-        char err[256];
+        char err[256], spec[MAXFIELD] = "";
 
+        /* "shadow ...": the console session, viewed where it is (pattern
+         * A). Anything else in the alternate shell is not ours to run. */
+        if (shell && !strncasecmp( shell, "shadow", 6 ) && (!shell[6] || shell[6] == ' ') &&
+            strlen( shell ) < sizeof(spec))
+        {
+            const char *c;
+            for (c = shell; *c && (unsigned char)*c >= 0x20 && *c != 0x7f; c++) ;
+            if (!*c) snprintf( spec, sizeof(spec), "%s", shell );
+        }
         ok = ask_monitor( user, pass, peer->hostname, freerdp_settings_get_uint32( settings, FreeRDP_DesktopWidth ),
-                          freerdp_settings_get_uint32( settings, FreeRDP_DesktopHeight ), &session, &status );
+                          freerdp_settings_get_uint32( settings, FreeRDP_DesktopHeight ), spec, &session, &status );
         logmsg( "LOGON %s user=%s from=%s", ok ? "OK" : "FAIL", user, peer->hostname );
         if (ok)
         {
@@ -605,7 +800,11 @@ static BOOL authenticate( freerdp_peer *peer )
             {
                 logmsg( "SESSION refused user=%s: %s", user,
                         status == SESSION_AT_CONSOLE ? "signed in at the console" :
-                        status == SESSION_NOT_ALLOWED ? "not a Stained Glass user" : "it could not be started" );
+                        status == SESSION_NOT_ALLOWED ? (spec[0] ? "not allowed to view that session"
+                                                                 : "not a Stained Glass user") :
+                        status == SESSION_NO_CONSOLE ? "nobody of that name at the console" :
+                        status == SESSION_DECLINED ? "the person at the console did not accept" :
+                        "it could not be started" );
                 ok = FALSE;
             }
             else if (!(ctx->stream = sg_stream_new( session, err, sizeof(err) )))
@@ -613,7 +812,8 @@ static BOOL authenticate( freerdp_peer *peer )
                 logmsg( "SESSION refused user=%s: %s", user, err );
                 ok = FALSE;
             }
-            else logmsg( "SESSION attached user=%s from=%s", user, peer->hostname );
+            else logmsg( "SESSION attached user=%s from=%s%s", user, peer->hostname,
+                         sg_stream_view_only( ctx->stream ) ? " (view only)" : "" );
         }
     }
 
@@ -879,6 +1079,8 @@ int main( int argc, char **argv )
     unsetenv( "SG_PAMCHECK_CONSOLE" );
     if (!account) account = "sgrdp";
     if (seat_root) g_seat_root = seat_root;
+    if (getenv( "SG_RDP_BROKER_SOCK" )) g_broker_sock = getenv( "SG_RDP_BROKER_SOCK" );
+    if (getenv( "SG_ADMIN_GROUP" )) g_admin_group = getenv( "SG_ADMIN_GROUP" );
     if (!cert_path || !key_path) { fprintf( stderr, "SG_RDP_CERT and SG_RDP_KEY are required\n" ); return 2; }
     if (!(g_cert_pem = read_file( cert_path )) || !(g_key_pem = read_file( key_path )))
     {
