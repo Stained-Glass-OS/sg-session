@@ -1,3 +1,11 @@
+sg-session (0.1.0-174) unstable; urgency=medium
+
+  * Makefile: the voice model comment says what is true -- the model ships
+    as sg-speech-model-parakeet; a machine without it downloads it on first
+    use (site review 2026-10-07). No change to what is installed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 16:38:25 -0700
+
 sg-session (0.1.0-173) unstable; urgency=medium
 
   * The sign-in screen, lock screen and administrator prompt start the touch
