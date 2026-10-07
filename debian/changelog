@@ -1,5 +1,13 @@
 sg-session (0.1.0-161) unstable; urgency=medium
 
+  * OOBE: the list's scroll bar is dark, as the card is
+    (SetWindowTheme DarkMode_Explorer; wine-sg 1474). It was the light
+    scheme's, the greeter account running with Light.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 09:19:26 -0700
+
+sg-session (0.1.0-161) unstable; urgency=medium
+
   * Tests: run-session-test (make test-session; sg-compositor's test-session)
     publishes the session's display in a file of its own (SG_SESSION_ENV,
     honoured by sg_session_env): it used /run/user/<uid>/sg-session.env,

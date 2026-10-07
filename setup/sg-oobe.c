@@ -29,6 +29,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #include <windows.h>
+#include <uxtheme.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1322,6 +1323,9 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     g_back = child( "BUTTON", "Back", style | BS_OWNERDRAW, 0, bx - 8, g_body.top, 40, 36, ID_BACK );
     g_list = child( "LISTBOX", "", style | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY | WS_VSCROLL | LBS_NOINTEGRALHEIGHT,
                     0, bx, g_body.top + 136, g_body.right - bx, g_body.bottom - g_body.top - 136 - 124, ID_LIST );
+    /* its scroll bar dark, as the card is (wine-sg 1474): the greeter
+     * account runs with the Light scheme */
+    SetWindowTheme( g_list, L"DarkMode_Explorer", NULL );
     g_name = child( "EDIT", "", style | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE, bx, g_body.top + 136 + 78, 360, 30, ID_NAME );
     g_pass = child( "EDIT", "", style | ES_AUTOHSCROLL | ES_PASSWORD, WS_EX_CLIENTEDGE, bx, g_body.top + 136 + 146, 360, 30, ID_PASS );
     g_pass2 = child( "EDIT", "", style | ES_AUTOHSCROLL | ES_PASSWORD, WS_EX_CLIENTEDGE, bx, g_body.top + 136 + 214, 360, 30, ID_PASS2 );

@@ -493,7 +493,7 @@ greeter:
 	python3 setup/make-icon.py build/sg-setup.ico
 	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
 	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c build/sg-setup-res.o -lcomctl32 -lgdi32 -luser32
-	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-oobe64.exe setup/sg-oobe.c -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-oobe64.exe setup/sg-oobe.c -lgdi32 -luser32 -luxtheme
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-setup-bridge setup/sg-setup-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
