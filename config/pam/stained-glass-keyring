@@ -1,0 +1,7 @@
+# PAM policy for sg-keyring (the sign-in notice's "saved passwords"): it
+# checks, as the person and in their session, that the password they typed is
+# their current sign-in password before their keyring is re-encrypted with it
+# -- a typing slip there would lock the keyring away again. Only the password
+# check: pam_unix, unprivileged, asks unix_chkpwd, which answers for one's own
+# account alone.
+@include common-auth

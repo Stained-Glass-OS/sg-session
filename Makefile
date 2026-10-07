@@ -72,9 +72,12 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	@# lock service's root monitor runs; it has no setuid bit and is only of
 	@# use to root. So are sg-password-change (sg-admind's: a person changes
 	@# their own password, and their keyring follows) and sg-keyring-first
-	@# (pam_exec's at sign-in: the keyring made at the first one).
+	@# (pam_exec's at sign-in: the keyring made at the first one). sg-keyring
+	@# is the person's own, in their session: the sign-in notice's "saved
+	@# passwords" (a keyring an administrator's reset left on the old password).
 	@if [ -f build/sg-lockd ]; then \
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck build/sg-password-change build/sg-keyring-first \
+	        build/sg-keyring \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# Remote Desktop (ADR 0010): the daemon and its certificate helper. The
@@ -144,7 +147,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	    $(DESTDIR)/etc/stained-glass/policy.d/
 	install -d $(DESTDIR)/etc/pam.d
 	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote \
-	    config/pam/stained-glass-elevate config/pam/stained-glass-password $(DESTDIR)/etc/pam.d/
+	    config/pam/stained-glass-elevate config/pam/stained-glass-password config/pam/stained-glass-keyring \
+	    $(DESTDIR)/etc/pam.d/
 	@# The profile service (sg-profile-create), run at login by pam_exec;
 	@# the deb's postinst registers it with pam-auth-update.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
@@ -495,6 +499,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-password-change greeter/sg-password-change.c -lpam
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-keyring-first greeter/sg-keyring-first.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-keyring greeter/sg-keyring.c $$(pkg-config --cflags --libs gio-2.0) -lpam
 	@# The gate looks for its fixtures beside the bridge, because in the image
 	@# that is the only place they exist.
 	@install -m 0755 greeter/test-greeter.sh build/
@@ -625,8 +630,19 @@ test-sas-action:
 test-keyring:
 	@sh test/keyring-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 test-keyring-mutants:
-	@for m in LOCK_KEYRING PWCHANGE_RUID PWCHANGE_RUNTIME KEYRING_FIRST; do \
+	@for m in LOCK_KEYRING PWCHANGE_RUID PWCHANGE_RUNTIME KEYRING_FIRST RDP_KEYRING; do \
 	    if sh test/keyring-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
+	    echo "mutant $$m killed"; done
+
+# sg-keyring, behind the sign-in notice for a keyring an administrator's
+# reset left on the old password: recover (re-encrypt with the current
+# password) and reset (a new, empty one), in a session-like bus.
+.PHONY: test-keyring-recover test-keyring-recover-mutants
+test-keyring-recover:
+	@sh test/keyring-recover-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+test-keyring-recover-mutants:
+	@for m in KEYRING_NOCHECK; do \
+	    if sh test/keyring-recover-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
 	    echo "mutant $$m killed"; done
 
 .PHONY: test-pamcheck

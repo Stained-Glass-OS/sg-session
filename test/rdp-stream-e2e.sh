@@ -8,7 +8,8 @@
 # paints the screen one colour and logs what it receives. Checks:
 #
 #   - a wrong password starts no session
-#   - the right one starts a session at the client's size, and the session's
+#   - the right one starts a session at the client's size (and the monitor
+#     checks the password again then, to open the session's keyring), and the session's
 #     frames arrive: the client's window shows the program's colour
 #   - typing into the client reaches the Windows program as characters
 #   - a click reaches it at the right place
@@ -88,8 +89,17 @@ exec "$COMP" -L "\$dir/priv.sock" -C "\$dir/control.sock" -U "\$(id -u)" -- \\
 EOF
 chmod +x "$T/session.sh"
 
+# The PAM check, recording each call: the monitor's second check, once the
+# session exists, opens its keyring (SG_PAMCHECK_KEYRING=1).
+cat > "$T/pamcheck.sh" <<EOF
+#!/bin/sh
+echo "keyring=\${SG_PAMCHECK_KEYRING:-0}" >> "$T/pamcheck-calls"
+exec "$BUILD/sg-rdp-pamcheck"
+EOF
+chmod +x "$T/pamcheck.sh"
+
 PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$T/pam.d" LD_PRELOAD="$PW" \
-SG_RDP_PAMCHECK="$BUILD/sg-rdp-pamcheck" SG_RDP_CERT="$T/cert.pem" SG_RDP_KEY="$T/key.pem" \
+SG_RDP_PAMCHECK="$T/pamcheck.sh" SG_RDP_CERT="$T/cert.pem" SG_RDP_KEY="$T/key.pem" \
 SG_RDP_FRAME_DUMP="$T/frame.ppm" SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$T/authd.log" SG_RDP_SEAT_ROOT="$T/seat" SG_RDP_SESSION_CMD="$T/session.sh" SG_RDP_CONSOLE_TEST=1 \
     "$BUILD/sg-rdp-authd" "$PORT" >"$T/authd.out" 2>&1 &
 DPID=$!
@@ -118,11 +128,16 @@ client alice wrong
 sleep 6; kill "$CPID" 2>/dev/null; wait "$CPID" 2>/dev/null; CPID=""
 if [ ! -e "$T/session-starts" ]; then pass "a wrong password starts no session"
 else fail "a session was started for a wrong password"; fi
+if grep -q 'keyring=1' "$T/pamcheck-calls" 2>/dev/null; then fail "a wrong password was offered to a keyring"
+else pass "... nor offers it to a keyring"; fi
 
 # ---- the right one ----------------------------------------------------------
 client alice correct-horse
 if wait_log 'SESSION attached' "$T/authd.log" 60; then pass "the right password attaches a session"
 else fail "no session: $(tail -5 "$T/authd.log")"; fi
+if [ "$(grep -c 'keyring=1' "$T/pamcheck-calls" 2>/dev/null)" = 1 ]; then
+    pass "once the session exists the password is checked again to open its keyring"
+else fail "the session's keyring was not opened: $(tr '\n' ' ' < "$T/pamcheck-calls" 2>/dev/null)"; fi
 if [ "$(cat "$T/session-size" 2>/dev/null)" = 1024x768 ]; then pass "the session is started at the client's size (1024x768)"
 else fail "session size: $(cat "$T/session-size" 2>/dev/null)"; fi
 wait_log '^ready' "$T/target.log" 60

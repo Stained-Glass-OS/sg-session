@@ -1923,6 +1923,21 @@ machines get it with apt upgrade.
   puts the person's `/run/user/UID` into the PAM environment (sg-lockd is a
   system service with no `XDG_RUNTIME_DIR`; without it the module cannot
   find the daemon and silently does nothing).
+- **Remote Desktop** opens it too. There the password check and the session
+  are separate processes: sg-rdp-authd's root monitor checks the password
+  (sg-rdp-pamcheck), then starts the session with systemd-run, which has no
+  password. So once the session exists (started, reconnected or taken over)
+  the monitor runs the same check a second time with
+  `SG_PAMCHECK_KEYRING=1`: sg-rdp-pamcheck names the person's runtime
+  directory as for the lock screen, and `-auth optional pam_gnome_keyring.so`
+  in `config/pam/stained-glass-remote` hands the password to the session's
+  daemon through its control socket -- as PAM does at the console. The
+  password never leaves the monitor and the PAM helper. A first sign-in over
+  Remote Desktop makes the keyring first (sg-keyring-first acts for
+  `stained-glass-remote` too). Gates: keyring-test (the real remote PAM file
+  opens a locked keyring; first sign-in), rdp-stream-e2e (the monitor's
+  second check happens once, after the session exists, and never for a wrong
+  password), mutant SG_MUTANT_RDP_KEYRING; sg-image's rdp-test in a VM.
 - **Changing your own password** (Settings, Control Panel: "Change your
   password", which asks for the current one) goes through sg-admind's
   `user-password-own` to `sg-password-change` (root): the PAM service
@@ -1939,9 +1954,25 @@ machines get it with apt upgrade.
 - **An administrator's reset** (chpasswd: `user-password` on another account,
   Setup, the OOBE) cannot re-encrypt the keyring: there is no
   current password to open it with. The person's next sign-in leaves the old
-  keyring locked; programs then ask for its old password. Windows behaves
-  the same way (a reset loses DPAPI-protected saved passwords), and the
-  reset dialog says so.
+  keyring locked. Windows behaves the same way (a reset loses
+  DPAPI-protected saved passwords), and the reset dialog says so. At the
+  next sign-in sg-shell's `sg-control64.exe /keyring-signin` (the machine's
+  Run key) asks "Saved passwords are locked": unlock them with the password
+  used before, or start over; Control Panel > User Accounts > Credential
+  Manager offers the same. Its Linux half is **`sg-keyring`** (libexec, run
+  as the person in their session; passwords on stdin only): `status`
+  (open/locked/none/unavailable), `recover` (OLD NUL CURRENT NUL: the current
+  one checked by PAM, service `stained-glass-keyring`, unprivileged
+  pam_unix/unix_chkpwd; then gnome-keyring's internal
+  ChangeWithMasterPassword re-encrypts the login keyring with it and
+  UnlockWithMasterPassword opens it), `reset` (CURRENT NUL: login.keyring
+  kept aside as `login.keyring.before-reset-DATE`, never loaded; a new one
+  made over D-Bus with label "login" -- the label names the file and object
+  -- then labelled "Login", alias default). Without it, gnome-keyring's own
+  prompt (gcr-prompter) would appear only when a Linux program asks, saying
+  only "The password you use to log in to your computer no longer matches
+  that of your login keyring". Gate: `make test-keyring-recover` (mutant
+  KEYRING_NOCHECK).
 - `passwd` in a terminal works natively (common-password). Wine's
   `net.exe` has no `net user`, so that is no path to a password.
 
@@ -1967,13 +1998,18 @@ an application cannot set `PAM_OLDAUTHTOK`/`PAM_AUTHTOK` (`PAM_BAD_ITEM`) --
 only a module (pam_unix) can, hence passwd's identity; pam_gnome_keyring's
 auth needs `PAM_AUTHTOK` set by an earlier module (pam_permit sets none).
 
-**Windows programs' Credential Manager** (CredWrite/CredRead) is not bridged:
-Wine keeps credentials in the user's HKCU hive (`Software\Wine\Credential
-Manager`, the secret RC4-scrambled with a random key stored beside it), and
-its only host bridge is mountmgr.sys's macOS Keychain path -- which in our
-shared prefix runs in the machine's SYSTEM wineserver, not the person's
-session, so it could not reach their keyring anyway. A bridge would be a
-unixlib in advapi32 calling libsecret in the person's own process.
+**Windows programs' Credential Manager** (CredWrite/CredRead/CredEnumerate/
+CredDelete) keeps credentials in this keyring (wine-sg 1380): a Unix side of
+advapi32 loads libsecret in the person's own Wine process and stores each
+credential as an item (schema `org.stainedglass.Credential`, attributes
+key = folded target, target, type, user, ...; the secret is the blob). The
+registry (`Software\Wine\Credential Manager`, only scrambled) is the
+fallback with a warning when there is no keyring to use -- no session bus
+(SYSTEM's services), or the keyring locked (never a prompt) -- and keeps
+logon-session credentials; what it holds moves to the keyring at the next use
+with one. Git Credential Manager, sg-mstsc's "Remember me" (TERMSRV/host) and
+mapped drives' saved logons all land there; Control Panel's Credential
+Manager lists and removes them.
 
 ## Bundled Windows applications: PowerShell 7 and Python
 

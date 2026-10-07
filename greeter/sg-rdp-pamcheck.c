@@ -101,7 +101,7 @@ int main( void )
     struct pam_conv pc = { conv, NULL };
     pam_handle_t *ph = NULL;
     const char *s, *rhost;
-    int rc, console, flags;
+    int rc, console, keyring, flags;
 
     if (!service) service = "stained-glass-remote";
 
@@ -127,8 +127,17 @@ int main( void )
      * report 2) */
     if (!(rhost = getenv( "SG_PAMCHECK_RHOST" ))) rhost = console ? "" : "rdp";
     if (rc == PAM_SUCCESS && *rhost) rc = pam_set_item( ph, PAM_RHOST, rhost );
+    /* SG_PAMCHECK_KEYRING=1: sg-rdp-authd's second check, once a remote
+     * session exists -- its keyring opens with the password, as the lock
+     * screen's does (pam_gnome_keyring in stained-glass-remote). */
+    keyring = (s = getenv( "SG_PAMCHECK_KEYRING" )) && !strcmp( s, "1" );
 #ifndef SG_MUTANT_LOCK_KEYRING
     if (rc == PAM_SUCCESS && console) rc = set_runtime_dir( ph, user );
+#endif
+#ifndef SG_MUTANT_RDP_KEYRING
+    if (rc == PAM_SUCCESS && keyring && !console) rc = set_runtime_dir( ph, user );
+#else
+    (void)keyring;
 #endif
     if (rc == PAM_SUCCESS) rc = pam_authenticate( ph, flags );
     /* Authentication is not authorisation: an expired or locked account has a

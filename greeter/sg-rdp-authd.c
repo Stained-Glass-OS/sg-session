@@ -150,7 +150,7 @@ static int write_full( int fd, const void *buf, size_t len )
 
 /* Run the PAM helper for one credential. The request arrives as two
  * length-prefixed fields; the helper gets them NUL-separated on stdin. */
-static int monitor_check( const char *helper, const char *user, const char *pass, const char *rhost )
+static int monitor_check( const char *helper, const char *user, const char *pass, const char *rhost, int keyring )
 {
     int in[2], out[2], status = 0;
     char reply[256] = "";
@@ -167,6 +167,10 @@ static int monitor_check( const char *helper, const char *user, const char *pass
         /* the client's address as PAM's remote host: a number, which libpam's
          * audit record does not look up in DNS (the default "rdp" cost 8 s) */
         setenv( "SG_PAMCHECK_RHOST", rhost, 1 );
+        /* the second check, once the session exists: pam_gnome_keyring in
+         * the remote stack opens the session's keyring with the password */
+        if (keyring) setenv( "SG_PAMCHECK_KEYRING", "1", 1 );
+        else unsetenv( "SG_PAMCHECK_KEYRING" );
         execl( helper, helper, (char *)NULL );
         _exit( 127 );
     }
@@ -470,13 +474,25 @@ static void monitor_loop( int fd, const char *helper )
         /* only an address, never a name to look up */
         if (inet_pton( AF_INET, rhost, addr ) != 1 && inet_pton( AF_INET6, rhost, addr ) != 1) rhost[0] = 0;
 
-        ok = (unsigned char)monitor_check( helper, user, pass, rhost );
-        explicit_bzero( pass, sizeof(pass) );
+        ok = (unsigned char)monitor_check( helper, user, pass, rhost, 0 );
         /* A failed guess costs the guesser time here, in the one process the
          * network cannot reach, so it cannot be skipped by reconnecting. */
         if (!ok) sleep( 2 );
         /* Only for a password PAM accepted, and only that user's session. */
         else session = session_for( user, size[0], size[1], &status );
+        /* The session's keyring opens with the password, as a sign-in at the
+         * console opens it (greetd's pam_gnome_keyring). The password check
+         * and the session are separate processes here -- the session is
+         * systemd-run's, with no password -- so the password goes to the
+         * session's keyring daemon now that it exists: the same PAM check
+         * again, told where the person's runtime directory is, and
+         * pam_gnome_keyring in the remote stack hands it over through the
+         * daemon's control socket, as the lock screen's does. */
+#ifndef SG_MUTANT_RDP_KEYRING
+        if (session >= 0 && !monitor_check( helper, user, pass, rhost, 1 ))
+            logmsg( "SESSION keyring not opened for user=%s", user );
+#endif
+        explicit_bzero( pass, sizeof(pass) );
         if (send_verdict( fd, ok, (unsigned char)status, session ) < 0) _exit( 0 );
         if (session >= 0) close( session );
     }

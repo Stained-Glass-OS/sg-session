@@ -14,7 +14,7 @@
  *
  * So, run by pam_exec in the auth stack (pam-configs/stained-glass-keyring,
  * expose_authtok: the password on stdin) after the password has been
- * accepted, for the login screen only: if the person has no login keyring,
+ * accepted, for the login screen and Remote Desktop only: if the person has no login keyring,
  * start a keyring daemon of theirs, in a private runtime directory, with
  * --unlock and the password -- it makes the login keyring, encrypted with the
  * password -- and stop it again. The session's daemon then finds an existing
@@ -22,7 +22,8 @@
  *
  * Environment from pam_exec: PAM_USER, PAM_SERVICE, PAM_TYPE. Always exits
  * 0: sign-in never depends on it. SG_KEYRING_FIRST_SERVICES (the gate) is a
- * space-separated list of services to act for instead of "greetd"; run
+ * space-separated list of services to act for instead of "greetd
+ * stained-glass-remote"; run
  * unprivileged (the gate) it acts only on SG_KEYRING_FIRST_HOME, a home of
  * the gate's, never on the account's own.
  *
@@ -63,7 +64,8 @@ static int wanted_service( const char *service )
     const char *list = getenv( "SG_KEYRING_FIRST_SERVICES" );
     char buf[256], *tok, *save;
     if (!service) return 0;
-    if (!list || !list[0]) list = "greetd";
+    /* the login screen, and a first sign-in over Remote Desktop */
+    if (!list || !list[0]) list = "greetd stained-glass-remote";
     snprintf( buf, sizeof(buf), "%s", list );
     for (tok = strtok_r( buf, " ", &save ); tok; tok = strtok_r( NULL, " ", &save ))
         if (!strcmp( tok, service )) return 1;

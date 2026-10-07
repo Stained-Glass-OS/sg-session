@@ -6,5 +6,11 @@
 # in. The session stack is used when sg-rdp-authd starts the remote session
 # (systemd-run PAMName=): logind registers it and the profile service runs.
 @include common-auth
+# ... and, once the password is right, the session's keyring opens with it,
+# as signing in at the console opens it (greetd's own PAM file). The session
+# is started without the password (systemd-run), so sg-rdp-authd checks it a
+# second time once the session exists, and sg-rdp-pamcheck tells the module
+# where the person's keyring daemon is. "-": nothing without gnome-keyring.
+-auth       optional    pam_gnome_keyring.so
 @include common-account
 @include common-session

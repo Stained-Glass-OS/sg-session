@@ -1,3 +1,31 @@
+sg-session (0.1.0-155) unstable; urgency=medium
+
+  * Remote Desktop sign-ins open the session's keyring. The password check
+    and the session are separate processes there (the session is
+    systemd-run's, without the password), so remote sessions started with
+    the keyring locked. sg-rdp-authd's monitor now checks the password a
+    second time once the session exists (SG_PAMCHECK_KEYRING=1):
+    sg-rdp-pamcheck names the person's runtime directory and
+    pam_gnome_keyring, now in stained-glass-remote's auth stack, hands the
+    password to the session's keyring daemon, as PAM does at the console. A
+    first sign-in over Remote Desktop makes the keyring first
+    (sg-keyring-first acts for stained-glass-remote). Gates: keyring-test
+    (the real remote PAM file opens a locked keyring; first sign-in),
+    rdp-stream-e2e (the second check happens once the session exists, never
+    for a wrong password); mutant SG_MUTANT_RDP_KEYRING fails both.
+  * sg-keyring (new, libexec): a person's own keyring from their session,
+    for sg-shell's "Saved passwords are locked" question after an
+    administrator's password reset: status, recover (the old password and
+    the current one, checked by PAM -- new service stained-glass-keyring --
+    re-encrypts the login keyring with the current one and opens it) and
+    reset (a new, empty login keyring; the old file kept aside, unread).
+    Passwords on standard input only. Gate: make test-keyring-recover
+    (mutant KEYRING_NOCHECK).
+  * CLAUDE.md: Credential Manager's credentials now live in this keyring
+    (wine-sg 1380).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 20:07:09 -0700
+
 sg-session (0.1.0-154) unstable; urgency=medium
 
   * SG PDF's engine: a pen's ink with its pressure. "annot ink" takes

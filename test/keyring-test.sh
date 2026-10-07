@@ -11,7 +11,9 @@
 #   2. the lock screen's PAM check (sg-rdp-pamcheck, sg-lockd's) opens a
 #      locked keyring with the password typed -- through the real
 #      stained-glass-lock PAM file, from a process without XDG_RUNTIME_DIR,
-#      as sg-lockd is -- and a wrong password leaves it locked;
+#      as sg-lockd is -- and a wrong password leaves it locked; a Remote
+#      Desktop sign-in (sg-rdp-authd's second check, the real
+#      stained-glass-remote file) opens it, and its first sign-in makes it;
 #   3. (root: run as root, or with sudo -n) sg-password-change, a person
 #      changing their own password, re-encrypts the keyring through the real
 #      stained-glass-password PAM file and the system's common-password: a
@@ -22,7 +24,8 @@
 #      and removed. SG_KEYRING_NO_ROOT=1 skips this part.
 #
 # --mutant NAME builds the helpers with -DSG_MUTANT_NAME (LOCK_KEYRING,
-# PWCHANGE_RUID, PWCHANGE_RUNTIME, KEYRING_FIRST); the gate must then fail.
+# PWCHANGE_RUID, PWCHANGE_RUNTIME, KEYRING_FIRST, RDP_KEYRING); the gate must
+# then fail.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MUTANT=
@@ -133,6 +136,11 @@ first greetd
 [ -f "$KR" ] && pass "the first sign-in at the login screen makes the login keyring" || fail "no login keyring after the first sign-in"
 leftover=$(find /tmp -maxdepth 1 -name 'sg-keyring-*' -user "$ME" 2>/dev/null)
 [ -z "$leftover" ] && pass "... and leaves nothing in /tmp" || fail "left behind: $leftover"
+# a first sign-in over Remote Desktop makes it too (its own home here)
+RHOME="$T/rdp-home"; mkdir -p "$RHOME"
+printf '%s\0' "$PW" | env PAM_USER="$ME" PAM_TYPE=auth PAM_SERVICE=stained-glass-remote SG_KEYRING_FIRST_HOME="$RHOME" "$T/sg-keyring-first"
+[ -f "$RHOME/.local/share/keyrings/login.keyring" ] && pass "a first sign-in over Remote Desktop makes the login keyring too" \
+    || fail "no login keyring after a first sign-in over Remote Desktop"
 before=$(stat -c %Y.%s "$KR" 2>/dev/null)
 sleep 1.1; first greetd
 [ "$(stat -c %Y.%s "$KR" 2>/dev/null)" = "$before" ] && pass "a later sign-in leaves the keyring alone" || fail "a later sign-in rewrote the keyring"
@@ -178,6 +186,30 @@ if [ "$r" = OK ] && [ "$(locked s1 "$RR/$MYUID")" = false ]; then
 else fail "after unlocking the screen ($r) the keyring is locked: $(locked s1 "$RR/$MYUID")"; fi
 got=$(in_session s1 "$RR/$MYUID" -- secret-tool lookup app eddie user gate 2>/dev/null)
 [ "$got" = eddie-vpn-secret ] && pass "... and the secret is there" || fail "after unlock: '$got'"
+
+# --- 2b. a Remote Desktop sign-in opens it ------------------------------------------
+# sg-rdp-authd's monitor checks the password, starts the session (systemd-run,
+# no password), then checks it again with SG_PAMCHECK_KEYRING=1: the real
+# stained-glass-remote file's pam_gnome_keyring opens the session's keyring.
+# Without XDG_RUNTIME_DIR, as the monitor (a system service) runs.
+sed -e 's/^@include common-auth$/auth required pam_exec.so expose_authtok quiet \/bin\/true/' \
+    -e 's/^@include common-account$/account required pam_permit.so/' -e '/^@include common-session$/d' \
+    "$HERE/config/pam/stained-glass-remote" > "$T/conf/stained-glass-remote"
+remotecheck() { # KEYRING PASSWORD -> the checker's reply, as sg-rdp-authd's monitor runs it
+    printf '%s\0%s\0' "$ME" "$2" | env -u XDG_RUNTIME_DIR -u SG_PAMCHECK_CONSOLE SG_PAMCHECK_KEYRING="$1" \
+        SG_PAMCHECK_RHOST=127.0.0.1 SG_REMOTE_PAM_SERVICE=stained-glass-remote \
+        SG_PAM_CONFDIR="$T/conf" SG_RUNTIME_ROOT="$RR" "$T/sg-rdp-pamcheck" 2>/dev/null
+}
+lock_keyring
+r=$(remotecheck 0 "$PW")
+[ "$(locked s1 "$RR/$MYUID")" = true ] && pass "the remote password check alone ($r) leaves a session's keyring alone" \
+    || fail "the first remote check opened the keyring (it runs before the session exists)"
+r=$(remotecheck 1 "$PW")
+if [ "$r" = OK ] && [ "$(locked s1 "$RR/$MYUID")" = false ]; then
+    pass "a Remote Desktop sign-in opens the session's keyring with the password sent"
+else fail "after the remote sign-in's keyring check ($r) the keyring is locked: $(locked s1 "$RR/$MYUID")"; fi
+got=$(in_session s1 "$RR/$MYUID" -- secret-tool lookup app eddie user gate 2>/dev/null)
+[ "$got" = eddie-vpn-secret ] && pass "... and a program in the remote session finds its secret, no prompt" || fail "remote: '$got'"
 stop_session s1
 
 # a fresh session (the next sign-in) opens it with the password, not without
