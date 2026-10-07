@@ -37,6 +37,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
 	install -m 0755 bin/sg-netctl bin/sg-sysinfo bin/sg-firmware-initrd $(BINDIR)
+	@# Office's work-account sign-in: wine-sg's Web Account Manager runs sg-wam-msal; sg-wam-redirect is the browser's handler for its final redirect
+	install -m 0755 bin/sg-wam-msal bin/sg-wam-redirect $(BINDIR)
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
 	install -m 0755 bin/powershell $(BINDIR)
@@ -192,6 +194,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -D -m 0644 config/applications/sg-windows-file.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-windows-file.desktop
 	@# a downloaded AppImage: the Install an AppImage window (sg-open-windows-file --appimage)
 	install -D -m 0644 config/applications/sg-appimage-install.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-appimage-install.desktop
+	install -D -m 0644 config/applications/sg-wam-redirect.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-wam-redirect.desktop
 	install -D -m 0644 config/applications/sg-mimeapps.list $(DESTDIR)$(PREFIX)/share/applications/mimeapps.list
 	@# The registry.pol fixture for sg-policy-check's .pol clause.
 	install -m 0644 test/fixtures/machine.pol $(SHAREDIR)/machine.pol
@@ -310,6 +313,8 @@ lint:
 	@! sh test/netlock-deps-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@python3 -c 'import ast, sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]' bin/sg-wam-msal bin/sg-wam-redirect
+	@python3 test/wam-msal-test.py || [ $$? -eq 77 ]
 	@sh test/print-setup-test.sh
 	@! sh test/print-setup-test.sh --mutant >/dev/null
 	@sh test/print-apparmor-test.sh || [ $$? -eq 77 ]

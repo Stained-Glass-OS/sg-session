@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Sign-in redirect
+Comment=Hands the end of a Microsoft sign-in back to the program waiting for it (sg-wam-msal)
+Exec=sg-wam-redirect %u
+NoDisplay=true
+Terminal=false
+MimeType=x-scheme-handler/ms-appx-web;

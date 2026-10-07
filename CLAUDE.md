@@ -59,6 +59,7 @@ separately.
 | `bin/sg-install` | installs the live system onto a disk (see below) |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd`; the first-run setup (OOBE): `sg-oobe`, `sg-oobed` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
+| `bin/sg-wam-msal`, `bin/sg-wam-redirect` | Office's work-account sign-in: the program wine-sg's Web Account Manager runs, and the browser's handler for its final redirect (see below) |
 | `bin/sg-settingsctl` | Settings' native half: sound, Bluetooth, display modes, night light, idle timers, pending updates (see below) |
 | `bin/sg-sysinfo` | the administrative tools' Linux side: devices, disks, units, the journal, accounts, shares (see below) |
 | `bin/sg-pdf` | SG PDF's Linux half: MuPDF renders, reports and edits (text, pictures, comments, forms, redaction, pages, security, export) over the program's bridge (see below) |
@@ -1489,6 +1490,38 @@ speak [TEXT [rate=]]              read out loud (espeak-ng, else spd-say); no te
   `--thumbnail FILE SIZE OUT` (File Explorer's PDF thumbnails, wine-sg
   0244) and `--info FILE` are as before. sg-shell's `test/pdf-check.sh` and
   `test/pdf-editor-check.sh` are the Windows side.
+
+## Office's work-account sign-in: sg-wam-msal and sg-wam-redirect
+
+Microsoft 365 Apps signs a work or school account in through the Web Account Manager.
+wine-sg (patches 1473-1475; its `docs/office-work-account-signin.md` is the full story) answers Office's
+token requests by running `/usr/bin/sg-wam-msal` (or the native program `SG_WAM_HELPER` names -- the
+test stub): one JSON request on standard input, one `SGWAM-RESULT:<json>` line out. The program asks
+Microsoft's own MSAL (`python3-msal`); the sign-in page is the real one, in the person's browser, so
+no password ever passes through us. The token cache is `~/.local/share/stained-glass/wam/msal-cache.bin`
+(0600).
+
+What had to be exactly right, because Office's MSAL throws the whole sign-in away otherwise:
+
+- **The redirect.** Office's application registration (`d3590ed6-52b3-4102-aeff-aad2292ab01c`) accepts no
+  `http://localhost` redirect (`AADSTS50011`), but does accept
+  `ms-appx-web://Microsoft.AAD.BrokerPlugin/<client id>`. The browser ends there; `sg-wam-redirect`
+  (the handler of `x-scheme-handler/ms-appx-web`, the default in `sg-mimeapps.list`) passes the URL to
+  the waiting `sg-wam-msal` over a 0600 socket in `$XDG_RUNTIME_DIR`. Firefox asks "Open link?" the
+  first time; "always allow" in that prompt removes it.
+- **Every answer carries an id token, client info and scopes**, a cached one too. MSAL returns them only
+  for a fresh sign-in, so `fill_from_cache` takes them from its cache (client info is
+  `base64url({"uid","utid"})`, which is how the account id is made).
+- **Office names its account as `O.<base64 protobuf>`** in the login hint (field 1 the object id, field 2
+  the tenant id), not as an e-mail address. An account it names that is not signed in is "no account":
+  never another account's token, even when only one is signed in.
+- `openid`, `profile` and `offline_access` are MSAL's own; passing them to MSAL is an error.
+
+Not done: a personal Microsoft account (`consumers`) -- silent requests answer "interaction required";
+two interactive sign-ins at once share the one socket; two helpers can overwrite each other's *new*
+tokens in the cache (the next request refreshes them); a tenant that requires a compliant or joined
+device refuses the token (`AADSTS53000`/`53003`). `test/wam-msal-test.py` is the gate (no network;
+exit 77 without python3-msal).
 
 ## Voice typing: sg-dictate (Win+H)
 

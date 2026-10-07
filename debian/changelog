@@ -1,3 +1,19 @@
+sg-session (0.1.0-166) unstable; urgency=medium
+
+  * Office with a work or school account: sg-wam-msal, the sign-in
+    program behind wine-sg's Web Account Manager (wine-sg patches 1473-
+    1475). It asks Microsoft's MSAL (python3-msal) for the token; the
+    real sign-in page opens in the person's browser, and the final
+    redirect (ms-appx-web:, the one Office's own application registration
+    accepts) comes back through sg-wam-redirect, the scheme's handler
+    (sg-wam-redirect.desktop, the default in mimeapps.list). Every answer
+    carries the id token, client info and scopes Office's MSAL reads; an
+    account Office names that is not signed in is "no account", never
+    another account's token. Gate: test/wam-msal-test.py (16 checks, no
+    network).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:20:00 -0700
+
 sg-session (0.1.0-165) unstable; urgency=medium
 
   * AppImages: one opened from a Linux program (Linux Firefox's downloads)

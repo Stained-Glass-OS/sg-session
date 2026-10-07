@@ -1,0 +1,19 @@
+#!/usr/bin/python3
+"""sg-wam-redirect: the browser's handler for ms-appx-web: links.
+
+Microsoft's sign-in page ends by redirecting to ms-appx-web://Microsoft.AAD.BrokerPlugin/<client>
+(the only kind of redirect Office's own application registration accepts besides a web page).
+The browser hands that link to this program, which passes it to the waiting sg-wam-msal.
+"""
+import os
+import socket
+import sys
+
+path = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "sg-wam-redirect-%d.sock" % os.getuid())
+if len(sys.argv) > 1:
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(path)
+        s.sendall(sys.argv[1].encode())
+    except OSError:
+        pass
