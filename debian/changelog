@@ -1,3 +1,17 @@
+sg-session (0.1.0-162) unstable; urgency=medium
+
+  * Remote Desktop: frames go compressed. An encoder of our own for RDP 6.0
+    bitmap compression ("planar", MS-RDPEGDI 2.2.2.5.1), lossless: vertical
+    deltas and run-length coding per colour plane, no alpha plane. Used when
+    the client advertises it (Windows' client and FreeRDP do), uncompressed
+    otherwise. A desktop of application windows costs a tenth of what it did,
+    a scrolled page of text a seventh; a photographic wallpaper about half.
+    Gate: make test-rdp-stream (build/planar-test against FreeRDP's decoder,
+    then pixel-exact through a real client over gradients and scrolling text,
+    planar and uncompressed); mutant SG_MUTANT_PLANAR_DELTA.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 11:44:01 -0700
+
 sg-session (0.1.0-161) unstable; urgency=medium
 
   * OOBE: the list's scroll bar is dark, as the card is

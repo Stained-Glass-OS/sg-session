@@ -7,8 +7,8 @@
  * grants privileged clients and nobody else (ADR 0010, ADR 0011).
  *
  * The RDP side is a FreeRDP peer context: changed 64x64 tiles are sent as
- * planar bitmap updates (raw planes), which every RDP client since 6.0
- * decodes.
+ * bitmap updates -- RDP 6.0 planar-compressed (our own encoder, sg-planar.c,
+ * lossless) for a client that advertised it, else uncompressed.
  *
  * Single-threaded: everything runs on the peer's thread, which polls the
  * Wayland fd beside FreeRDP's own handles.
@@ -38,6 +38,9 @@ int sg_stream_after_wait( struct sg_stream *s );
 
 /* Start sending frames to the peer: the first is the whole screen. */
 void sg_stream_start( struct sg_stream *s, rdpContext *context );
+
+/* What the frames go as, once started: for the log. */
+const char *sg_stream_codec( struct sg_stream *s );
 
 /* Input from the client. Keys are evdev codes. */
 void sg_stream_key( struct sg_stream *s, uint32_t evdev, int down );

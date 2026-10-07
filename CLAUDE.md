@@ -1793,21 +1793,42 @@ Wine process on another one die of BadWindow.
 
 `rdp/sg-rdp-stream.c` is the stream: screencopy frames (pointer drawn in,
 `copy_with_damage` paces it), 64x64 tiles compared with the last frame sent,
-changed ones as **uncompressed 32bpp bitmap updates** (bottom-up BGRA, every
-client since RDP 4 decodes them; bulk compression still applies). Input: RDP
+changed ones as bitmap updates. Input: RDP
 scancodes -> winpr virtual keys -> evdev, on a virtual keyboard carrying the
 ordinary evdev/us keymap; absolute pointer, buttons, wheel. Everything runs on
 the peer's thread, which polls the Wayland fd beside FreeRDP's handles.
 
-- **Not planar.** FreeRDP 3.15's planar encoder does not round-trip: with RLE
-  any detail comes back streaked (its own round-trip test is disabled upstream
-  as unfinished), and raw planes arrive at the client with red and blue
-  swapped. Found by the gate's lossless check. An encoder of our own for the
-  open RDP 6.0 bitmap compression spec is the way to get bandwidth back.
+- **The codec is planar, our own encoder** (`rdp/sg-planar.c`, written from
+  MS-RDPEGDI 2.2.2.5.1 / 3.1.9): RDP 6.0 bitmap compression, lossless (no
+  colour loss, no subsampling, no alpha plane -- the NA bit), every scanline
+  after the first a vertical delta, RLE-coded; a tile that does not shrink
+  goes as raw planes (3 bytes a pixel). Every client since RDP 6.0 decodes
+  it for a compressed 32 bpp bitmap update. It is used only when the client
+  advertised `DRAW_ALLOW_SKIP_ALPHA` (Windows' client and FreeRDP do) at
+  32 bpp; otherwise, or with `SG_RDP_CODEC=raw`, tiles go uncompressed
+  (bottom-up BGRA, as since RDP 4). The log says which (`CODEC ...`).
+  Measured (64x64 tiles, `build/planar-test bench A.ppm [B.ppm]`): a desktop
+  of Settings windows 3.73 MB -> 0.34 MB (10.9x); the photographic default
+  wallpaper with icons and taskbar 4.10 MB -> 1.93 MB (2.1x, lossless can do
+  little with a photograph); a scrolled page of text in the gate 1.05 MB ->
+  0.14 MB (7.4x). The transport's bulk compression still applies on top.
+- **FreeRDP 3.15's own planar encoder is broken**, which is why we have ours:
+  its delta step drops the sign (`s2c >= 0` on an unsigned byte is always
+  true), so any detail comes back streaked, and with an alpha plane the
+  FreeRDP client swaps red and blue when DrawAllowDynamicColorFidelity is on
+  (`planar_invert_format`) -- NA avoids that path. The delta is stored as
+  2d for d >= 0 and 2|d|-1 for d < 0, d being the difference modulo 256 read
+  as a signed byte; the decoder adds it back modulo 256.
+  `SG_MUTANT_PLANAR_DELTA` reproduces FreeRDP's mistake; `build/planar-test`
+  (our encoder through FreeRDP's decoder, edge cases and fuzz) and the gate's
+  lossless checks both fail with it.
 - **`make test-rdp-stream`** is the gate: a real FreeRDP client on Xvfb into a
   headless session running a Windows program. A wrong password starts nothing;
   the session is the client's size; the client's screen equals the session's
-  captured frame **pixel for pixel** (`SG_RDP_FRAME_DUMP`); typing and clicks
+  captured frame **pixel for pixel** (`SG_RDP_FRAME_DUMP`) -- planar over
+  gradients and text, again after F5 scrolls the text, and uncompressed in
+  the console phase (`SG_RDP_CODEC=raw`); `SG_RDP_STATS` logs bytes per
+  frame, and a scrolled page must cost under half its raw size; typing and clicks
   reach the program; disconnect keeps the session, reconnect finds the same
   one; the session ending disconnects the client. `SG_RDP_SESSION_CMD` and
   `SG_RDP_SEAT_ROOT` exist for this gate only.

@@ -24,6 +24,7 @@
 #include <freerdp/codec/color.h>
 
 #include "sg-rdp-stream.h"
+#include "sg-planar.h"
 
 #define TILE 64
 #define MAX_KEYS 256
@@ -58,6 +59,9 @@ struct sg_stream
     int have_prev, reading, gone;
 
     rdpContext *context;
+    int planar;                  /* the client takes RDP 6.0 planar bitmaps */
+    uint8_t *encoded;            /* one tile's planar stream */
+    FILE *stats;                 /* SG_RDP_STATS: bytes per frame */
     uint8_t keys_down[MAX_KEYS];
     uint32_t buttons_down;       /* bit n: BTN_LEFT + n */
 };
@@ -229,10 +233,17 @@ void sg_stream_free( struct sg_stream *s )
         wl_display_flush( s->display );
         wl_display_disconnect( s->display );
     }
+    free( s->encoded );
+    if (s->stats) fclose( s->stats );
     if (s->state) xkb_state_unref( s->state );
     if (s->keymap) xkb_keymap_unref( s->keymap );
     if (s->xkb) xkb_context_unref( s->xkb );
     free( s );
+}
+
+const char *sg_stream_codec( struct sg_stream *s )
+{
+    return s->planar ? "planar (RDP 6.0 bitmap compression, lossless)" : "uncompressed";
 }
 
 void sg_stream_size( struct sg_stream *s, uint32_t *width, uint32_t *height )
@@ -387,6 +398,35 @@ static BOOL flush_update( struct sg_stream *s, BITMAP_DATA *tiles, UINT32 n )
     return ok;
 }
 
+/* One changed tile as the client will take it: planar (RDP 6.0 bitmap
+ * compression, lossless; sg-planar.c) when the client advertised it, else
+ * uncompressed 32bpp -- rows bottom-up, B G R A, as bitmap updates have been
+ * since RDP 4. The transport's bulk compression applies to either. */
+static BYTE *encode_tile( struct sg_stream *s, uint32_t x, uint32_t y, uint32_t w, uint32_t h, UINT32 *len )
+{
+    const uint8_t *src = (uint8_t *)s->data + (size_t)y * s->stride + (size_t)x * 4;
+    BYTE *data;
+    UINT32 r, c;
+
+    if (s->planar)
+    {
+        size_t n = sg_planar_encode( src, s->stride, w, h, s->encoded );
+        if (!n || !(data = malloc( n ))) return NULL;
+        memcpy( data, s->encoded, n );
+        *len = (UINT32)n;
+        return data;
+    }
+    if (!(data = malloc( (size_t)w * h * 4 ))) return NULL;
+    for (r = 0; r < h; r++)
+    {
+        uint8_t *dst = data + (size_t)(h - 1 - r) * w * 4;
+        memcpy( dst, src + (size_t)r * s->stride, (size_t)w * 4 );
+        for (c = 0; c < w; c++) dst[c * 4 + 3] = 0xff;
+    }
+    *len = w * h * 4;
+    return data;
+}
+
 /* Send every tile that differs from what the client has. */
 static void send_frame( struct sg_stream *s )
 {
@@ -394,7 +434,8 @@ static void send_frame( struct sg_stream *s )
     UINT32 max = freerdp_settings_get_uint32( settings, FreeRDP_MultifragMaxRequestSize );
     uint32_t cols = (s->width + TILE - 1) / TILE, rows = (s->height + TILE - 1) / TILE, tx, ty;
     BITMAP_DATA *tiles = calloc( (size_t)cols * rows, sizeof(*tiles) );
-    UINT32 n = 0, bytes = 0;
+    UINT32 n = 0, bytes = 0, count = 0;
+    size_t sent = 0, uncompressed = 0;
 
     if (!tiles) return;
     if (max < 16384) max = 16384;
@@ -405,21 +446,11 @@ static void send_frame( struct sg_stream *s )
             uint32_t x = tx * TILE, y = ty * TILE;
             uint32_t w = s->width - x < TILE ? s->width - x : TILE;
             uint32_t h = s->height - y < TILE ? s->height - y : TILE;
-            UINT32 size = w * h * 4, r, c;
+            UINT32 size = 0;
             BYTE *data;
 
             if (!tile_changed( s, x, y, w, h )) continue;
-            /* Uncompressed 32bpp: rows bottom-up, B G R A, as bitmap updates
-             * have been since RDP 4. The transport's bulk compression still
-             * applies. */
-            if (!(data = malloc( size ))) continue;
-            for (r = 0; r < h; r++)
-            {
-                const uint8_t *src = (uint8_t *)s->data + (size_t)(y + r) * s->stride + (size_t)x * 4;
-                uint8_t *dst = data + (size_t)(h - 1 - r) * w * 4;
-                memcpy( dst, src, (size_t)w * 4 );
-                for (c = 0; c < w; c++) dst[c * 4 + 3] = 0xff;
-            }
+            if (!(data = encode_tile( s, x, y, w, h, &size ))) continue;
             if (n && bytes + size + 64 > max - 1024)
             {
                 if (!flush_update( s, tiles, n )) { s->gone = 1; free( data ); free( tiles ); return; }
@@ -432,19 +463,29 @@ static void send_frame( struct sg_stream *s )
             tiles[n].width = w;
             tiles[n].height = h;
             tiles[n].bitsPerPixel = 32;
-            tiles[n].compressed = FALSE;
+            tiles[n].compressed = s->planar ? TRUE : FALSE;
             tiles[n].bitmapDataStream = data;
             tiles[n].bitmapLength = size;
+            tiles[n].cbCompMainBodySize = size;
             tiles[n].cbScanWidth = w * 4;
             tiles[n].cbUncompressedSize = w * h * 4;
             n++;
+            count++;
             bytes += size + 64;
+            sent += size;
+            uncompressed += (size_t)w * h * 4;
             remember_tile( s, x, y, w, h );
         }
     }
     if (!flush_update( s, tiles, n )) s->gone = 1;
     free( tiles );
     s->have_prev = 1;
+    if (s->stats && count)
+    {
+        fprintf( s->stats, "frame codec=%s tiles=%u bytes=%zu uncompressed=%zu\n", s->planar ? "planar" : "raw",
+                 count, sent, uncompressed );
+        fflush( s->stats );
+    }
 }
 
 /* SG_RDP_FRAME_DUMP=file.ppm: each captured frame, as captured, for telling a
@@ -503,9 +544,26 @@ static void request_frame( struct sg_stream *s )
     zwlr_screencopy_frame_v1_add_listener( s->frame, &frame_listener, s );
 }
 
+/* Planar only for a client that said it takes it without the alpha plane
+ * (DRAW_ALLOW_SKIP_ALPHA in its bitmap capability set: Windows' client and
+ * FreeRDP both do) at 32 bpp. SG_RDP_CODEC=raw keeps it uncompressed. */
+static int client_takes_planar( rdpSettings *settings )
+{
+    const char *force = getenv( "SG_RDP_CODEC" );
+
+    if (force && !strcmp( force, "raw" )) return 0;
+    return freerdp_settings_get_bool( settings, FreeRDP_DrawAllowSkipAlpha ) &&
+           freerdp_settings_get_uint32( settings, FreeRDP_ColorDepth ) == 32;
+}
+
 void sg_stream_start( struct sg_stream *s, rdpContext *context )
 {
+    const char *stats = getenv( "SG_RDP_STATS" );
+
     s->context = context;
+    s->planar = client_takes_planar( context->settings );
+    if (s->planar && !s->encoded && !(s->encoded = malloc( sg_planar_bound( TILE, TILE ) ))) s->planar = 0;
+    if (stats && !s->stats) s->stats = fopen( stats, "a" );
     s->have_prev = 0;
     request_frame( s );
     wl_display_flush( s->display );

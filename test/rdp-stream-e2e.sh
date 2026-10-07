@@ -19,7 +19,17 @@
 #   - a user signed in at the console has that session taken over (E1b): the
 #     client shows the console's program and types into it, no second
 #     session starts, and disconnecting gives it back to the console locked
+#   - frames go planar-compressed (RDP 6.0 bitmap compression, our own
+#     encoder) to a client that advertises it, and still arrive pixel for
+#     pixel -- over gradients whose rows change by large amounts either way,
+#     and text; a scrolled page of text costs well under half its
+#     uncompressed bytes (the figures are printed); with SG_RDP_CODEC=raw (the
+#     console phase) they go uncompressed, also pixel for pixel
 #   - no password appears in the log
+#
+# Mutant: SG_MUTANT_PLANAR_DELTA (rdp/sg-planar.c) stores vertical deltas
+# without their sign, as FreeRDP 3.15's own encoder does; the lossless checks
+# fail.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 BUILD="$HERE/build"
@@ -98,11 +108,15 @@ exec "$BUILD/sg-rdp-pamcheck"
 EOF
 chmod +x "$T/pamcheck.sh"
 
-PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$T/pam.d" LD_PRELOAD="$PW" \
-SG_RDP_PAMCHECK="$T/pamcheck.sh" SG_RDP_CERT="$T/cert.pem" SG_RDP_KEY="$T/key.pem" \
-SG_RDP_FRAME_DUMP="$T/frame.ppm" SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$T/authd.log" SG_RDP_SEAT_ROOT="$T/seat" SG_RDP_SESSION_CMD="$T/session.sh" SG_RDP_CONSOLE_TEST=1 \
-    "$BUILD/sg-rdp-authd" "$PORT" >"$T/authd.out" 2>&1 &
-DPID=$!
+start_daemon() {   # start_daemon [VAR=VALUE...]: the daemon, with these set too
+    env PAM_WRAPPER=1 PAM_WRAPPER_SERVICE_DIR="$T/pam.d" LD_PRELOAD="$PW" \
+    SG_RDP_PAMCHECK="$T/pamcheck.sh" SG_RDP_CERT="$T/cert.pem" SG_RDP_KEY="$T/key.pem" \
+    SG_RDP_FRAME_DUMP="$T/frame.ppm" SG_RDP_STATS="$T/stats.log" SG_RDP_BIND=127.0.0.1 SG_RDP_LOG="$T/authd.log" \
+    SG_RDP_SEAT_ROOT="$T/seat" SG_RDP_SESSION_CMD="$T/session.sh" SG_RDP_CONSOLE_TEST=1 "$@" \
+        "$BUILD/sg-rdp-authd" "$PORT" >"$T/authd.out" 2>&1 &
+    DPID=$!
+}
+start_daemon
 
 rm -f "/tmp/.X${DPY_N}-lock"
 Xvfb ":$DPY_N" -screen 0 1024x768x24 >/dev/null 2>&1 & XPID=$!
@@ -175,9 +189,10 @@ else fail "click: '$click'"; fi
 
 # The path is lossless: once the screen is still, what the client shows must
 # be, pixel for pixel, the frame the compositor gave -- pointer included.
-sleep 3
-DISPLAY=":$DPY_N" import -window root "$T/client.png" 2>/dev/null
-diff=$(python3 - "$T/frame.ppm" "$T/client.png" <<'EOS'
+lossless() {   # lossless WHAT: compare the client's screen with the last frame
+    sleep 3
+    DISPLAY=":$DPY_N" import -window root "$T/client.png" 2>/dev/null
+    diff=$(python3 - "$T/frame.ppm" "$T/client.png" <<'EOS'
 import subprocess, sys
 def rgb(path):
     out = subprocess.run(["convert", path, "-depth", "8", "rgb:-"], capture_output=True).stdout
@@ -188,8 +203,34 @@ if (w1, h1) != (w2, h2): print(f"size {w1}x{h1} vs {w2}x{h2}"); sys.exit()
 print(sum(1 for i in range(0, len(a), 3) if a[i:i+3] != b[i:i+3]))
 EOS
 )
-if [ "$diff" = 0 ]; then pass "the client shows exactly the session's frame, pointer included (lossless)"
-else fail "the client differs from the session's frame: $diff pixels"; cp "$T/client.png" "$BUILD/rdp-client.png"; cp "$T/frame.ppm" "$BUILD/rdp-frame.ppm"; fi
+    if [ "$diff" = 0 ]; then pass "the client shows exactly the session's frame, pointer included (lossless, $1)"
+    else fail "the client differs from the session's frame ($1): $diff pixels"; cp "$T/client.png" "$BUILD/rdp-client.png"; cp "$T/frame.ppm" "$BUILD/rdp-frame.ppm"; fi
+}
+stats_total() {   # stats_total FROM-LINE: tiles, bytes and uncompressed bytes of the frames since
+    tail -n "+$1" "$T/stats.log" 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] += kv[2] } n++ }
+        END { printf "%d %d %d %d\n", n, v["tiles"], v["bytes"], v["uncompressed"] }'
+}
+
+if grep -q 'CODEC planar' "$T/authd.log"; then pass "the client advertised planar, and frames go planar-compressed"
+else fail "codec: $(grep CODEC "$T/authd.log")"; fi
+# the detail is really there: the gradient band, not the program's colour
+band=$(colour_at 10 400)
+if [ -n "$band" ] && [ "$band" != 129A3C ]; then pass "the program's gradients and text are on screen (#$band)"
+else fail "no gradient band at (10,400): #$band"; fi
+lossless "planar"
+echo "INFO  the first (whole-screen) frame: $(head -1 "$T/stats.log")"
+# A scrolled page of text: F5 moves the text up a line.
+before=$(($(grep -c . "$T/stats.log") + 1))
+DISPLAY=":$DPY_N" xdotool key F5 2>/dev/null
+wait_log '^scrolled 1' "$T/target.log" 10
+sleep 2
+# shellcheck disable=SC2046  # its four numbers as fields
+set -- $(stats_total "$before")
+echo "INFO  scrolling text: $1 frame(s), $2 tiles: $3 bytes planar for $4 uncompressed"
+if [ "${4:-0}" -gt 100000 ] && [ "$(( $3 * 2 ))" -lt "$4" ]; then
+    pass "a scrolled page of text costs under half its uncompressed bytes ($3 of $4)"
+else fail "scrolling text: $3 bytes for $4 uncompressed"; fi
+lossless "planar, after scrolling"
 
 # ---- disconnect, reconnect --------------------------------------------------
 kill "$CPID" 2>/dev/null; wait "$CPID" 2>/dev/null; CPID=""
@@ -222,6 +263,11 @@ s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.argv[2]
 print(s.recv(128).decode().strip())' "$T/seat/seat0/$(id -u)/control.sock" "$1" 2>/dev/null
 }
 mkdir -p "$T/seat/seat0/$(id -u)"
+# From here on, the daemon as for a client that does not take planar.
+kill "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null
+cat "$T/authd.log" >> "$T/authd.log.all"; : > "$T/authd.log"
+start_daemon SG_RDP_CODEC=raw
+wait_log LISTENING "$T/authd.log" 10 || fail "the daemon did not restart"
 # A fresh Windows system: the remote session's desktop belonged to an X
 # server that has gone, and a new Wine process on another one would trip
 # over its windows.
@@ -257,6 +303,9 @@ while [ $_w -lt 4 ]; do
 done
 case "$typed" in *glass*) pass "typing reaches the console session's program remotely ('glass')" ;;
     *) fail "the console's program received '$typed'" ;; esac
+if grep -q 'CODEC uncompressed' "$T/authd.log"; then pass "with SG_RDP_CODEC=raw frames go uncompressed"
+else fail "codec (raw): $(grep CODEC "$T/authd.log")"; fi
+lossless "uncompressed"
 kill "$CPID" 2>/dev/null; wait "$CPID" 2>/dev/null; CPID=""
 _w=0; until [ "$(control STATUS)" = "OK locked" ] || [ $_w -ge 40 ]; do sleep 0.5; _w=$((_w + 1)); done
 if [ "$(control STATUS)" = "OK locked" ] && kill -0 "$KPID" 2>/dev/null; then
@@ -264,7 +313,7 @@ if [ "$(control STATUS)" = "OK locked" ] && kill -0 "$KPID" 2>/dev/null; then
 else fail "after disconnect: status '$(control STATUS)'"; fi
 kill "$KPID" 2>/dev/null; KPID=""
 
-case "$(cat "$T/authd.log")" in *correct-horse*) fail "a password appeared in the log" ;;
+case "$(cat "$T/authd.log.all" "$T/authd.log")" in *correct-horse*) fail "a password appeared in the log" ;;
     *) pass "no password appears in the log" ;; esac
 
 echo

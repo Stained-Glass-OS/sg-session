@@ -583,11 +583,13 @@ rdp:
 	done
 	wayland-scanner client-header test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-client-protocol.h
 	wayland-scanner private-code test/protocol/virtual-keyboard-unstable-v1.xml build/virtual-keyboard-unstable-v1-protocol.c
-	$(CC) $(CFLAGS_BRIDGE) -Ibuild -Irdp -o build/sg-rdp-authd greeter/sg-rdp-authd.c rdp/sg-rdp-stream.c \
+	$(CC) $(CFLAGS_BRIDGE) -Ibuild -Irdp -o build/sg-rdp-authd greeter/sg-rdp-authd.c rdp/sg-rdp-stream.c rdp/sg-planar.c \
 	    build/wlr-screencopy-unstable-v1-protocol.c build/wlr-virtual-pointer-unstable-v1-protocol.c \
 	    build/virtual-keyboard-unstable-v1-protocol.c \
 	    $$(pkg-config --cflags --libs freerdp-server3 freerdp3 winpr3 wayland-client xkbcommon)
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-rdp-pamcheck greeter/sg-rdp-pamcheck.c -lpam
+	$(CC) $(CFLAGS_BRIDGE) -Irdp -o build/planar-test test/planar-test.c rdp/sg-planar.c \
+	    $$(pkg-config --cflags --libs freerdp3 winpr3)
 	@echo "built the RDP login daemon and its PAM helper"
 
 test-rdp: rdp
@@ -596,7 +598,11 @@ test-rdp: rdp
 
 # Streaming: a real FreeRDP client into a headless sg-compositor session (the
 # compositor checkout beside this repo), lossless, typed into and clicked.
+# First the planar encoder against FreeRDP's own decoder (build/planar-test);
+# the end-to-end gate then runs the codec through a real client, and once
+# more with SG_RDP_CODEC=raw (mutant: SG_MUTANT_PLANAR_DELTA in sg-planar.c).
 test-rdp-stream: rdp
+	@[ ! -x build/planar-test ] || build/planar-test | tail -3 | grep -q 'RESULT: PASS' || { build/planar-test | grep -v '^PASS'; exit 1; }
 	@sh test/rdp-stream-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # The lock screen end to end: sg-compositor (beside this repo) + sg-lockd + the

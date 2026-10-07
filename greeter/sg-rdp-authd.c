@@ -645,6 +645,7 @@ static BOOL on_activate( freerdp_peer *peer )
     peer->context->update->pointer->PointerSystem( peer->context, &hide );
     ctx->activated = TRUE;
     sg_stream_start( ctx->stream, peer->context );
+    logmsg( "CODEC %s from=%s", sg_stream_codec( ctx->stream ), peer->hostname );
     return TRUE;
 }
 
@@ -763,7 +764,9 @@ static DWORD WINAPI peer_thread( LPVOID arg )
     freerdp_settings_set_bool( settings, FreeRDP_TlsSecurity, TRUE );
     freerdp_settings_set_bool( settings, FreeRDP_NlaSecurity, FALSE );
 
-    /* Planar bitmap updates, and nothing this server does not implement. */
+    /* Bitmap updates -- planar for a client that takes it without an alpha
+     * plane (DrawAllowSkipAlpha, kept only if the client advertises it too),
+     * else uncompressed -- and nothing this server does not implement. */
     freerdp_settings_set_bool( settings, FreeRDP_SupportGraphicsPipeline, FALSE );
     freerdp_settings_set_bool( settings, FreeRDP_RemoteFxCodec, FALSE );
     freerdp_settings_set_bool( settings, FreeRDP_NSCodec, FALSE );
