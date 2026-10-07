@@ -107,6 +107,9 @@ sg_supervise_shell() {
 # concurrent session neither overwrites nor reads another's. Where there is none
 # (a CI runner), a per-uid file in the state directory.
 sg_session_env() {
+    # SG_SESSION_ENV: a gate's own file (test/run-session-test.sh), so a gate
+    # never reads a stale one in the person's runtime directory, nor writes it
+    if [ -n "${SG_SESSION_ENV:-}" ]; then echo "$SG_SESSION_ENV"; return; fi
     _rt="/run/user/$(id -u)"
     if [ -d "$_rt" ] && [ -w "$_rt" ]; then
         echo "$_rt/sg-session.env"

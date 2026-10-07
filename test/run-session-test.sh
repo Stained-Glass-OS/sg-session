@@ -109,6 +109,14 @@ SG_LOG_DIR="$TMP/log"
 SG_DISPLAY_PATH="${SG_DISPLAY_PATH:-x11}"
 SG_USER="__sg_no_such_user__"
 export SG_LIB SG_BIN SG_ROOT SG_PREFIX SG_STATE SG_LOG_DIR SG_DISPLAY_PATH SG_USER
+# The session publishes its display in a file of this run's own: in
+# /run/user/<uid> a file left by an earlier run (another gate's, a killed
+# one) was read before this session wrote its own, and sg-session-check
+# looked for the desktop on a display that was not this session's
+# ("no Wine desktop window on :5", 2026-10-07)
+SG_SESSION_ENV="$SG_ROOT/session.env"
+export SG_SESSION_ENV
+rm -f "$SG_SESSION_ENV"
 # Keep the session's output on this harness's log rather than the journal.
 SG_LOG_TO_JOURNAL=0
 export SG_LOG_TO_JOURNAL
