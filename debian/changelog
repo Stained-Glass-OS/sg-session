@@ -1,3 +1,12 @@
+sg-session (0.1.0-169) unstable; urgency=medium
+
+  * Administrators read the system journal (David): sg-admins gets the
+    journal's ACL, as adm and wheel do (tmpfiles, applied on upgrade); an
+    administrator's journalctl showed only their own session. sg-image's
+    boot-test checks it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 14:34:00 -0700
+
 sg-session (0.1.0-168) unstable; urgency=medium
 
   * Office's work-account sign-in (PR #1): sg-wam-msal, the Linux side of
