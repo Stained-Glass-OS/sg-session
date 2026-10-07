@@ -103,7 +103,10 @@ fi
 # single-user dev gate, where there is no separate service session to leak into.
 _sysuser="${SG_SYSTEM_USER:-sgsystem}"
 if id "$_sysuser" >/dev/null 2>&1 && [ "$_sysuser" != "$(id -un)" ]; then
-    if pgrep -u "$_sysuser" -f 'explorer\.exe' >/dev/null 2>&1; then
+    # explorer.exe as a program, not as text: the printer helpers' command
+    # lines carry WINEDLLOVERRIDES=...;explorer.exe=d, which matched and
+    # failed boot-tests now and then (2026-10-06)
+    if pgrep -u "$_sysuser" -f 'explorer\.exe( |$)' >/dev/null 2>&1; then
         fail "an explorer shell is running as $_sysuser -- a shell leaked into session 0"
     else
         pass "no interactive shell leaked into the service session"

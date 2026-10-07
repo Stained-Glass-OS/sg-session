@@ -1,3 +1,12 @@
+sg-session (0.1.0-153) unstable; urgency=medium
+
+  * sg-session-check: the leaked-shell check matches explorer.exe as a
+    program, not as text: the printer helpers' command lines carry
+    WINEDLLOVERRIDES=...;explorer.exe=d as SYSTEM, which failed boot-tests
+    now and then ("an explorer shell is running as sgsystem").
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 06 Oct 2026 18:02:03 -0700
+
 sg-session (0.1.0-152) unstable; urgency=medium
 
   * Linux programs started from the shell open on X11 again when they are
