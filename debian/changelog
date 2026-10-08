@@ -1,3 +1,14 @@
+sg-session (0.1.0-178) unstable; urgency=medium
+
+  * The elevation broker hands the elevated program every argument, an empty
+    one ("") too: it stopped at the first empty one and dropped the rest.
+    Settings' kiosk app (David: picking Sonos went back to "No kiosk app":
+    its request has empty arguments for the shortcut's arguments and the
+    Linux app) and "Nobody" for the automatic sign-in were lost so.
+    audit-test checks it; mutant SG_MUTANT_BROKER_DROPS_EMPTY_ARGS.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 08 Oct 2026 11:10:04 -0700
+
 sg-session (0.1.0-177) unstable; urgency=medium
 
   * A sound when a USB device is plugged in or taken out (David: like

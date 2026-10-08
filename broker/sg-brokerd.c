@@ -813,7 +813,15 @@ int main(void)
         cwd = p; p += strlen(p) + 1;
         while (p < end && *p) { if (envc < (int)(sizeof(envp)/sizeof(envp[0])) - 1) envp[envc++] = p; p += strlen(p) + 1; }
         if (p < end) p += 1;   /* skip the empty separator */
+        /* every argument to the end, an empty one ("") too: stopping at the
+         * first empty one dropped the rest (David 2026-10-08: the kiosk app
+         * -- '/admin kiosk "Sonos" "C:\...\Sonos.exe" "" ...' lost its last
+         * three -- and "Nobody" for the automatic sign-in were not kept) */
+#ifndef SG_MUTANT_BROKER_DROPS_EMPTY_ARGS
+        while (p < end) { if (argc < (int)(sizeof(argv)/sizeof(argv[0])) - 1) argv[argc++] = p; p += strlen(p) + 1; }
+#else
         while (p < end && *p) { if (argc < (int)(sizeof(argv)/sizeof(argv[0])) - 1) argv[argc++] = p; p += strlen(p) + 1; }
+#endif
         envp[envc] = NULL; argv[argc] = NULL;
         if (argc == 0) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
 

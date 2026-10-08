@@ -87,7 +87,7 @@ broker() {   # consent pamcheck
     sudo -n env SG_BROKER_TEST=1 SG_BROKER_TEST_CONSENT="$1" SG_BROKER_TEST_ADMIN_USER="$ME" \
         SG_BROKER_TEST_ADMIN_PASS=not-in-the-spool SG_BROKER_PAMCHECK="$2" SG_BROKER_SOCK="$SOCK" \
         SG_BROKER_FOREGROUND=1 SG_BROKERD_LOG="$T/broker.log" SG_SYSTEM_USER="$ME" SG_ADMIN_GROUP="$MYGROUP" \
-        SG_AUDIT_SPOOL="$SPOOL" "$T/sg-brokerd" >/dev/null 2>&1 &
+        SG_AUDIT_SPOOL="$SPOOL" "${BROKERD:-$T/sg-brokerd}" >/dev/null 2>&1 &
     BP=$!
     i=0; while [ ! -S "$SOCK" ] && [ $i -lt 30 ]; do sleep 0.2; i=$((i + 1)); done
 }
@@ -104,6 +104,23 @@ SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/sh -c 'sleep 2; exit 7' >/dev/nul
 t1=$(date +%s)
 { [ "$rc" = 7 ] && [ $((t1 - t0)) -ge 2 ]; } && pass "sg-elevate waits for the elevated program and ends with its code (7)" \
     || fail "sg-elevate: exit $rc after $((t1 - t0)) s"
+# every argument reaches the elevated program, empty ones too (David
+# 2026-10-08: Settings' kiosk app request lost everything after its first "")
+args_through() {   # BROKERD -> what the elevated program was given
+    rm -f "$T/args.out"
+    SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/sh -c 'printf "%s|" "$@" > "$0"' "$T/args.out" a "" b "" >/dev/null 2>&1
+    sleep 1; cat "$T/args.out" 2>/dev/null
+}
+got=$(args_through)
+[ "$got" = "a||b||" ] && pass "the elevated program gets every argument, empty ones too (a, \"\", b, \"\")" \
+    || fail "the elevated program got '$got' (want a||b||)"
+gcc -O2 -Wall -DSG_MUTANT_BROKER_DROPS_EMPTY_ARGS -o "$T/sg-brokerd.mut" "$HERE/broker/sg-brokerd.c" \
+    && chmod 755 "$T/sg-brokerd.mut" && BROKERD="$T/sg-brokerd.mut" broker yes "$T/pam-no"
+got=$(args_through)
+[ "$got" != "a||b||" ] && pass "MUTANT BROKER_DROPS_EMPTY_ARGS (stops at the first \"\") is caught ($got)" \
+    || fail "MUTANT BROKER_DROPS_EMPTY_ARGS not caught"
+broker yes "$T/pam-no"
+drain
 drain
 broker no "$T/pam-yes"
 sudo -n -u "$SG_OTHER" env SG_BROKER_SOCK="$SOCK" "$T/sg-elevate" -- /bin/true >/dev/null 2>&1; sleep 1
