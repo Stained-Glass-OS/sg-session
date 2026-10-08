@@ -1,3 +1,18 @@
+sg-session (0.1.0-176) unstable; urgency=medium
+
+  * The screen turns with the PC (David: a tablet can auto-rotate, or turn
+    it off in Settings). sg-settingsctl display transform OUTPUT
+    normal|90|180|270 (kept per monitor, put back at sign-in), rotation
+    [lock yes|no], and autorotate: run by session-start where
+    iio-sensor-proxy finds an accelerometer, it follows monitor-sensor and
+    turns the built-in screen (eDP/DSI/LVDS) while the rotation lock is off;
+    unlocking takes the way the PC is held now. Touch and pen are mapped to
+    the output, and Wine's desktop follows the new size
+    (sg_desktop_follow). Depends on iio-sensor-proxy. settingsctl-test;
+    mutant SG_MUTANT_ROTATION_IGNORES_LOCK.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 07 Oct 2026 20:56:24 -0700
+
 sg-session (0.1.0-175) unstable; urgency=medium
 
   * Stained Glass Firewall (David 2026-10-07: "build a firewall in by

@@ -407,13 +407,17 @@ def display(args):
             for m in o.get("modes", []):
                 out.append("MODE %s\t%s\t%s\t%s" % (clean(name), fmt_mode(m), yn(m.get("current")),
                                                     yn(m.get("preferred"))))
+            out.append("TRANSFORM %s\t%s" % (clean(name), transform_of(o)))
         return out
-    if len(args) == 3 and args[0] in ("mode", "scale"):
+    if len(args) == 3 and args[0] in ("mode", "scale", "transform"):
         if not OUTPUT_NAME.fullmatch(args[1]):
             raise Fail("invalid", "not an output name")
         if args[1] not in [o.get("name") for o in outputs()]:
             raise Fail("notfound", "no output %s" % args[1])
-        if args[0] == "mode":
+        if args[0] == "transform":
+            one_of(args[2], TRANSFORMS, "orientation")
+            run(["wlr-randr", "--output", args[1], "--transform", args[2]])
+        elif args[0] == "mode":
             m = MODE.fullmatch(args[2])
             if not m:
                 raise Fail("invalid", "a mode is WIDTHxHEIGHT[@HZ]")
@@ -432,7 +436,7 @@ def display(args):
         return []
     if args == ["restore"]:
         return display_restore()
-    raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S | restore]")
+    raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S | transform OUTPUT T | restore]")
 
 
 def exact_mode(o, m):
@@ -483,7 +487,119 @@ def display_restore():
         if re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", s) and abs(float(o.get("scale") or 1) - float(s)) > 0.01:
             run(["wlr-randr", "--output", name, "--scale", s])
             out.append("RESTORED %s\tscale\t%s" % (clean(name), s))
+        t = str(want.get("transform", ""))
+        if t in TRANSFORMS and transform_of(o) != t:
+            run(["wlr-randr", "--output", name, "--transform", t])
+            out.append("RESTORED %s\ttransform\t%s" % (clean(name), t))
     return out
+
+
+# ---- screen rotation (David 2026-10-07: "a tablet can auto rotate, or turn it off
+# in Settings"): the compositor's output transform, which the touch screen and the
+# pen follow (they are mapped to the output) and Wine's desktop follows as it
+# follows any new size (sg_desktop_follow). The accelerometer comes through
+# iio-sensor-proxy (monitor-sensor); "autorotate" turns the built-in screen
+# while the rotation lock is off. -----------------------------------------------------
+
+TRANSFORMS = ("normal", "90", "180", "270")
+# iio-sensor-proxy's orientation -> the transform that keeps the picture upright,
+# as GNOME maps them: left side up (turned clockwise) is Windows' Portrait
+ORIENTATION = {"normal": "normal", "left-up": "90", "bottom-up": "180", "right-up": "270"}
+PANEL = re.compile(r"(eDP|DSI|LVDS)-")
+
+
+def transform_of(o):
+    t = str(o.get("transform") or "normal")
+    return t if t in TRANSFORMS else "normal"
+
+
+def panel_output(outs):
+    """The built-in screen, which turns with the PC: eDP, DSI or LVDS, or the
+    only output there is."""
+    for o in outs:
+        if PANEL.match(o.get("name", "")):
+            return o
+    return outs[0] if len(outs) == 1 else None
+
+
+def has_accelerometer():
+    try:
+        out = run(["busctl", "get-property", "--system", "net.hadess.SensorProxy", "/net/hadess/SensorProxy",
+                   "net.hadess.SensorProxy", "HasAccelerometer"], timeout=5)
+    except Fail:
+        return False
+    return out.strip() == "b true"
+
+
+def rotation_locked(c):
+    return bool((c.get("rotation") or {}).get("lock"))
+
+
+def orientation_file():
+    return os.path.join(runtime_dir(), "sg-orientation")
+
+
+def apply_orientation(orient):
+    """Turn the built-in screen to keep the picture upright."""
+    if orient not in ORIENTATION:
+        return
+    o = panel_output(outputs())
+    if o and transform_of(o) != ORIENTATION[orient]:
+        run(["wlr-randr", "--output", o["name"], "--transform", ORIENTATION[orient]])
+
+
+def rotation(args):
+    """rotation: ROTATION lock sensor; rotation lock yes|no."""
+    c = load_config()
+    if not args:
+        return ["ROTATION %s\t%s" % (yn(rotation_locked(c)), yn(has_accelerometer()))]
+    if len(args) == 2 and args[0] == "lock":
+        one_of(args[1], ("yes", "no"), "lock")
+        c.setdefault("rotation", {})["lock"] = args[1] == "yes"
+        save_config(c)
+        if args[1] == "no":
+            # unlocked: the screen takes the way the PC is held now
+            try:
+                with open(orientation_file()) as f:
+                    apply_orientation(f.read().strip())
+            except OSError:
+                pass
+        return []
+    raise Fail("invalid", "usage: rotation [lock yes|no]")
+
+
+ORIENT_LINE = re.compile(r"orientation(?: changed)?: ([a-z-]+)")
+
+
+def autorotate(args):
+    """Runs for the session: monitor-sensor's orientation, kept for an unlock,
+    turns the built-in screen while the rotation lock is off."""
+    exe = tool("monitor-sensor")
+    if not exe:
+        raise Fail("unsupported", "monitor-sensor is not installed")
+    p = subprocess.Popen([exe, "--accel"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, text=True)
+    for line in p.stdout:
+        m = ORIENT_LINE.search(line)
+        if not m or m.group(1) not in ORIENTATION:
+            continue
+        try:
+            with open(orientation_file() + ".tmp", "w") as f:
+                f.write(m.group(1) + "\n")
+            os.replace(orientation_file() + ".tmp", orientation_file())
+        except OSError:
+            pass
+        if not rotation_locked(load_config()) or os.environ.get("SG_MUTANT_ROTATION_IGNORES_LOCK") == "1":
+            try:
+                apply_orientation(m.group(1))
+            except Fail:
+                pass
+    return []
+
+
+def start_autorotate():
+    if tool("monitor-sensor") and has_accelerometer():
+        start("sg-autorotate", [os.path.abspath(sys.argv[0]), "autorotate"])
 
 
 # ---- night light (the compositor's gamma, through wlsunset) --------------------------------
@@ -1049,6 +1165,10 @@ def session_start(args):
             f(c)
         except Fail:
             pass
+    try:
+        start_autorotate()
+    except Fail:
+        pass
     return []
 
 
@@ -1101,7 +1221,7 @@ COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightli
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen, "look": look, "display-scale": display_scale,
-            "printers": printers}
+            "printers": printers, "rotation": rotation, "autorotate": autorotate}
 
 
 def main(argv):

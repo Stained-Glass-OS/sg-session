@@ -81,9 +81,18 @@ stand_in("wlopm", "")
 stand_in("sg-lockctl", "echo 'OK locked'")
 stand_in("systemctl", "[ -f %s/polkit-no ] && { echo 'Access denied' >&2; exit 1; }; exit 0" % tmp)
 stand_in("busctl", """case "$*" in
+  *HasAccelerometer) [ -f %(t)s/no-accel ] && echo 'b false' || echo 'b true' ;;
   *CanSuspend) echo 's "yes"' ;;
   *CanHibernate) echo 's "challenge"' ;;
-esac""")
+esac""" % {"t": tmp})
+# the accelerometer (iio-sensor-proxy's monitor-sensor): held upright, turned to
+# its left side up, then upside down
+stand_in("monitor-sensor", """echo "    Waiting for iio-sensor-proxy to appear"
+echo "=== Has accelerometer (orientation: normal, tilt: vertical)"
+sleep 0.3; echo "    Accelerometer orientation changed: left-up"
+sleep 0.3; echo "    Accelerometer tilt changed: tilted-down"
+sleep 0.3; echo "    Accelerometer orientation changed: bottom-up"
+exit 0""")
 stand_in("dpkg-query", """case "$*" in
   *libfoo1) printf 1.2-3 ;;
   *wine-sg) printf 10.0-37 ;;
@@ -253,6 +262,64 @@ for bad in (["mode", "Virtual-1", "big"], ["mode", "Virtual-1", "1280x720 --off"
     check("display refuses %s" % " ".join(bad), code == 2 and not [c for c in calls() if "--json" not in c], lines)
 code, lines = ctl("display", env=dict(ENV, WAYLAND_DISPLAY=""))
 check("display: unsupported off the compositor", code == 4 and lines[-1].startswith("ERROR unsupported"), lines)
+
+# ---- screen rotation (David 2026-10-07: a tablet turns its screen, or not)
+code, lines = ctl("display")
+check("display: the output's orientation", "TRANSFORM Virtual-1\tnormal" in lines, lines)
+calls()
+code, lines = ctl("display", "transform", "Virtual-1", "90")
+check("display transform: wlr-randr turns the output (Portrait)",
+      code == 0 and "wlr-randr --output Virtual-1 --transform 90" in calls(), lines)
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json")) as f:
+    cfg = json.load(f)
+check("display transform: kept for the monitor", cfg["display"]["output:Virtual-1"].get("transform") == "90", cfg)
+open(LOG, "w").close()
+code, lines = ctl("display", "restore")
+check("display restore: the orientation is put back",
+      "wlr-randr --output Virtual-1 --transform 90" in calls() and "RESTORED Virtual-1\ttransform\t90" in lines, lines)
+cfg["display"]["output:Virtual-1"].pop("transform")
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json"), "w") as f:
+    json.dump(cfg, f)
+code, lines = ctl("display", "transform", "Virtual-1", "45")
+check("display transform refuses 45", code == 2 and not [c for c in calls() if "--transform" in c], lines)
+code, lines = ctl("rotation")
+check("rotation: unlocked, and this PC has an accelerometer", lines[0] == "ROTATION no\tyes", lines)
+open(os.path.join(tmp, "no-accel"), "w").close()
+code, lines = ctl("rotation")
+check("rotation: no accelerometer is said", lines[0] == "ROTATION no\tno", lines)
+calls()
+ctl("session-start")
+time.sleep(1.5)
+check("session-start without an accelerometer: no automatic rotation", not [c for c in calls() if c.startswith("monitor-sensor")])
+os.unlink(os.path.join(tmp, "no-accel"))
+
+
+def turns(env=None):
+    """What wlr-randr was told while the PC turned (monitor-sensor's story)."""
+    calls()
+    ctl("autorotate", env=env)
+    return [c.split("--transform ")[1] for c in calls() if "--transform" in c]
+
+
+t = turns()
+check("autorotate: left side up turns the screen to Portrait (90), upside down to 180; tilt is no turn",
+      t == ["90", "180"], t)
+code, lines = ctl("rotation", "lock", "yes")
+t = turns()
+check("rotation lock: the screen stays as it is", code == 0 and t == [], t)
+t = turns(dict(ENV, SG_MUTANT_ROTATION_IGNORES_LOCK="1"))
+check("MUTANT ROTATION_IGNORES_LOCK (it turns anyway) is caught", t != [], t)
+with open(os.path.join(ENV["XDG_RUNTIME_DIR"], "sg-orientation"), "w") as f:
+    f.write("right-up\n")
+calls()
+code, lines = ctl("rotation", "lock", "no")
+check("rotation unlocked: the screen takes the way the PC is held now (right side up: 270)",
+      code == 0 and "wlr-randr --output Virtual-1 --transform 270" in calls(), lines)
+calls()
+ctl("session-start")
+time.sleep(1.5)
+check("session-start with an accelerometer: the screen turns with the PC",
+      [c for c in calls() if c.startswith("monitor-sensor --accel")] != [])
 
 # ---- night light
 code, lines = ctl("nightlight")
