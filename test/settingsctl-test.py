@@ -321,6 +321,42 @@ time.sleep(1.5)
 check("session-start with an accelerometer: the screen turns with the PC",
       [c for c in calls() if c.startswith("monitor-sensor --accel")] != [])
 
+# ---- the device sounds (David 2026-10-07: a sound when a device is plugged in or
+# taken out): udev's events for a USB device and its two interfaces, then out again
+snd = os.path.join(tmp, "sounds")
+subprocess.run([sys.executable, os.path.join(HERE, "..", "sounds", "make-device-sounds.py"), snd], check=True)
+with _wave.open(os.path.join(snd, "device-connect.wav")) as w:
+    secs = w.getnframes() / w.getframerate()
+check("device sounds: short sounds are made (0.2-1 s)", 0.2 < secs < 1.0 and
+      os.path.exists(os.path.join(snd, "device-disconnect.wav")), str(secs))
+UDEV_EVENT = "UDEV  [100.0] %(a)s /devices/usb1/1-2%(sub)s (usb)\nACTION=%(a)s\nDEVPATH=/devices/usb1/1-2%(sub)s\nSUBSYSTEM=usb\nDEVTYPE=%(t)s\n\n"
+stand_in("udevadm", "printf 'monitor will print the received events for:\\nUDEV - the event which udev sends out after rule processing\\n\\n'\n" +
+         "printf '%s'\n" % "".join(UDEV_EVENT % e for e in (
+             {"a": "add", "sub": "", "t": "usb_device"}, {"a": "add", "sub": "/1-2:1.0", "t": "usb_interface"},
+             {"a": "add", "sub": "/1-2:1.1", "t": "usb_interface"}, {"a": "remove", "sub": "/1-2:1.0", "t": "usb_interface"},
+             {"a": "remove", "sub": "", "t": "usb_device"})).replace("\n", "\\n") + "exit 0")
+SENV = dict(ENV, SG_SOUNDS_DIR=snd)
+
+
+def sounds_played(env=SENV):
+    calls()
+    ctl("device-sounds-run", env=env)
+    _time.sleep(0.3)
+    return [os.path.basename(c.split()[-1]) for c in calls() if c.startswith("pw-play")]
+
+
+got = sounds_played()
+check("device sounds: a device in, then out -- one sound each, not one per interface",
+      got == ["device-connect.wav", "device-disconnect.wav"], got)
+got = sounds_played(dict(SENV, SG_MUTANT_DEVSOUND_EVERY_INTERFACE="1"))
+check("MUTANT DEVSOUND_EVERY_INTERFACE (a sound for each interface too) is caught", len(got) > 2, got)
+code, lines = ctl("device-sounds")
+check("device-sounds: on to begin with", lines[0] == "DEVICESOUNDS on", lines)
+code, lines = ctl("device-sounds", "off")
+got = sounds_played()
+check("device-sounds off: no sounds", code == 0 and got == [], got)
+ctl("device-sounds", "on")
+
 # ---- night light
 code, lines = ctl("nightlight")
 check("nightlight: off by default", lines[0].startswith("NIGHTLIGHT off\t4000\tyes"), lines)

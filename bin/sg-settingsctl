@@ -307,14 +307,71 @@ CHIME = os.environ.get("SG_CHIME", "/usr/share/sounds/stained-glass/volume-chang
 def chime():
     """The volume chime, on the default output, not waited for: at the new
     volume, so the person hears where it is (David 2026-10-02)."""
-    if not os.path.exists(CHIME):
+    play(CHIME)
+
+
+def play(path):
+    """A sound on the default output, not waited for."""
+    if not os.path.exists(path):
         return
     for player in (["pw-play", "--media-role", "Notification"], ["paplay"], ["aplay", "-q"]):
         exe = tool(player[0])
         if exe:
-            subprocess.Popen([exe] + player[1:] + [CHIME], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            subprocess.Popen([exe] + player[1:] + [path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
             return
+
+
+# ---- the device sounds (David 2026-10-07: "a sound effect on device attach, like
+# Windows"): a USB device plugged in or taken out, as udev tells it; one sound
+# per device (not per interface), and none while they are turned off. ----------
+
+SOUNDS = os.environ.get("SG_SOUNDS_DIR") or "/usr/share/sounds/stained-glass"
+
+
+def devsounds_on(c):
+    return (c.get("devicesounds") or {}).get("on", True)
+
+
+def device_sounds(args):
+    """device-sounds: DEVICESOUNDS on|off; device-sounds on|off."""
+    c = load_config()
+    if not args:
+        return ["DEVICESOUNDS %s" % ("on" if devsounds_on(c) else "off")]
+    if len(args) == 1:
+        one_of(args[0], ("on", "off"), "device sounds")
+        c["devicesounds"] = {"on": args[0] == "on"}
+        save_config(c)
+        return []
+    raise Fail("invalid", "usage: device-sounds [on|off]")
+
+
+def device_sounds_run(args):
+    """Runs for the session: udev's USB events, a sound for each device that
+    comes or goes."""
+    exe = tool("udevadm")
+    if not exe:
+        raise Fail("unsupported", "udevadm is not installed")
+    p = subprocess.Popen([exe, "monitor", "--udev", "--subsystem-match=usb", "--property"],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True)
+    event = {}
+    for line in p.stdout:
+        line = line.rstrip("\n")
+        if "=" in line and not line.startswith(" "):
+            k, v = line.split("=", 1)
+            event[k] = v
+            continue
+        if line.strip() or not event:
+            continue
+        # a whole event (a blank line ends it)
+        action, kind = event.get("ACTION"), event.get("DEVTYPE")
+        event = {}
+        if kind != "usb_device" and os.environ.get("SG_MUTANT_DEVSOUND_EVERY_INTERFACE") != "1":
+            continue
+        if action not in ("add", "remove") or not devsounds_on(load_config()):
+            continue
+        play(os.path.join(SOUNDS, "device-connect.wav" if action == "add" else "device-disconnect.wav"))
+    return []
 
 
 # ---- Bluetooth (bluez, through bluetoothctl) -----------------------------------------------
@@ -1169,6 +1226,11 @@ def session_start(args):
         start_autorotate()
     except Fail:
         pass
+    if tool("udevadm"):
+        try:
+            start("sg-devsounds", [os.path.abspath(sys.argv[0]), "device-sounds-run"])
+        except Fail:
+            pass
     return []
 
 
@@ -1221,7 +1283,8 @@ COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightli
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen, "look": look, "display-scale": display_scale,
-            "printers": printers, "rotation": rotation, "autorotate": autorotate}
+            "printers": printers, "rotation": rotation, "autorotate": autorotate,
+            "device-sounds": device_sounds, "device-sounds-run": device_sounds_run}
 
 
 def main(argv):

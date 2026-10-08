@@ -54,6 +54,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	@# the volume chime, made here (sounds/make-chime.py: our own, no recording)
 	install -d $(DESTDIR)$(PREFIX)/share/sounds/stained-glass
 	python3 sounds/make-chime.py $(DESTDIR)$(PREFIX)/share/sounds/stained-glass/volume-change.wav
+	@# the device sounds, made here too (sounds/make-device-sounds.py): a USB device in or out
+	python3 sounds/make-device-sounds.py $(DESTDIR)$(PREFIX)/share/sounds/stained-glass
 	@# Voice typing: the engine (sgspeech.py) and its command. The model ships as the
 	@# package sg-speech-model-parakeet (sg-image builds it into the image); a machine
 	@# without it downloads the model through sg-speechd on first use.
