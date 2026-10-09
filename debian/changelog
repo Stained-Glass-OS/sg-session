@@ -1,3 +1,47 @@
+sg-session (0.1.0-180) unstable; urgency=medium
+
+  * Restore points and going back (David 2026-10-08), the whole OS on one
+    partition as before. New installs are btrfs (sg-install,
+    lib/sg-btrfs-layout.sh): @ is the system, mounted by
+    rootflags=subvol=@ and the default subvolume; @home, @var-log,
+    @var-cache, @var-tmp and @prefix (the machine's Windows programs and
+    the users' Windows profiles) are subvolumes of their own in the same
+    pool, so going back never takes people's files or Windows programs.
+  * sg-snapshot: a read-only restore point of @ before every apt run that
+    changes packages (APT DPkg::Pre-Install-Pkgs, version 3, and before
+    PackageKit's offline update with its prepared list), labelled with
+    what changes; the last three kept, the oldest first when the drive is
+    low. Boot menu entries "Stained Glass OS -- before the update of
+    <date>" (Sg-restore-*.conf, no sort-key: below the system's own) start
+    a writable copy of each (made again after it was started). rollback ID
+    makes a restore point the system at the next start (a restore point of
+    the current system first; kernels it lacks hidden from the boot menu;
+    the update's upgraded versions kept from apt).
+  * ext4 machines: the APT hook keeps the replaced versions of our own
+    packages (dpkg-repack); "Undo the last update" (Settings, or the boot
+    menu entry "Stained Glass OS -- undo the last update") reinstalls
+    exactly that set before anyone signs in (sg-undo-update.service,
+    systemctl offline for the maintainer scripts: their restarts waited
+    for this very start; never stopped by the package's own upgrade).
+  * Converting an ext4 system drive to btrfs (Control Panel > Recovery,
+    through sg-admind): checks, then an initrd of its own (initramfs-tools
+    -d, convert/sg-convert-root, with btrfs-convert, libgcc_s and the
+    commands klibc lacks) started once from the boot menu runs
+    btrfs-convert before the root is mounted and makes the layout; the
+    old file system is kept (ext2_saved) until the person keeps the
+    conversion or undoes it; a failed step leaves a working system.
+  * sg-boot-splash leaves sg-snapshot's entries alone (no recovery twin;
+    the conversion's entry not made quiet). sg-update-prepare does not run
+    while a restore point runs.
+  * Gates: test/restore-points-test.sh (lint; mutants NO_PIN,
+    ANY_PACKAGE, UNDO_LOCKS, UNDO_ONLINE), make test-snapshot (loop
+    devices, the conversion's initrd built and run with only its own
+    commands; mutants KEEP_ALL, CONVERT_NO_SAVED, CONVERT_KEEP_HOME),
+    boot-splash-test's Sg- entry case.
+  * Depends: btrfs-progs, dpkg-repack, initramfs-tools.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 08 Oct 2026 19:24:15 -0700
+
 sg-session (0.1.0-179) unstable; urgency=medium
 
   * Tests: firewall-test ran nothing after the question's checks as root

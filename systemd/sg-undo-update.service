@@ -1,0 +1,20 @@
+# "Undo the last update" (ext4 system drives: sg-snapshot keeps the versions
+# of our own packages an update replaced): asked for by Settings > Recovery
+# (sg-snapshot undo-update) or by the boot menu's "Stained Glass OS -- undo
+# the last update" entry (sg.undo-update=1). Before anyone signs in and
+# before the Windows side starts, as the offline update does.
+[Unit]
+Description=Undo the last update of Stained Glass OS
+ConditionKernelCommandLine=!systemd.volatile
+ConditionPathExists=|/var/lib/stained-glass-rollback/pending
+ConditionKernelCommandLine=|sg.undo-update=1
+After=local-fs.target
+Before=greetd.service display-manager.service sg-prefix-init.service sg-wineserver.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-snapshot undo-apply
+TimeoutStartSec=1h
+
+[Install]
+WantedBy=multi-user.target

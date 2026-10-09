@@ -1,0 +1,6 @@
+// Stained Glass OS: before every apt run that changes packages, a restore
+// point of the system (btrfs), or the versions of our own packages the run
+// replaces, for "Undo the last update" (ext4). sg-snapshot never stops an
+// update: a restore point that cannot be taken is logged and apt goes on.
+DPkg::Pre-Install-Pkgs { "/usr/bin/sg-snapshot apt-hook >/dev/null || true"; };
+DPkg::Tools::Options::/usr/bin/sg-snapshot::Version "3";

@@ -67,6 +67,7 @@ loud_line() {
 recovery_entry() {
     e=$1
     case "$e" in *-recovery.conf|*-live.conf) return 0 ;; esac
+    case "${e##*/}" in Sg-*|sg-*) return 0 ;; esac
     [ -f "$e" ] || return 0
     # An entry on trial (ENTRY+LEFT[-DONE].conf, boot counting: a Surface
     # kernel, kernel/90-sg-boot-tries) has no twin until it has started
@@ -117,6 +118,9 @@ entries() {
         for e in "$E"/loader/entries/*.conf; do
             [ -f "$e" ] || continue
             case "$e" in *-live.conf|*-recovery.conf) continue ;; esac
+            # sg-snapshot's own entries (restore points, undo, the conversion)
+            # are left as it makes them: no twin, the conversion not quiet
+            case "${e##*/}" in Sg-*|sg-*) continue ;; esac
             opts=$(sed -n 's/^options[[:space:]]*//p' "$e" | head -1)
             if [ -n "$opts" ]; then
                 new=$(quiet_line "$opts")

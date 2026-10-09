@@ -31,8 +31,10 @@
 #
 # The live system is the installer: booted from a stick with the "live" entry
 # (systemd.volatile=overlay), its root partition is mounted read-only under a
-# tmpfs overlay. Its files are copied into a fresh ext4 on the target, and the
-# kernel and boot loader into the target disk's EFI system partition -- or,
+# tmpfs overlay. Its files are copied into a fresh btrfs on the target -- one
+# partition, subvolumes for the system (@, what restore points are taken of)
+# and for what going back must never take (homes, logs, caches, the Windows
+# programs' prefix; lib/sg-btrfs-layout.sh) -- and the kernel and boot loader into the target disk's EFI system partition -- or,
 # where that belongs to another operating system, into an extended boot loader
 # partition of our own beside it. Nothing that was not chosen is touched:
 # other partitions, and other systems' boot loaders, stay as they were.
@@ -42,6 +44,8 @@
 set -eu
 
 SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=../lib/sg-btrfs-layout.sh
+. "$SG_LIB/sg-btrfs-layout.sh"
 PATH="$PATH:/usr/sbin:/sbin"
 GIB=$((1024 * 1024 * 1024))
 MIB=$((1024 * 1024))
@@ -461,19 +465,31 @@ if [ "$(esp_of "$(boot_disk)")" = "$ESP_PART" ]; then die "that is the installat
 WORK=$(mktemp -d /run/sg-install.XXXXXX)
 cleanup() {
     [ -n "${CP_PID:-}" ] && kill "$CP_PID" 2>/dev/null
-    for m in "$WORK/boot" "$WORK/esp" "$WORK/root" "$WORK/src"; do
+    for m in "$WORK/boot" "$WORK/esp" "$WORK/top" "$WORK/src"; do
         mountpoint -q "$m" 2>/dev/null && umount "$m"
     done
-    rm -rf "$WORK"
+    sg_btrfs_umount "$WORK/root"
+    # never through a mount that would not let go
+    if ! awk -v w="$WORK" 'index($2, w) == 1 { found = 1 } END { exit !found }' /proc/self/mounts; then
+        rm -rf "$WORK"
+    fi
 }
 trap cleanup EXIT INT TERM
-mkdir -p "$WORK/src" "$WORK/root" "$WORK/esp" "$WORK/boot"
+mkdir -p "$WORK/src" "$WORK/root" "$WORK/esp" "$WORK/boot" "$WORK/top"
 
 # --- 1. the files ------------------------------------------------------------
 progress 5 "Formatting the partition"
-mkfs.ext4 -F -q -L StainedGlass "$ROOT_PART" >/dev/null 2>&1 || die "cannot format $ROOT_PART"
+# btrfs: the system (@) and, beside it in the same pool of free space, what a
+# restore point leaves alone (sg-btrfs-layout.sh)
+mkfs.btrfs -f -q -L StainedGlass "$ROOT_PART" >/dev/null 2>&1 || die "cannot format $ROOT_PART"
+reprobe "$ROOT_PART"
+mount "$ROOT_PART" "$WORK/top" || die "cannot mount $ROOT_PART"
+sg_btrfs_create "$WORK/top" || die "cannot create the system drive's subvolumes"
+umount "$WORK/top"
+ROOT_FSUUID=$(blkid -o value -s UUID "$ROOT_PART")
+[ -n "$ROOT_FSUUID" ] || die "cannot read the new file system's UUID"
 mount -o ro "$SRC_ROOT" "$WORK/src" || die "cannot read the live system's files"
-mount "$ROOT_PART" "$WORK/root" || die "cannot mount $ROOT_PART"
+sg_btrfs_mount "$ROOT_PART" "$WORK/root" || die "cannot mount $ROOT_PART's subvolumes"
 R="$WORK/root"
 total=$(df -B1 --output=used "$WORK/src" | tail -1 | tr -d ' ')
 [ "$(df -B1 --output=avail "$R" | tail -1)" -gt "$total" ] || die "the partition is too small for the files"
@@ -489,6 +505,11 @@ done
 wait "$CP_PID" || { cat "$WORK/cp.err" >&2; CP_PID=""; die "copying the files failed"; }
 CP_PID=""
 umount "$WORK/src"
+# the subvolumes' own roots took the copied directories' modes; /var/tmp's
+# sticky bit matters
+chmod 1777 "$R/var/tmp"
+# the other subvolumes, mounted by name; the root by rootflags=subvol=@
+sg_btrfs_fstab "$R/etc/fstab" "$ROOT_FSUUID" || die "cannot write the new system's fstab"
 
 # --- 2. the boot loader and kernels ------------------------------------------
 progress 60 "Getting files ready for installation"
@@ -531,7 +552,7 @@ for e in "$S"/loader/entries/*.conf "$S"/loader/install/*.conf; do
     base=${e##*/}
     dest="$B/loader/entries/$TOKEN-${base#debian-}"
     sed -e "s#^\(linux\|initrd\) /debian/#\1 /$TOKEN/#" \
-        -e "s#^options \(.*\)\$#options root=PARTUUID=$ROOT_PARTUUID rw \1#" \
+        -e "s#^options \(.*\)\$#options root=PARTUUID=$ROOT_PARTUUID rootflags=subvol=@ rw \1#" \
         -e 's/^title .*/title Stained Glass OS/' "$e" > "$dest"
     [ -n "$opts" ] || opts=$(sed -n 's/^options //p' "$dest")
 done
@@ -666,5 +687,6 @@ PASSWORD=""
 progress 95 "Finishing up"
 sync
 [ "$B" = "$E" ] || umount "$WORK/boot"
-umount "$WORK/esp" "$WORK/root"
+umount "$WORK/esp"
+sg_btrfs_umount "$WORK/root"
 progress 100 "Installed. Remove the installation media and restart."

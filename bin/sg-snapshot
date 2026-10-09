@@ -1,0 +1,1176 @@
+#!/usr/bin/python3
+# sg-snapshot -- restore points of Stained Glass OS, and going back.
+#
+# On a system drive laid out by Setup on btrfs (lib/sg-btrfs-layout.sh: @ is
+# the system; homes, logs, caches and the Windows programs' prefix are
+# subvolumes of their own), a restore point is a read-only snapshot of @,
+# taken before every apt run that changes packages (the APT hook below: the
+# automatic updater's offline install, a manual apt upgrade, SG Store). The
+# last three are kept; when the drive is low on space the oldest go first.
+#
+# The restore points live in the top level, never mounted in the running
+# system: @snapshots/<id>/snapshot (read-only), @snapshots/<id>/info (what
+# and when), @snapshots/<id>/boot (a writable copy the boot menu starts:
+# "Stained Glass OS -- before the update of <date>"). A copy that was started
+# is made again from its snapshot at the next ordinary start, so each boot
+# of a restore point starts from what was saved.
+#
+# Going back (rollback ID, from Settings > Recovery or a restore point's own
+# boot): a restore point of the system as it is now is taken first ("before
+# going back"), @ is renamed @old-<when> (deleted at the next start), the
+# restore point is snapshotted into a new @ and made the default subvolume;
+# the boot entries of kernels the restore point does not have are hidden
+# (*.conf.sg-hidden) and come back when a later going back has them; the
+# versions the restore point was taken before are kept from apt
+# (/etc/apt/preferences.d/sg-went-back: a later version installs as usual).
+#
+# On any other system drive (ext4, as Setup made before), the package-level
+# fallback: the APT hook keeps the versions of our own packages (Maintainer
+# "Stained Glass OS") an update replaces, repacked (dpkg-repack), in
+# /var/lib/stained-glass-rollback/set; "Undo the last update" reinstalls
+# exactly that set at the next start, before anyone signs in
+# (sg-undo-update.service), or from the boot menu ("Stained Glass OS -- undo
+# the last update"), and keeps the undone versions from apt as above.
+#
+# Converting an ext4 system drive to btrfs (convert-*): btrfs-convert cannot
+# run on a mounted root, so it runs in an initrd of its own
+# (convert/: sg-convert-root, initramfs-tools with -d), started once
+# (bootctl set-oneshot) from a boot entry "Stained Glass OS -- converting the
+# system drive", which then makes the layout and restarts. btrfs-convert's
+# ext2_saved keeps the old file system until the person keeps the
+# conversion (convert-keep) or undoes it (convert-undo: btrfs-convert -r, in
+# the same initrd).
+#
+#   sg-snapshot status                facts, for Settings and the Control Panel
+#                                     (also published in /run/stained-glass-snapshot/status)
+#   sg-snapshot create [--label TEXT] [--kind auto|manual]
+#   sg-snapshot list
+#   sg-snapshot delete ID
+#   sg-snapshot rollback ID           going back, at the next start
+#   sg-snapshot apt-hook              APT DPkg::Pre-Install-Pkgs (version 3) on stdin
+#   sg-snapshot pre-offline-update    before PackageKit's offline update (its prepared list)
+#   sg-snapshot entries               the boot menu's restore points
+#   sg-snapshot boot                  at each start (sg-snapshot.service)
+#   sg-snapshot undo-update | undo-cancel | undo-apply
+#   sg-snapshot convert-check | convert-schedule | convert-cancel | convert-keep | convert-undo
+#
+# Every answer ends with OK, or ERROR <message> (exit 1).
+#
+# For the gates: SG_SNAP_DEV (the system drive's btrfs device), SG_SNAP_TOP
+# (where its top level is mounted), SG_SNAP_FSROOT (the subvolume / is, as
+# findmnt's FSROOT: /@), SG_SNAP_FSTYPE, SG_SNAP_ETC (/etc), SG_SNAP_CMDLINE
+# (/proc/cmdline), SG_SNAP_ENTRIES (the boot entries directory), SG_SNAP_STATUS,
+# SG_SNAP_NOW (seconds), SG_SNAP_LOW (bytes free below which old restore
+# points go), SG_SNAP_KEEP, SG_SNAP_ROLLBACK (/var/lib/stained-glass-rollback),
+# SG_SNAP_REPACK (dpkg-repack), SG_SNAP_APT (apt-get), SG_SNAP_DPKGQ
+# (dpkg-query), SG_SNAP_CONVERT_STATE, SG_SNAP_POWER (/sys/class/power_supply),
+# SG_SNAP_BOOTCTL, SG_SNAP_MKINITRAMFS, SG_SNAP_UNAME.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
+import fcntl
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+E = os.environ.get
+PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+os.environ["PATH"] = PATH + ":" + os.environ.get("PATH", "")
+# as lib/sg-btrfs-layout.sh's SG_SUBVOLS (the gate checks they agree)
+SUBVOLS = [("@home", "/home"), ("@var-log", "/var/log"), ("@var-cache", "/var/cache"),
+           ("@var-tmp", "/var/tmp"), ("@prefix", "/var/lib/stained-glass/prefix")]
+SNAPDIR = "@snapshots"
+ETC = E("SG_SNAP_ETC", "/etc")
+TOP = E("SG_SNAP_TOP", "/run/sg-snapshot/top")
+STATUS = E("SG_SNAP_STATUS", "/run/stained-glass-snapshot/status")
+KEEP = int(E("SG_SNAP_KEEP", "3"))
+ROLLBACK_REL = "var/lib/stained-glass-rollback"
+ROLLBACK = E("SG_SNAP_ROLLBACK", "/" + ROLLBACK_REL)
+CONVERT_STATE = E("SG_SNAP_CONVERT_STATE", "/var/lib/stained-glass-convert/state")
+CONVERT_SHARE = E("SG_SNAP_CONVERT_SHARE", "/usr/share/stained-glass/convert-initramfs")
+LOCK = E("SG_SNAP_LOCK", "/run/sg-snapshot.lock")
+ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}$")
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+VER_RE = re.compile(r"^[A-Za-z0-9.+~:-]+$")
+OURS = "Stained Glass OS"
+WENT_BACK_PREFS = "preferences.d/sg-went-back"
+# Our boot entries' names. Capitalised: systemd-boot shows entries without a
+# sort-key by name, the highest first, and a capital sorts below every
+# lower-case name -- so they come last in the menu, below the system's own,
+# the newest restore point first (seen in bootctl list, 2026-10-08)
+RESTORE_ENTRY = "Sg-restore-"
+UNDO_ENTRY = "Sg-undo-update.conf"
+
+
+class Fail(Exception):
+    pass
+
+
+def say(msg):
+    print("sg-snapshot: " + msg, file=sys.stderr)
+
+
+def run(argv, check=True, inp=None, timeout=3600, env=None):
+    p = subprocess.run(argv, input=inp, capture_output=True, text=True, timeout=timeout,
+                       env=dict(os.environ, **(env or {})))
+    if check and p.returncode != 0:
+        raise Fail("%s failed: %s" % (argv[0], (p.stderr or p.stdout).strip().splitlines()[-1:] or ""))
+    return p
+
+
+def now():
+    return int(E("SG_SNAP_NOW", str(int(time.time()))))
+
+
+def new_id(t=None):
+    return time.strftime("%Y%m%d-%H%M%S", time.localtime(now() if t is None else t))
+
+
+def human(sid):
+    """20261008-185501 -> 2026-10-08 18:55"""
+    return "%s-%s-%s %s:%s" % (sid[0:4], sid[4:6], sid[6:8], sid[9:11], sid[11:13])
+
+
+def cmdline():
+    try:
+        with open(E("SG_SNAP_CMDLINE", "/proc/cmdline")) as f:
+            return f.read().split()
+    except OSError:
+        return []
+
+
+def arg(name):
+    for w in cmdline():
+        if w == name:
+            return ""
+        if w.startswith(name + "="):
+            return w[len(name) + 1:]
+    return None
+
+
+def live():
+    return any(w.startswith("systemd.volatile=") or w.startswith("sg.live=") for w in cmdline())
+
+
+def read(path, default=""):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return default
+
+
+def write(path, text, mode=0o644):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, ".%s.sg-tmp" % os.path.basename(path))
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ---- the system drive -------------------------------------------------------------
+def root_mount():
+    """(fstype, source device, fsroot) of /"""
+    if E("SG_SNAP_FSTYPE"):
+        return E("SG_SNAP_FSTYPE"), E("SG_SNAP_DEV", ""), E("SG_SNAP_FSROOT", "/@")
+    p = run(["findmnt", "-n", "-r", "-o", "FSTYPE,SOURCE,FSROOT", "/"], check=False)
+    f = p.stdout.split()
+    if len(f) < 3:
+        return "", "", ""
+    src = re.sub(r"\[.*\]$", "", f[1])
+    return f[0], src, f[2].replace("\\x20", " ")
+
+
+def layout_kind():
+    """'btrfs' (our layout), 'ext4', or something else"""
+    fstype, _, fsroot = root_mount()
+    if fstype == "btrfs":
+        # @, a restore point's copy, or the system going back replaced (renamed
+        # @old-<id>, still running until the restart)
+        ours = fsroot == "/@" or fsroot.startswith("/" + SNAPDIR + "/") or fsroot.startswith("/@old-")
+        return "btrfs" if ours else "btrfs-plain"
+    return fstype or "unknown"
+
+
+class Top:
+    """the top level of the system drive, mounted for the duration"""
+    def __init__(self):
+        self.mounted = False
+
+    def __enter__(self):
+        if E("SG_SNAP_TOP") and os.path.ismount(TOP):
+            return TOP
+        _, dev, _ = root_mount()
+        dev = E("SG_SNAP_DEV", dev)
+        if not dev:
+            raise Fail("cannot find the system drive")
+        os.makedirs(TOP, mode=0o700, exist_ok=True)
+        if not os.path.ismount(TOP):
+            run(["mount", "-o", "subvolid=5", dev, TOP])
+            self.mounted = True
+        return TOP
+
+    def __exit__(self, *a):
+        if self.mounted:
+            run(["umount", TOP], check=False)
+
+
+def btrfs(*args, check=True):
+    return run(["btrfs"] + list(args), check=check)
+
+
+def subvol_id(path):
+    return int(btrfs("inspect-internal", "rootid", path).stdout.strip())
+
+
+def snapshots(top):
+    """[(id, info)], oldest first"""
+    d = os.path.join(top, SNAPDIR)
+    out = []
+    for sid in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        if not ID_RE.match(sid) or not os.path.isdir(os.path.join(d, sid, "snapshot")):
+            continue
+        try:
+            info = json.loads(read(os.path.join(d, sid, "info"), "{}"))
+        except ValueError:
+            info = {}
+        out.append((sid, info))
+    return out
+
+
+def kernels_in(root):
+    d = os.path.join(root, "usr/lib/modules")
+    try:
+        return sorted(k for k in os.listdir(d) if os.path.isdir(os.path.join(d, k, "kernel")))
+    except OSError:
+        return []
+
+
+def vkey(v):
+    return [(0, int(p), "") if p.isdigit() else (1, 0, p) for p in re.findall(r"\d+|[^\d]+", v)]
+
+
+# ---- boot entries -------------------------------------------------------------------
+def kernel_cmdline():
+    return read(os.path.join(ETC, "kernel/cmdline")).split()
+
+
+def our_partuuid():
+    for w in kernel_cmdline():
+        if w.startswith("root=PARTUUID="):
+            return w[len("root=PARTUUID="):].lower()
+    return None
+
+
+def entries_dir():
+    if E("SG_SNAP_ENTRIES"):
+        return E("SG_SNAP_ENTRIES")
+    broot = None
+    for line in read(os.path.join(ETC, "kernel/install.conf")).splitlines():
+        if line.startswith("BOOT_ROOT="):
+            broot = line.split("=", 1)[1].strip()
+    for b in ([broot] if broot else []) + ["/efi", "/boot", "/boot/efi"]:
+        try:
+            os.listdir(b)                       # an automount
+        except OSError:
+            continue
+        if os.path.isdir(os.path.join(b, "loader/entries")):
+            return os.path.join(b, "loader/entries")
+    return None
+
+
+def parse_entry(path):
+    e = {"lines": [], "path": path}
+    for line in read(path).splitlines():
+        k, _, v = line.strip().partition(" ")
+        e["lines"].append((k, v.strip()))
+        if k in ("title", "version", "linux", "options"):
+            e.setdefault(k, v.strip())
+    return e
+
+
+def kernel_entries(edir, include_hidden=False):
+    """our kernels' entries: {version: [entry]} (not our own sg-*, not live or
+    recovery twins, not used-up trials), for root=PARTUUID of this system"""
+    pu = our_partuuid()
+    out = {}
+    if not edir or not pu:
+        return out
+    for n in sorted(os.listdir(edir)):
+        hidden = n.endswith(".conf.sg-hidden")
+        if not (n.endswith(".conf") or (include_hidden and hidden)) or n.lower().startswith("sg-"):
+            continue
+        if n.endswith("-live.conf") or n.endswith("-recovery.conf") or re.search(r"\+0-\d+\.conf", n):
+            continue
+        e = parse_entry(os.path.join(edir, n))
+        opts = e.get("options", "").lower().split()
+        if ("root=partuuid=" + pu) not in opts:
+            continue
+        v = e.get("version")
+        if not v:
+            m = re.search(r"-(\d+\.\d+[^+]*?)(\+\d+(-\d+)?)?\.conf", n)
+            v = m.group(1) if m else None
+        if v:
+            e["hidden"] = hidden
+            out.setdefault(v, []).append(e)
+    return out
+
+
+def snapshot_options(opts, sub, extra):
+    words = [w for w in opts.split() if not w.startswith("rootflags=") and not w.startswith("sg.")]
+    out = []
+    for w in words:
+        out.append(w)
+        if w.startswith("root="):
+            out.append("rootflags=subvol=" + sub)
+    return " ".join(out + extra)
+
+
+def write_entry(edir, name, title, base, options):
+    lines = ["# Stained Glass OS (sg-snapshot): made again whenever restore points change", "title " + title]
+    for k, v in base["lines"]:
+        if k in ("title", "options", "sort-key", "") or k.startswith("#"):
+            continue
+        lines.append("%s %s" % (k, v))
+    lines.append("options " + options)
+    write(os.path.join(edir, name), "\n".join(lines) + "\n", 0o644)
+
+
+def bootable(info, kents):
+    """the newest kernel both in the restore point and on the boot partition"""
+    have = [k for k in info.get("kernels", []) if k in kents and any(not e["hidden"] for e in kents[k])]
+    return max(have, key=vkey) if have else None
+
+
+def make_entries(top=None):
+    """the boot menu's restore points (btrfs), or the undo entry (ext4)"""
+    edir = entries_dir()
+    if not edir:
+        return
+    for n in os.listdir(edir):
+        # (and the recovery twins sg-boot-splash before 0.1.0-180 made of them)
+        if n.lower().startswith(RESTORE_ENTRY.lower()) or n.lower() in (UNDO_ENTRY.lower(), "sg-undo-update-recovery.conf"):
+            os.unlink(os.path.join(edir, n))
+    kents = kernel_entries(edir)
+    if top is not None:
+        for sid, info in snapshots(top):
+            k = bootable(info, kents)
+            if not k:
+                continue
+            base = kents[k][0]
+            title = ("Stained Glass OS -- before the update of %s" if info.get("kind") == "auto"
+                     else "Stained Glass OS -- restore point of %s") % human(sid)
+            write_entry(edir, "%s%s.conf" % (RESTORE_ENTRY, sid), title,
+                        base, snapshot_options(base.get("options", ""), "%s/%s/boot" % (SNAPDIR, sid),
+                                               ["sg.snapshot=" + sid]))
+        return
+    s = undo_set()
+    if s and kents:
+        k = max((v for v in kents if any(not e["hidden"] for e in kents[v])), key=vkey, default=None)
+        if k:
+            base = kents[k][0]
+            opts = " ".join(w for w in base.get("options", "").split() if not w.startswith("sg."))
+            write_entry(edir, UNDO_ENTRY,
+                        "Stained Glass OS -- undo the last update (%s)" % human(s["id"]), base,
+                        opts + " sg.undo-update=1")
+
+
+def match_kernels(edir, kernels):
+    """entries of kernels not in KERNELS hidden, of those in it shown again"""
+    if not edir:
+        return
+    for v, ents in kernel_entries(edir, include_hidden=True).items():
+        for e in ents:
+            p = e["path"]
+            if v in kernels and e["hidden"]:
+                os.replace(p, p[:-len(".sg-hidden")])
+            elif v not in kernels and not e["hidden"]:
+                os.replace(p, p + ".sg-hidden")
+
+
+# ---- restore points ----------------------------------------------------------------
+def low_mark(top):
+    st = os.statvfs(top)
+    total = st.f_blocks * st.f_frsize
+    return int(E("SG_SNAP_LOW", str(max(2 << 30, total // 20))))
+
+
+def free_bytes(top):
+    st = os.statvfs(top)
+    return st.f_bavail * st.f_frsize
+
+
+def delete_snapshot(top, sid):
+    d = os.path.join(top, SNAPDIR, sid)
+    for sub in ("boot", "snapshot"):
+        p = os.path.join(d, sub)
+        if os.path.isdir(p):
+            btrfs("subvolume", "delete", p)
+    shutil.rmtree(d, ignore_errors=True)
+    say("restore point %s deleted" % sid)
+
+
+def prune(top, keep_ids=()):
+    if E("SG_MUTANT_SNAP_KEEP_ALL"):
+        return
+    snaps = snapshots(top)
+    extra = len(snaps) - KEEP
+    for sid, _ in snaps:            # the oldest first, never one asked to keep
+        if extra <= 0:
+            break
+        if sid in keep_ids:
+            continue
+        delete_snapshot(top, sid)
+        extra -= 1
+    # a drive low on space: the oldest first, never the newest
+    snaps = snapshots(top)
+    protect = set(keep_ids) or {snaps[-1][0]} if snaps else set()
+    snaps = [s for s in snaps if s[0] not in protect]
+    while snaps and free_bytes(top) < low_mark(top):
+        delete_snapshot(top, snaps.pop(0)[0])
+        try:                        # the space comes back as the cleaner gets to it
+            run(["btrfs", "subvolume", "sync", top], check=False, timeout=60)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def take(top, label, kind, changes=None):
+    sid = new_id()
+    d = os.path.join(top, SNAPDIR, sid)
+    while os.path.exists(d):        # two in one second
+        sid = new_id(int(time.mktime(time.strptime(sid, "%Y%m%d-%H%M%S"))) + 1)
+        d = os.path.join(top, SNAPDIR, sid)
+    os.makedirs(os.path.join(top, SNAPDIR), mode=0o700, exist_ok=True)
+    os.makedirs(d, mode=0o700)
+    btrfs("subvolume", "snapshot", "-r", os.path.join(top, "@"), os.path.join(d, "snapshot"))
+    info = {"id": sid, "label": label, "kind": kind, "kernels": kernels_in(os.path.join(d, "snapshot")),
+            "changes": changes or []}
+    write(os.path.join(d, "info"), json.dumps(info, indent=1) + "\n", 0o600)
+    btrfs("subvolume", "snapshot", os.path.join(d, "snapshot"), os.path.join(d, "boot"))
+    say("restore point %s: %s" % (sid, label))
+    return sid
+
+
+def booted_snapshot():
+    sid = arg("sg.snapshot")
+    return sid if sid and ID_RE.match(sid) else None
+
+
+def need_btrfs():
+    k = layout_kind()
+    if k != "btrfs":
+        raise Fail("This PC's system drive has no restore points (it is %s)." % k)
+
+
+def cmd_create(args):
+    label, kind = "Restore point", "manual"
+    i = 0
+    while i < len(args):
+        if args[i] == "--label" and i + 1 < len(args):
+            label = args[i + 1]; i += 2
+        elif args[i] == "--kind" and i + 1 < len(args) and args[i + 1] in ("auto", "manual"):
+            kind = args[i + 1]; i += 2
+        else:
+            raise Fail("usage: create [--label TEXT] [--kind auto|manual]")
+    need_btrfs()
+    with Top() as top:
+        sid = take(top, label[:300], kind)
+        prune(top, keep_ids=(sid,))
+        make_entries(top)
+        publish(top)
+    return ["SNAPSHOT " + sid]
+
+
+def cmd_list(args):
+    need_btrfs()
+    with Top() as top:
+        kents = kernel_entries(entries_dir())
+        return ["SNAPSHOT %s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
+                                                 "yes" if bootable(info, kents) else "no", info.get("label", ""))
+                for sid, info in reversed(snapshots(top))]
+
+
+def cmd_delete(args):
+    if len(args) != 1 or not ID_RE.match(args[0]):
+        raise Fail("usage: delete ID")
+    need_btrfs()
+    with Top() as top:
+        if args[0] not in [s for s, _ in snapshots(top)]:
+            raise Fail("There is no restore point %s." % args[0])
+        if booted_snapshot() == args[0]:
+            raise Fail("That restore point is the one running now.")
+        delete_snapshot(top, args[0])
+        make_entries(top)
+        publish(top)
+    return []
+
+
+def cmd_rollback(args):
+    if len(args) != 1 or not ID_RE.match(args[0]):
+        raise Fail("usage: rollback ID")
+    sid = args[0]
+    need_btrfs()
+    with Top() as top:
+        snaps = dict(snapshots(top))
+        if sid not in snaps:
+            raise Fail("There is no restore point %s." % sid)
+        info = snaps[sid]
+        edir = entries_dir()
+        kents = kernel_entries(edir, include_hidden=True)
+        have = [k for k in info.get("kernels", []) if k in kents]
+        if not have:
+            raise Fail("The version from before the update of %s cannot be started: its Linux kernel is no longer "
+                       "on the boot partition." % human(sid))
+        if os.path.isdir(os.path.join(top, "@")):
+            undo = take(top, ("Before going back to the version from before the update of %s" if info.get("kind") == "auto"
+                              else "Before going back to the restore point of %s") % human(sid), "manual")
+        else:
+            undo = None
+        old = os.path.join(top, "@old-" + new_id())
+        os.rename(os.path.join(top, "@"), old)
+        try:
+            btrfs("subvolume", "snapshot", os.path.join(top, SNAPDIR, sid, "snapshot"), os.path.join(top, "@"))
+        except Fail:
+            os.rename(old, os.path.join(top, "@"))
+            raise
+        btrfs("subvolume", "set-default", str(subvol_id(os.path.join(top, "@"))), top)
+        newroot = os.path.join(top, "@")
+        # what this restore point was taken before: not installed again
+        went_back_prefs_into(os.path.join(newroot, "etc"), info.get("changes", []),
+                             "went back to the version from before the update of %s" % human(sid))
+        write(os.path.join(newroot, ROLLBACK_REL, "went-back"),
+              json.dumps({"id": sid, "when": new_id(), "undo": undo}) + "\n")
+        match_kernels(edir, info.get("kernels", []))
+        prune(top, keep_ids=tuple(x for x in (sid, undo) if x))
+        make_entries(top)
+        publish(top)
+    say("going back to %s at the next start" % sid)
+    return ["PENDING " + sid]
+
+
+def went_back_prefs_into(etc, changes, why):
+    """the versions an update brought, kept from apt (a later version installs)"""
+    if E("SG_MUTANT_SNAP_NO_PIN"):
+        return
+    stanzas = []
+    for c in changes:
+        name, new = c.get("name", ""), c.get("new", "")
+        # an upgrade's new version only: a package the update first installed
+        # (SG Store's) may be installed again
+        if c.get("old", "-") == "-":
+            continue
+        if PKG_RE.match(name) and VER_RE.match(new):
+            stanzas.append("Package: %s\nPin: version %s\nPin-Priority: -1\n" % (name, new))
+    if stanzas:
+        write(os.path.join(etc, "apt", WENT_BACK_PREFS),
+              "# Stained Glass OS (sg-snapshot): %s. These versions are not installed again;\n"
+              "# later ones are. Delete this file to allow them.\n\n" % why + "\n".join(stanzas))
+
+
+# ---- the APT hook ------------------------------------------------------------------------
+def parse_hook(text):
+    """APT's Pre-Install-Pkgs version 3: [{name, old, new, action}]"""
+    lines = text.split("\n")
+    if not lines or not lines[0].startswith("VERSION 3"):
+        return None
+    try:
+        i = lines.index("", 1)
+    except ValueError:
+        return []
+    out = []
+    for line in lines[i + 1:]:
+        f = line.split()
+        if len(f) < 9:
+            continue
+        name, old, new, action = f[0], f[1], f[5], f[8]
+        if action == "**CONFIGURE**":
+            continue
+        if action == "**REMOVE**":
+            new = "-"
+        if old == new:
+            continue
+        out.append({"name": name, "old": old, "new": new})
+    return out
+
+
+def describe(changes):
+    ours = ours_installed()
+    order = sorted(changes, key=lambda c: (c["name"] not in ours, c["name"]))
+    parts = []
+    for c in order[:4]:
+        if c["new"] == "-":
+            parts.append("%s removed" % c["name"])
+        elif c["old"] == "-":
+            parts.append("%s %s installed" % (c["name"], c["new"]))
+        else:
+            parts.append("%s %s to %s" % (c["name"], c["old"], c["new"]))
+    if len(order) > 4:
+        parts.append("and %d more" % (len(order) - 4))
+    return ", ".join(parts)
+
+
+def installed_packages():
+    """{package: (version, maintainer)}, installed ones"""
+    p = run([E("SG_SNAP_DPKGQ", "dpkg-query"), "-W", "-f", "${Package}\t${Version}\t${Maintainer}\t${db:Status-Abbrev}\n"],
+            check=False)
+    out = {}
+    for line in p.stdout.splitlines():
+        f = line.split("\t")
+        if len(f) >= 4 and f[3].startswith("ii"):
+            out[f[0]] = (f[1], f[2])
+    return out
+
+
+def ours_installed():
+    return {n: v for n, (v, m) in installed_packages().items() if OURS in m or E("SG_MUTANT_SNAP_ANY_PACKAGE")}
+
+
+def cmd_apt_hook(args):
+    text = sys.stdin.read()          # all of it: apt writes it whole
+    if live() or E("SG_SNAP_UNDOING") == "1":
+        return []
+    return before_changes(parse_hook(text))
+
+
+def prepared_changes():
+    """what PackageKit's offline update is about to install (sg-update-prepare
+    downloaded it): package ids name;version;arch;data in prepared-update"""
+    text = read(E("SG_SNAP_PREPARED", "/var/lib/PackageKit/prepared-update"))
+    installed = {n: v for n, (v, _) in installed_packages().items()}
+    out = []
+    for name, ver in re.findall(r"([a-z0-9][a-z0-9+.-]*);([A-Za-z0-9.+~:-]+);[^;,\s]*;[^,\s]*", text):
+        if installed.get(name) != ver:
+            out.append({"name": name, "old": installed.get(name, "-"), "new": ver})
+    return out
+
+
+def cmd_pre_offline(args):
+    """packagekit-offline-update.service's ExecStartPre: the restore point (or
+    the previous versions) before the offline update, with what it brings --
+    whether or not PackageKit's apt runs the APT hook too (that one then finds
+    this restore point a moment old and leaves it)"""
+    if live():
+        return []
+    return before_changes(prepared_changes())
+
+
+def before_changes(changes):
+    if not changes:
+        return []
+    label = "Updates: " + describe(changes)
+    kind = layout_kind()
+    if kind == "btrfs":
+        if booted_snapshot():
+            say("running a restore point: no restore point taken")
+            return []
+        if root_mount()[2].startswith("/@old-"):
+            say("going back is waiting for the restart: what this changes now is not kept")
+            return []
+        with Top() as top:
+            snaps = snapshots(top)
+            if snaps and snaps[-1][1].get("kind") == "auto" and \
+                    now() - time.mktime(time.strptime(snaps[-1][0], "%Y%m%d-%H%M%S")) < 300:
+                return ["SNAPSHOT " + snaps[-1][0]]     # the same apt run, again
+            sid = take(top, label[:300], "auto", changes)
+            try:                        # "went back" is old news once packages change again
+                os.unlink(os.path.join(ROLLBACK, "went-back"))
+            except FileNotFoundError:
+                pass
+            prune(top, keep_ids=(sid,))
+            make_entries(top)
+            publish(top)
+        return ["SNAPSHOT " + sid]
+    save_previous(changes, label)
+    return []
+
+
+# ---- ext4: the previous versions of our own packages ------------------------------------------
+def undo_set():
+    try:
+        s = json.loads(read(os.path.join(ROLLBACK, "set", "manifest.json"), ""))
+    except ValueError:
+        return None
+    return s if s.get("packages") else None
+
+
+def save_previous(changes, label):
+    ours = ours_installed()
+    keep = [c for c in changes if c["name"] in ours and c["old"] != "-" and c["old"] == ours[c["name"]]]
+    if not keep:
+        return
+    s = undo_set()
+    if s and {(p["name"], p["version"]) for p in s["packages"]} == {(c["name"], c["old"]) for c in keep} and \
+            now() - time.mktime(time.strptime(s["id"], "%Y%m%d-%H%M%S")) < 3600:
+        return                      # this update's, kept a moment ago (the offline update and its APT hook)
+    sid = new_id()
+    work = os.path.join(ROLLBACK, "new-" + sid)
+    shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work, mode=0o755)
+    pkgs = []
+    try:
+        for c in keep:
+            # in the work directory: dpkg-repack builds there, beside where the .deb goes
+            subprocess.run([E("SG_SNAP_REPACK", "dpkg-repack"), "--deb-option=-Zzstd", "--deb-option=-z3", c["name"]],
+                           cwd=work, capture_output=True, text=True, timeout=1800, check=True)
+            debs = [f for f in os.listdir(work) if f.startswith(c["name"] + "_") and f.endswith(".deb")]
+            if not debs:
+                raise Fail("%s was not repacked" % c["name"])
+            pkgs.append({"name": c["name"], "version": c["old"], "new": c["new"], "file": debs[0]})
+    except (Fail, subprocess.SubprocessError, OSError) as e:
+        shutil.rmtree(work, ignore_errors=True)
+        say("the previous versions could not be kept: %s" % e)
+        return
+    write(os.path.join(work, "manifest.json"), json.dumps({"id": sid, "label": label, "packages": pkgs}, indent=1) + "\n")
+    old = os.path.join(ROLLBACK, "set")
+    if os.path.isdir(old):
+        os.rename(old, os.path.join(ROLLBACK, "old-" + sid))
+    os.rename(work, old)
+    shutil.rmtree(os.path.join(ROLLBACK, "old-" + sid), ignore_errors=True)
+    say("kept for undo: %s" % ", ".join("%s %s" % (p["name"], p["version"]) for p in pkgs))
+    try:
+        make_entries(None)
+        publish(None)
+    except (Fail, OSError) as e:
+        say("boot menu: %s" % e)
+
+
+def cmd_undo_update(args):
+    if layout_kind() == "btrfs":
+        raise Fail("This PC has restore points: go back to one instead.")
+    if not undo_set():
+        raise Fail("There is no update to undo.")
+    write(os.path.join(ROLLBACK, "pending"), new_id() + "\n")
+    publish(None)
+    return ["PENDING undo"]
+
+
+def cmd_undo_cancel(args):
+    try:
+        os.unlink(os.path.join(ROLLBACK, "pending"))
+    except FileNotFoundError:
+        pass
+    publish(None)
+    return []
+
+
+def plymouth(text):
+    subprocess.run(["plymouth", "display-message", "--text=" + text], capture_output=True, check=False)
+
+
+def cmd_undo_apply(args):
+    pending = os.path.exists(os.path.join(ROLLBACK, "pending")) or arg("sg.undo-update") is not None
+    s = undo_set()
+    try:
+        os.unlink(os.path.join(ROLLBACK, "pending"))
+    except FileNotFoundError:
+        pass
+    if not pending or not s:
+        publish(None)
+        return []
+    plymouth("Undoing the last update. Do not turn off your PC.")
+    # This runs in the start's own transaction, before greetd and the Windows
+    # side: a maintainer script's "systemctl restart X" would wait for X's
+    # start, which waits for this -- for ever (VM, 2026-10-08: sg-session's
+    # postinst restarting sg-brokerd). SYSTEMD_OFFLINE=1: systemctl leaves
+    # PID 1 alone, as in a chroot; the units start as this start goes on,
+    # and the unit files are read again afterwards.
+    env = {"SG_SNAP_UNDOING": "1", "DEBIAN_FRONTEND": "noninteractive"}
+    if not E("SG_MUTANT_SNAP_UNDO_ONLINE"):
+        env["SYSTEMD_OFFLINE"] = "1"
+    # an install cut short before (a power cut) stops apt from doing anything
+    run([E("SG_SNAP_DPKG", "dpkg"), "--configure", "-a"], check=False, timeout=3600, env=env)
+    setdir = os.path.join(ROLLBACK, "set")
+    debs = [os.path.join(setdir, p["file"]) for p in s["packages"]]
+    # (not --no-download: apt then refuses local files, "Pathname to install is not absolute")
+    p = run([E("SG_SNAP_APT", "apt-get"), "install", "-y", "--allow-downgrades",
+             "-o", "Dpkg::Options::=--force-confold"] + debs, check=False, timeout=3600, env=env)
+    run([E("SG_SNAP_SYSTEMCTL", "systemctl"), "daemon-reload"], check=False, timeout=120)
+    result = {"id": s["id"], "when": new_id(), "ok": p.returncode == 0,
+              "detail": "" if p.returncode == 0 else (p.stderr or p.stdout).strip().splitlines()[-1:]}
+    write(os.path.join(ROLLBACK, "last-undo.json"), json.dumps(result) + "\n")
+    if p.returncode == 0:
+        went_back_prefs_into(ETC,
+                             [{"name": x["name"], "old": x["version"], "new": x["new"]} for x in s["packages"]],
+                             "the update of %s was undone" % human(s["id"]))
+        shutil.rmtree(setdir, ignore_errors=True)
+        say("the update of %s was undone" % human(s["id"]))
+    else:
+        say("undoing the update failed: %s" % result["detail"])
+    make_entries(None)
+    publish(None)
+    if p.returncode != 0:
+        raise Fail("The update could not be undone.")
+    return ["UNDONE " + s["id"]]
+
+
+# ---- converting an ext4 system drive ----------------------------------------------------
+def power_ok():
+    base = E("SG_SNAP_POWER", "/sys/class/power_supply")
+    battery = mains = False
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return True
+    for n in names:
+        t = read(os.path.join(base, n, "type")).strip()
+        if t == "Battery" and read(os.path.join(base, n, "present"), "1").strip() == "1":
+            battery = True
+        if t in ("Mains", "USB") and read(os.path.join(base, n, "online")).strip() == "1":
+            mains = True
+    return mains or not battery
+
+
+def convert_state():
+    w = read(CONVERT_STATE).split(None, 1)
+    return (w[0], w[1].strip() if len(w) > 1 else "") if w else ("none", "")
+
+
+def convert_problems():
+    """what stands in the way of converting, as sentences (none: it may go ahead)"""
+    out = []
+    fstype, dev, _ = root_mount()
+    if live():
+        return ["Stained Glass OS is running from its installation media."]
+    if fstype != "ext4":
+        return ["The system drive is not ext4."]
+    if not our_partuuid():
+        out.append("This system was not installed by Setup (its root is not named on the kernel command line).")
+    if not entries_dir():
+        out.append("The boot menu (systemd-boot) was not found.")
+    st = os.statvfs("/")
+    total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+    need = max(5 << 30, total // 5)
+    if free < need:
+        out.append("There is not enough free space on the system drive: %d GB free, %d GB needed."
+                   % (free >> 30, (need >> 30) + 1))
+    if not power_ok():
+        out.append("Connect your PC to power first.")
+    if dev and not E("SG_SNAP_FSTYPE"):
+        p = run(["tune2fs", "-l", dev], check=False)
+        if "Filesystem state:" in p.stdout and not re.search(r"Filesystem state:\s+clean", p.stdout):
+            out.append("The system drive has errors: restart once (it is checked at the start) and try again.")
+        if re.search(r"FS Error count:\s+[1-9]", p.stdout):
+            out.append("The system drive has recorded errors: it must be checked first.")
+    for tool in ("btrfs-convert", "mkinitramfs", "bootctl"):
+        if not shutil.which(tool) and not E("SG_SNAP_FSTYPE"):
+            out.append("%s is missing." % tool)
+    return out
+
+
+def boot_root():
+    d = entries_dir()
+    return os.path.dirname(os.path.dirname(d)) if d else None
+
+
+CONVERT_ENTRY = "Sg-convert.conf"
+CONVERT_DIR = "stained-glass-convert"
+
+
+def schedule_convert(mode):
+    """an initrd of the running kernel with sg-convert-root, a boot entry for it,
+    started once at the next boot"""
+    edir = entries_dir()
+    if not edir:
+        raise Fail("The boot menu (systemd-boot) was not found.")
+    br = boot_root()
+    ver = E("SG_SNAP_UNAME", os.uname().release)
+    kernel = E("SG_SNAP_KERNEL", "/boot/vmlinuz-" + ver)
+    if not os.path.isfile(kernel):
+        raise Fail("The running Linux kernel (%s) is not in /boot." % ver)
+    d = os.path.join(br, CONVERT_DIR)
+    os.makedirs(d, exist_ok=True)
+    initrd = os.path.join("/var/tmp", "sg-convert.initrd")
+    # MODULES=most when it fits on the boot partition, else this PC's own (dep)
+    st = os.statvfs(br)
+    room = st.f_bavail * st.f_frsize
+    modules = "most" if room > (160 << 20) else "dep"
+    conf = os.path.join("/run", "sg-convert-initramfs")
+    shutil.rmtree(conf, ignore_errors=True)
+    shutil.copytree(CONVERT_SHARE, conf, symlinks=True)
+    with open(os.path.join(conf, "initramfs.conf"), "a") as f:
+        f.write("MODULES=%s\n" % modules)
+    p = run([E("SG_SNAP_MKINITRAMFS", "mkinitramfs"), "-d", conf, "-o", initrd, ver], check=False, timeout=1800)
+    shutil.rmtree(conf, ignore_errors=True)
+    if p.returncode != 0 or not os.path.isfile(initrd):
+        raise Fail("The conversion's start-up files could not be made: %s" % (p.stderr.strip().splitlines()[-1:] or ""))
+    try:
+        shutil.copyfile(kernel, os.path.join(d, "vmlinuz"))
+        shutil.copyfile(initrd, os.path.join(d, "initrd"))
+    except OSError as e:
+        shutil.rmtree(d, ignore_errors=True)
+        raise Fail("The boot partition has no room for the conversion's start-up files (%s)." % e.strerror)
+    finally:
+        try:
+            os.unlink(initrd)
+        except OSError:
+            pass
+    opts = [w for w in kernel_cmdline() if w not in ("quiet", "splash") and not w.startswith("sg.")
+            and not w.startswith("rootflags=")]
+    title = "Stained Glass OS -- converting the system drive" if mode == "btrfs" else \
+        "Stained Glass OS -- undoing the conversion of the system drive"
+    rel = "/" + os.path.relpath(d, br)
+    write(os.path.join(edir, CONVERT_ENTRY),
+          "# Stained Glass OS (sg-snapshot): started once, at the next boot\n"
+          "title %s\nlinux %s/vmlinuz\ninitrd %s/initrd\noptions %s sg.convert=%s panic=30\n"
+          % (title, rel, rel, " ".join(opts), mode))
+    p = run([E("SG_SNAP_BOOTCTL", "bootctl"), "set-oneshot", CONVERT_ENTRY], check=False)
+    if p.returncode != 0:
+        remove_convert_entry()
+        raise Fail("The conversion could not be scheduled: the firmware did not take the boot entry (%s)."
+                   % (p.stderr.strip().splitlines()[-1:] or ""))
+
+
+def remove_convert_entry():
+    edir = entries_dir()
+    if not edir:
+        return
+    try:
+        os.unlink(os.path.join(edir, CONVERT_ENTRY))
+    except FileNotFoundError:
+        pass
+    br = boot_root()
+    if br:
+        shutil.rmtree(os.path.join(br, CONVERT_DIR), ignore_errors=True)
+
+
+def cmd_convert_check(args):
+    probs = convert_problems()
+    return ["PROBLEM " + p for p in probs] + (["READY yes"] if not probs else ["READY no"])
+
+
+def cmd_convert_schedule(args):
+    probs = convert_problems()
+    if probs:
+        raise Fail(" ".join(probs))
+    schedule_convert("btrfs")
+    write(CONVERT_STATE, "scheduled %s\n" % new_id())
+    publish(None)
+    return ["SCHEDULED"]
+
+
+def cmd_convert_cancel(args):
+    st, _ = convert_state()
+    if st not in ("scheduled", "undo-scheduled"):
+        raise Fail("No conversion is waiting for the next start.")
+    run([E("SG_SNAP_BOOTCTL", "bootctl"), "set-oneshot", ""], check=False)
+    remove_convert_entry()
+    write(CONVERT_STATE, ("none" if st == "scheduled" else "converted") + " cancelled %s\n" % new_id())
+    publish(None)
+    return []
+
+
+def cmd_convert_keep(args):
+    if layout_kind() != "btrfs":
+        raise Fail("The system drive has not been converted.")
+    with Top() as top:
+        saved = os.path.join(top, "ext2_saved")
+        if os.path.isdir(saved):
+            btrfs("subvolume", "delete", saved)
+        write(CONVERT_STATE, "kept %s\n" % new_id())
+        publish(top)
+    return []
+
+
+def cmd_convert_undo(args):
+    if layout_kind() not in ("btrfs", "btrfs-plain"):
+        raise Fail("The system drive has not been converted.")
+    with Top() as top:
+        if not os.path.isfile(os.path.join(top, "ext2_saved", "image")):
+            raise Fail("The old file system is no longer kept: the conversion cannot be undone.")
+    if not power_ok():
+        raise Fail("Connect your PC to power first.")
+    schedule_convert("undo")
+    write(CONVERT_STATE, "undo-scheduled %s\n" % new_id())
+    publish(None)
+    return ["SCHEDULED"]
+
+
+# ---- at each start ----------------------------------------------------------------------
+def cmd_boot(args):
+    if live():
+        return []
+    st, _ = convert_state()
+    kind = layout_kind()
+    if st in ("scheduled", "undo-scheduled"):
+        # the one-shot start did not happen, or did and came back: either way
+        # the entry goes; a failed conversion said why (sg-convert-root)
+        remove_convert_entry()
+        if st == "scheduled" and kind == "ext4":
+            write(CONVERT_STATE, "failed The conversion did not start.\n")
+        elif st == "undo-scheduled" and kind != "ext4":
+            write(CONVERT_STATE, "converted The undo did not start.\n")
+    else:                   # the one-shot start is over, whatever it did
+        remove_convert_entry()
+    if kind == "ext4":
+        edir = entries_dir()
+        # after an undone conversion: what was only ever on btrfs goes
+        if edir:
+            for n in os.listdir(edir):
+                if n.lower().startswith(RESTORE_ENTRY.lower()):
+                    os.unlink(os.path.join(edir, n))
+            match_kernels(edir, kernels_in("/"))
+        if st == "converted":
+            write(CONVERT_STATE, "undone %s\n" % new_id())
+        make_entries(None)
+        publish(None)
+        return []
+    if kind == "btrfs-plain":
+        with Top() as top:
+            publish(top)
+        return []
+    if kind != "btrfs":
+        publish(None)
+        return []
+    with Top() as top:
+        sid = booted_snapshot()
+        if sid:
+            # this copy was started: made again from its snapshot next time
+            write(os.path.join(ROLLBACK, "booted-snapshot"), sid + "\n")
+        else:
+            for n in os.listdir(top):
+                if n.startswith("@old-") and os.path.isdir(os.path.join(top, n)):
+                    btrfs("subvolume", "delete", os.path.join(top, n), check=False)
+            for s, _ in snapshots(top):
+                d = os.path.join(top, SNAPDIR, s)
+                boot = os.path.join(d, "boot")
+                if os.path.isdir(boot) and not os.path.exists(os.path.join(boot, ROLLBACK_REL, "booted-snapshot")):
+                    continue
+                if os.path.isdir(boot):
+                    btrfs("subvolume", "delete", boot, check=False)
+                btrfs("subvolume", "snapshot", os.path.join(d, "snapshot"), boot, check=False)
+            if st == "converted" and not os.path.isdir(os.path.join(top, "ext2_saved")):
+                # kept already (a restore point from before Keep was gone back to)
+                write(CONVERT_STATE, "kept %s\n" % new_id())
+            elif st == "converted":
+                say("the system drive was converted to btrfs: waiting for the person to keep it or undo it")
+        make_entries(top)
+        publish(top)
+    return []
+
+
+# ---- what Settings and the Control Panel read --------------------------------------------
+def publish(top):
+    lines = []
+    fstype, _, _ = root_mount()
+    kind = layout_kind()
+    lines.append("FS " + (fstype or "unknown"))
+    lines.append("LAYOUT " + ("yes" if kind == "btrfs" else "no"))
+    lines.append("BOOTED " + (booted_snapshot() or "current"))
+    st, detail = convert_state()
+    lines.append("CONVERT %s\t%s" % (st, detail))
+    wb = read(os.path.join(ROLLBACK, "went-back")).strip()
+    try:
+        if wb:
+            w = json.loads(wb)
+            lines.append("WENTBACK %s\t%s" % (w.get("id", ""), human(w.get("id", "00000000-000000"))))
+    except ValueError:
+        pass
+    if kind == "btrfs" and top is not None:
+        kents = kernel_entries(entries_dir())
+        try:
+            default = int(btrfs("subvolume", "get-default", top).stdout.split()[1])
+            running = int(E("SG_SNAP_ROOTID", "0")) or subvol_id("/")
+            if not booted_snapshot() and default != running:
+                lines.append("PENDING rollback")
+        except (Fail, IndexError, ValueError):
+            pass
+        for sid, info in reversed(snapshots(top)):
+            lines.append("SNAPSHOT %s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
+                                                          "yes" if bootable(info, kents) else "no",
+                                                          info.get("label", "").replace("\t", " ")))
+    if top is not None:     # btrfs: ours, or a conversion whose layout failed
+        lines.append("SAVED " + ("yes" if os.path.isdir(os.path.join(top, "ext2_saved")) else "no"))
+    if kind == "ext4":
+        s = undo_set()
+        if s:
+            lines.append("UNDO %s\t%s\t%s" % (s["id"], human(s["id"]), s.get("label", "")))
+        if os.path.exists(os.path.join(ROLLBACK, "pending")):
+            lines.append("PENDING undo")
+        try:
+            r = json.loads(read(os.path.join(ROLLBACK, "last-undo.json"), "{}"))
+            if r.get("id"):
+                lines.append("UNDONE %s\t%s\t%s" % (r["id"], human(r["id"]), "yes" if r.get("ok") else "no"))
+        except ValueError:
+            pass
+        if st in ("none", "failed", "undone"):
+            probs = convert_problems()
+            for p in probs:
+                lines.append("PROBLEM " + p)
+            lines.append("READY " + ("yes" if not probs else "no"))
+    try:
+        write(STATUS, "\n".join(lines) + "\nOK\n", 0o644)
+    except OSError as e:
+        say("status not published: %s" % e)
+    return lines
+
+
+def cmd_status(args):
+    if layout_kind() in ("btrfs", "btrfs-plain"):
+        with Top() as top:
+            return publish(top)
+    return publish(None)
+
+
+COMMANDS = {"status": cmd_status, "create": cmd_create, "list": cmd_list, "delete": cmd_delete,
+            "rollback": cmd_rollback, "apt-hook": cmd_apt_hook, "pre-offline-update": cmd_pre_offline, "entries": None, "boot": cmd_boot,
+            "undo-update": cmd_undo_update, "undo-cancel": cmd_undo_cancel, "undo-apply": cmd_undo_apply,
+            "convert-check": cmd_convert_check, "convert-schedule": cmd_convert_schedule,
+            "convert-cancel": cmd_convert_cancel, "convert-keep": cmd_convert_keep, "convert-undo": cmd_convert_undo}
+
+
+def cmd_entries(args):
+    if layout_kind() == "btrfs":
+        with Top() as top:
+            make_entries(top)
+            publish(top)
+    else:
+        make_entries(None)
+        publish(None)
+    return []
+
+
+COMMANDS["entries"] = cmd_entries
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd not in COMMANDS:
+        print("usage: sg-snapshot %s" % "|".join(sorted(COMMANDS)), file=sys.stderr)
+        return 2
+    if cmd == "apt-hook" and E("SG_SNAP_UNDOING") == "1":
+        # undo-apply's own apt run: it holds the lock, and keeps nothing again
+        sys.stdin.read()
+        print("OK")
+        return 0
+    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+    with open(LOCK, "a") as lk:
+        # undo-apply runs apt, whose maintainer scripts and hooks run
+        # sg-snapshot again (the postinst's status, the APT hook): it never
+        # holds the lock (it runs once, at the start, before anything else)
+        if cmd != "undo-apply" or E("SG_MUTANT_SNAP_UNDO_LOCKS"):
+            fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            for line in COMMANDS[cmd](sys.argv[2:]):
+                print(line)
+            print("OK")
+            return 0
+        except Fail as e:
+            print("ERROR %s" % e)
+            if cmd == "apt-hook":       # never stand in an update's way
+                return 0
+            return 1
+        except (OSError, subprocess.SubprocessError) as e:
+            print("ERROR %s" % e)
+            return 0 if cmd == "apt-hook" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

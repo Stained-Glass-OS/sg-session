@@ -6,6 +6,9 @@ Documentation=man:pkcon(1)
 Wants=network-online.target
 After=network-online.target packagekit.service
 ConditionPathExists=/usr/bin/pkcon
+# Not while a restore point runs (the boot menu's "before the update of"):
+# what it installed would go with that copy (sg-snapshot).
+ConditionKernelCommandLine=!sg.snapshot
 
 [Service]
 Type=oneshot

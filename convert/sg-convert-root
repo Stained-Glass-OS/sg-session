@@ -1,0 +1,179 @@
+#!/bin/sh
+# sg-convert-root btrfs|undo [DEVICE] -- in the initrd, before the root file
+# system is mounted: convert the system drive from ext4 to btrfs with the
+# layout of a new install (lib/sg-btrfs-layout.sh), or undo that conversion
+# (btrfs-convert --rollback, from the ext2_saved image btrfs-convert kept).
+# Then restart: the boot entry that started this was a one-shot
+# (sg-snapshot convert-schedule), so the next start is the ordinary one.
+#
+# What happened goes into /var/lib/stained-glass-convert/ of the system
+# (state: converted|failed|undone <detail>, convert.log), which sg-snapshot
+# publishes for the Control Panel.
+#
+# Converting: checks first (e2fsck -f -p must leave the file system clean,
+# room enough, on mains power when there is a battery); btrfs-convert keeps
+# the ext4's own UUID and label; then @ is a snapshot of the whole converted
+# file system, the other subvolumes get their directories' files (reflinked:
+# nothing is copied), the places they are mounted at in @ are emptied, @'s
+# fstab names them, @ becomes the default subvolume (the existing boot
+# entries need no rootflags), and the old copy in the top level is removed --
+# ext2_saved keeps the ext4's blocks until the person keeps the conversion.
+# If making the layout fails, the subvolumes made so far go again and the top
+# level stays the system (it boots as it is; the Control Panel offers undo).
+#
+# For the gate: SG_CONVERT_POWER (/sys/class/power_supply), SG_CONVERT_NOREBOOT=1,
+# SG_CONVERT_LIB, SG_CONVERT_MNT, SG_CONVERT_LOG, SG_CONVERT_NOW, SG_CONVERT_PATH_TAIL
+# (what comes after $LIB/bin in PATH: the gate gives it nothing, so only the
+# commands the initramfs hook copies are there).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+LIB=${SG_CONVERT_LIB:-/usr/lib/sg-convert}
+PATH=$LIB/bin:${SG_CONVERT_PATH_TAIL:-/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+MODE=${1:-}
+DEV=${2:-}
+M=${SG_CONVERT_MNT:-/run/sg-convert}
+LOG=${SG_CONVERT_LOG:-/run/sg-convert.log}
+STATE_REL=var/lib/stained-glass-convert
+GIB=1073741824
+# shellcheck source=../lib/sg-btrfs-layout.sh
+. "$LIB/sg-btrfs-layout.sh"
+
+say() {
+    printf 'sg-convert: %s\n' "$*" >> "$LOG"
+    [ -n "${SG_CONVERT_NOREBOOT:-}" ] || printf '\n  %s\n' "$*" > /dev/console 2>/dev/null || :
+}
+stamp() { if [ -n "${SG_CONVERT_NOW:-}" ]; then echo "$SG_CONVERT_NOW"; else date +%Y%m%d-%H%M%S; fi; }
+restart() {
+    sync
+    if [ -n "${SG_CONVERT_NOREBOOT:-}" ]; then exit "${1:-0}"; fi
+    say "Restarting..."
+    sleep 5
+    echo b > /proc/sysrq-trigger
+    sleep 30
+    exit 1
+}
+# STATE ROOTDIR TEXT: the state and the log into a mounted system
+record() {
+    mkdir -p "$1/$STATE_REL" && printf '%s\n' "$2" > "$1/$STATE_REL/state"
+    cat "$LOG" >> "$1/$STATE_REL/convert.log" 2>/dev/null
+}
+# nothing was converted: why, on the ext4, then restart
+not_converted() {
+    say "$*"
+    mkdir -p "$M"
+    if mount -t ext4 "$DEV" "$M" 2>>"$LOG"; then record "$M" "failed $*"; umount "$M"; fi
+    restart 1
+}
+on_power() {
+    battery=0 mains=0
+    for d in "${SG_CONVERT_POWER:-/sys/class/power_supply}"/*; do
+        [ -r "$d/type" ] || continue
+        t=$(cat "$d/type")
+        if [ "$t" = Battery ] && [ "$(cat "$d/present" 2>/dev/null || echo 1)" = 1 ]; then battery=1; fi
+        if { [ "$t" = Mains ] || [ "$t" = USB ]; } && [ "$(cat "$d/online" 2>/dev/null)" = 1 ]; then mains=1; fi
+    done
+    [ "$mains" = 1 ] || [ "$battery" = 0 ]
+}
+
+case "$MODE" in btrfs|undo) ;; *) echo "usage: sg-convert-root btrfs|undo [DEVICE]" >&2; exit 2 ;; esac
+if [ ! -b "$DEV" ]; then
+    # the root named on the command line
+    read -r CMDLINE < /proc/cmdline
+    for w in $CMDLINE; do
+        case "$w" in root=PARTUUID=*) DEV=$(blkid -l -o device -t "PARTUUID=${w#root=PARTUUID=}") ;; esac
+    done
+fi
+[ -b "$DEV" ] || { say "the system drive was not found"; restart 1; }
+FSTYPE=$(blkid -p -o value -s TYPE "$DEV")
+mkdir -p "$M"
+
+if [ "$MODE" = undo ]; then
+    [ "$FSTYPE" = btrfs ] || { say "the system drive is not btrfs ($FSTYPE): nothing to undo"; restart 0; }
+    say "Undoing the conversion of the system drive. Do not turn off your PC."
+    saved=0
+    if mount -t btrfs -o subvolid=5 "$DEV" "$M" 2>>"$LOG"; then
+        [ -f "$M/ext2_saved/image" ] && saved=1
+        umount "$M"
+    fi
+    [ "$saved" = 1 ] || { say "the old file system is no longer kept: nothing was changed"; restart 1; }
+    if ! btrfs-convert -r "$DEV" >>"$LOG" 2>&1; then
+        say "the conversion could not be undone: nothing was changed"
+        if mount -t btrfs "$DEV" "$M" 2>>"$LOG"; then record "$M" "converted The undo failed (btrfs-convert)."; umount "$M"; fi
+        restart 1
+    fi
+    e2fsck -f -p "$DEV" >>"$LOG" 2>&1
+    if mount -t ext4 "$DEV" "$M" 2>>"$LOG"; then record "$M" "undone $(stamp)"; umount "$M"; fi
+    say "The system drive is ext4 again."
+    restart 0
+fi
+
+# --- converting ------------------------------------------------------------------
+[ "$FSTYPE" = ext4 ] || { say "the system drive is not ext4 ($FSTYPE): nothing to convert"; restart 0; }
+say "Checking the system drive..."
+e2fsck -f -p "$DEV" >>"$LOG" 2>&1
+rc=$?
+[ "$rc" -le 1 ] || not_converted "The system drive has errors that could not be repaired by themselves (e2fsck $rc): it was not converted."
+on_power || not_converted "The PC is running on its battery: it was not converted. Connect it to power and try again."
+# shellcheck disable=SC2046  # three numbers
+set -- $(dumpe2fs -h "$DEV" 2>/dev/null | awk -F: '
+    /^Block count/ { b = $2 + 0 } /^Free blocks/ { f = $2 + 0 } /^Block size/ { s = $2 + 0 }
+    END { printf "%.0f %.0f %.0f\n", b, f, s }')
+total=$(( ${1:-0} * ${3:-0} )) free=$(( ${2:-0} * ${3:-0} ))
+need=$(( total / 5 )); [ "$need" -ge $((5 * GIB)) ] || need=$((5 * GIB))
+[ "$free" -ge "$need" ] || not_converted "There is not enough free space on the system drive ($((free / GIB)) GB free, $((need / GIB + 1)) GB needed): it was not converted."
+say "Converting the system drive. This can take a while: do not turn off your PC."
+btrfs-convert --uuid copy -L "$DEV" >>"$LOG" 2>&1; crc=$?
+[ "$crc" = 0 ] || not_converted "btrfs-convert failed; the system drive was not changed."
+if ! mount -t btrfs -o subvolid=5 "$DEV" "$M" 2>>"$LOG"; then
+    say "the converted file system could not be mounted"
+    restart 1
+fi
+if [ -n "${SG_MUTANT_CONVERT_NO_SAVED:-}" ] && [ -d "$M/ext2_saved" ]; then
+    btrfs -q subvolume delete "$M/ext2_saved" >>"$LOG" 2>&1
+fi
+
+say "Making the system drive's layout..."
+layout_failed() {
+    say "$*"
+    for s in $SG_SUBVOLS; do
+        [ -d "$M/${s%%:*}" ] && btrfs -q subvolume delete "$M/${s%%:*}" >>"$LOG" 2>&1
+    done
+    [ -d "$M/@" ] && btrfs -q subvolume delete "$M/@" >>"$LOG" 2>&1
+    record "$M" "failed-layout $*"
+    umount "$M"
+    restart 1
+}
+btrfs -q subvolume snapshot "$M" "$M/@" >>"$LOG" 2>&1 || layout_failed "the system's subvolume could not be made"
+for s in $SG_SUBVOLS; do
+    name=${s%%:*} mp=${s#*:}
+    btrfs -q subvolume create "$M/$name" >>"$LOG" 2>&1 || layout_failed "$name could not be made"
+    if [ -d "$M/@$mp" ]; then
+        cp -a --reflink=always "$M/@$mp/." "$M/$name/" >>"$LOG" 2>&1 || layout_failed "$mp could not be moved to $name"
+    fi
+done
+# every subvolume has its files: the places they are mounted at, emptied
+for s in $SG_SUBVOLS; do
+    mp=${s#*:}
+    if [ -n "${SG_MUTANT_CONVERT_KEEP_HOME:-}" ] && [ "$mp" = /home ]; then continue; fi
+    if [ -d "$M/@$mp" ]; then find "$M/@$mp" -mindepth 1 -maxdepth 1 -exec rm -rf {} + ; else mkdir -p "$M/@$mp"; fi
+done
+chmod 1777 "$M/@var-tmp"
+mkdir -p "$M/$SG_SNAPDIR" && chmod 0700 "$M/$SG_SNAPDIR"
+UUID=$(blkid -p -o value -s UUID "$DEV")
+sg_btrfs_fstab "$M/@/etc/fstab" "$UUID" || layout_failed "the system's fstab could not be written"
+if ! id=$(btrfs inspect-internal rootid "$M/@") || ! btrfs -q subvolume set-default "$id" "$M" >>"$LOG" 2>&1; then
+    layout_failed "the system's subvolume could not be made the default"
+fi
+# the old copy in the top level: everything but the subvolumes (ext2_saved
+# still holds the ext4's blocks)
+for e in "$M"/* "$M"/.[!.]* "$M"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    case "${e##*/}" in @*|ext2_saved) continue ;; esac
+    rm -rf "$e"
+done
+say "The system drive is btrfs now, with restore points."
+record "$M/@" "converted $(stamp)"
+umount "$M"
+restart 0

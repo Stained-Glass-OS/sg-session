@@ -1,0 +1,30 @@
+#!/bin/sh
+# initramfs-tools hook (Stained Glass OS): what sg-convert-root needs, in an
+# initrd made only for converting the system drive (sg-snapshot).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+B=/usr/lib/sg-convert/bin
+# every command sg-convert-root and sg-btrfs-layout.sh run (klibc has few: no mv, no touch --
+# the first conversion in the VM stopped at "the system's fstab could not be written")
+for t in btrfs btrfs-convert e2fsck dumpe2fs blkid mount umount cp mv rm mkdir chmod touch sed awk grep cat sync date find sleep; do
+    p=$(PATH=/usr/sbin:/usr/bin:/sbin:/bin command -v "$t") || { echo "sg-convert: $t is missing" >&2; exit 1; }
+    copy_exec "$p" "$B/$t"
+done
+# btrfs-convert's progress thread is cancelled with pthread_cancel, which
+# loads libgcc_s at run time (no copy_exec follows that): without it,
+# "libgcc_s.so.1 must be installed for pthread_cancel to work" and abort
+# (VM, 2026-10-08)
+gcc_s=$(PATH=/usr/sbin:/sbin:$PATH ldconfig -p 2>/dev/null | awk '/libgcc_s\.so\.1 .*x86-64/ { print $NF; exit }')
+for f in /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/libgcc_s.so.1; do
+    [ -n "$gcc_s" ] || { [ -e "$f" ] && gcc_s=$f; }
+done
+[ -n "$gcc_s" ] || { echo "sg-convert: libgcc_s.so.1 is missing" >&2; exit 1; }
+copy_exec "$gcc_s"
+SRC=${SG_CONVERT_SRC:-/usr/lib/stained-glass}     # (the gate: its tree)
+copy_file script "$SRC/sg-convert-root" /usr/lib/sg-convert/sg-convert-root
+copy_file script "$SRC/sg-btrfs-layout.sh" /usr/lib/sg-convert/sg-btrfs-layout.sh
+manual_add_modules btrfs ext4
+exit 0

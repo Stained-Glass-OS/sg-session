@@ -1,0 +1,19 @@
+# Restore points at each start (sg-snapshot boot): the copy of a restore point
+# the boot menu started is made again from its snapshot, the system replaced by
+# going back is deleted, the boot menu's entries follow the restore points, and
+# what Settings and the Control Panel show is published
+# (/run/stained-glass-snapshot/status). On ext4: the "undo the last update"
+# entry, and what a conversion of the system drive left to say. Not on a live
+# boot.
+[Unit]
+Description=Stained Glass OS restore points
+ConditionKernelCommandLine=!systemd.volatile
+After=local-fs.target sg-undo-update.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-snapshot boot
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target

@@ -185,6 +185,10 @@ case "$1" in
         /usr/bin/sg-kernel-entries --apply || true
         /usr/bin/sg-boot-splash apply || true
 
+        # Restore points (btrfs) or Undo the last update (ext4): what Settings
+        # and the Control Panel show, now rather than at the next start
+        /usr/bin/sg-snapshot status >/dev/null 2>&1 || true
+
         # Print to PDF's PDFs in the Windows profiles' Documents: the
         # cups-pdf profile takes our local include (AppArmor enforcing, as
         # it is once a kernel update has brought it)

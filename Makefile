@@ -22,7 +22,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check \
                bin/sg-firewall-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
-               lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale
+               lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale lib/sg-btrfs-layout.sh
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
 
@@ -42,6 +42,21 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	install -m 0755 bin/sg-firewall $(BINDIR)
 	@# Office's work-account sign-in: wine-sg's Web Account Manager runs sg-wam-msal; sg-wam-redirect is the browser's handler for its final redirect
 	install -m 0755 bin/sg-wam-msal bin/sg-wam-redirect $(BINDIR)
+	@# Restore points and going back (btrfs), Undo the last update (ext4), and
+	@# converting an ext4 system drive (sg-snapshot): the tool, the APT hook,
+	@# before the offline update, the boot and undo services, the kernel-install
+	@# plugin, and the conversion's own initrd (initramfs-tools -d).
+	install -m 0755 bin/sg-snapshot $(BINDIR)
+	install -D -m 0644 config/apt/80stained-glass-restore-points $(DESTDIR)/etc/apt/apt.conf.d/80stained-glass-restore-points
+	install -D -m 0644 systemd/packagekit-offline-update.service.d/50-sg-restore-point.conf \
+	    $(UNITDIR)/packagekit-offline-update.service.d/50-sg-restore-point.conf
+	install -m 0644 systemd/sg-snapshot.service systemd/sg-undo-update.service $(UNITDIR)
+	install -D -m 0755 kernel/94-sg-restore-points.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/94-sg-restore-points.install
+	install -m 0755 convert/sg-convert-root $(LIBDIR)
+	install -d $(SHAREDIR)/convert-initramfs/hooks $(SHAREDIR)/convert-initramfs/scripts/local-premount
+	install -m 0644 convert/initramfs.conf convert/modules $(SHAREDIR)/convert-initramfs/
+	install -m 0755 convert/hooks/sg-convert $(SHAREDIR)/convert-initramfs/hooks/
+	install -m 0755 convert/scripts/local-premount/sg-convert $(SHAREDIR)/convert-initramfs/scripts/local-premount/
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
 	install -m 0755 bin/powershell $(BINDIR)
@@ -287,7 +302,8 @@ lint:
 	@for f in $$(grep -lE 'WINEPREFIX|wineboot' test/*.sh); do \
 	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon; do sh -n $$f || exit 1; done
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon \
+	    convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/smooth-glyphs-test.sh
 	@sh test/shell-supervisor-test.sh
@@ -298,6 +314,9 @@ lint:
 	@! sh test/apt-sources-test.sh --mutant >/dev/null 2>&1
 	@! sh test/apt-sources-test.sh --mutant-problems >/dev/null 2>&1
 	@sh test/prefix-current-test.sh
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-snapshot
+	@sh test/restore-points-test.sh
+	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done
 	@sh test/prefix-repair-test.sh
 	@! sh test/prefix-repair-test.sh --mutant >/dev/null
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
@@ -395,7 +414,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
@@ -754,6 +773,16 @@ test-profile:
 	sudo sh test/profile-sendto-test.sh
 
 # Disk Management's partition changes for real, on a loop device only (needs sudo).
+# Restore points, going back, and converting an ext4 system drive, for real on
+# loop devices only (btrfs, btrfs-convert; needs sudo -n; 77 without), and the
+# mutants it must catch.
+.PHONY: test-snapshot
+test-snapshot:
+	@sh test/snapshot-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -eq 0 ] || exit $$rc
+	@for m in KEEP_ALL CONVERT_NO_SAVED CONVERT_KEEP_HOME; do \
+	    if sh test/snapshot-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
+	    echo "mutant $$m caught"; done
+
 .PHONY: test-diskops
 test-diskops:
 	@sh test/diskops-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc

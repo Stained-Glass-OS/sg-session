@@ -25,6 +25,9 @@ initrd     /debian/6.12.1/initrd.img-6.12.1
 EOF
 printf 'title Stained Glass OS (live)\noptions %s systemd.volatile=overlay\nlinux /x\n' "$OLD" > "$E/loader/entries/sg-live.conf"
 printf 'title Old (recovery mode)\noptions x\n' > "$E/loader/entries/debian-6.11.9-recovery.conf"
+# sg-snapshot's own: the conversion's entry is deliberately not quiet
+printf 'title Stained Glass OS -- converting the system drive\nlinux /c/vmlinuz\noptions root=PARTUUID=abc rw console=ttyS0 sg.convert=btrfs panic=30\n' > "$E/loader/entries/Sg-convert.conf"
+cp "$E/loader/entries/Sg-convert.conf" "$T/sg-convert.orig"
 
 sh "$HERE/bin/sg-boot-splash" apply
 c=$(cat "$T/cmdline")
@@ -42,6 +45,8 @@ ro=$(sed -n 's/^options *//p' "$r" 2>/dev/null)
 grep -q 'loglevel=7$' "$E/loader/entries/sg-live.conf" || grep -q 'loglevel=7 systemd.volatile' "$E/loader/entries/sg-live.conf" \
     && [ ! -e "$E/loader/entries/sg-live-recovery.conf" ] && pass "live entries are left alone" || fail "live: $(ls "$E/loader/entries")"
 [ ! -e "$E/loader/entries/debian-6.11.9-recovery.conf" ] && pass "a twin whose kernel is gone goes" || fail "orphan twin kept"
+cmp -s "$E/loader/entries/Sg-convert.conf" "$T/sg-convert.orig" && [ ! -e "$E/loader/entries/Sg-convert-recovery.conf" ] \
+    && pass "sg-snapshot's entries (restore points, undo, the conversion) are left as they are: no twin, not made quiet" || fail "Sg- entry touched: $(ls "$E/loader/entries")"
 { grep -qx 'Theme=stained-glass' "$T/plymouthd.conf" && grep -qx 'ShowDelay=0' "$T/plymouthd.conf" && grep -qx 'DeviceTimeout=8' "$T/plymouthd.conf" \
   && [ "$(grep -c '^Theme=' "$T/plymouthd.conf")" = 1 ]; } && pass "Plymouth's theme is ours, shown at once" || fail "conf: $(cat "$T/plymouthd.conf")"
 # (the theme scales itself to the screen's display scale: Plymouth's own

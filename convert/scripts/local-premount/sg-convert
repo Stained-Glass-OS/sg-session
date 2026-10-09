@@ -1,0 +1,15 @@
+#!/bin/sh
+# initramfs-tools (Stained Glass OS): with sg.convert= on the command line --
+# the boot entry sg-snapshot made, started once -- convert the system drive
+# before it is mounted (sg-convert-root restarts the PC when it is done).
+# SPDX-License-Identifier: AGPL-3.0-or-later
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+read -r CMDLINE < /proc/cmdline
+for w in $CMDLINE; do
+    case "$w" in
+        sg.convert=btrfs|sg.convert=undo) exec /usr/lib/sg-convert/sg-convert-root "${w#sg.convert=}" "${ROOT:-}" ;;
+    esac
+done
+exit 0

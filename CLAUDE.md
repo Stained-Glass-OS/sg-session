@@ -576,9 +576,12 @@ against a headless compositor, with a session adversary); sg-image's
 stick booted through its `-live` boot entry (`systemd.volatile=overlay`, added
 by sg-image's `mkosi.postoutput`): `/` is an overlay on a tmpfs, and the
 stick's root partition underneath is mounted read-only. sg-install mounts that
-partition read-only again and **copies its files** into a fresh ext4 on the
+partition read-only again and **copies its files** into a fresh btrfs on the
 target (a file copy, so any partition big enough works and nothing else on
-the disk moves). The copy is then made a machine of its own: an empty
+the disk moves) -- since 0.1.0-180 with the restore points' subvolumes (`@`
+the system, homes, logs, caches, temporary files and the Windows programs'
+prefix beside it; see "Restore points" below), root mounted by
+`rootflags=subvol=@`. The copy is then made a machine of its own: an empty
 machine-id, the chosen host name, ssh host keys generated on first boot, the
 keyboard layout, the lab account `sguser` removed, and the owner created in
 `sgwine`, `sg-admins` and `sudo`. Nothing from the live session reaches the
@@ -2214,6 +2217,110 @@ configured.
 - **The gate is sg-image's `make update-test`**: a canary package upgraded from
   a local test repository, asserted *not* installed before the reboot and
   installed after it, with the machine still reaching its login screen.
+
+## Restore points, going back, and converting the system drive (sg-snapshot)
+
+David 2026-10-08: safe updates with rollback, the whole OS on one partition.
+
+**The layout** (`lib/sg-btrfs-layout.sh`, sourced by sg-install, the
+conversion and the gates; `bin/sg-snapshot` keeps the same list and
+`test/restore-points-test.sh` checks they agree): new installs are **btrfs**
+on the one root partition. `@` is the system (`rootflags=subvol=@` on the
+command line and in `/etc/kernel/cmdline`, and the default subvolume);
+`@home`, `@var-log`, `@var-cache`, `@var-tmp` and `@prefix`
+(`/var/lib/stained-glass/prefix`: the machine's Windows programs AND the
+users' Windows profiles, C:\users) are subvolumes of their own in the same
+pool, mounted from fstab by UUID -- a restore point never takes them back.
+`@snapshots/` is a plain directory of the top level, never mounted.
+
+**Restore points** (`sg-snapshot`, Python, root): before every apt run that
+changes packages -- `/etc/apt/apt.conf.d/80stained-glass-restore-points`
+(DPkg::Pre-Install-Pkgs, version 3: names and versions on stdin) and
+`packagekit-offline-update.service.d/50-sg-restore-point.conf`
+(ExecStartPre `pre-offline-update`, labelled from PackageKit's
+prepared-update; the APT hook a moment later finds that restore point
+under 5 minutes old and leaves it). `@snapshots/<id>/snapshot` is
+read-only, `info` says what and when, `boot` is a writable copy the boot
+menu's "Stained Glass OS -- before the update of <date>" entry starts
+(`rootflags=subvol=@snapshots/<id>/boot sg.snapshot=<id>`, on the newest
+kernel both in the restore point and on the boot partition). A copy that was
+started is made again from its snapshot at the next ordinary start
+(`sg-snapshot.service`, `boot`). Three kept; the oldest first when the drive
+is low (5% or 2 GB), never the newest. Never in an update's way: the hook
+always exits 0.
+
+**Going back** (`rollback ID`; Settings > Recovery through sg-admind's
+`restore-point` verb, or "Keep this version" while a restore point runs):
+a restore point "before going back" first, `@` renamed `@old-<id>`
+(deleted at the next start), the restore point snapshotted into a new `@`
+and made the default subvolume, the update's versions kept from apt
+(`/etc/apt/preferences.d/sg-went-back`, Pin-Priority -1: a later version
+installs), boot entries of kernels the restore point lacks renamed
+`*.conf.sg-hidden` (and shown again by a later going back that has them).
+Settings reads `/run/stained-glass-snapshot/status` (PENDING rollback: the
+mounted root is not the default subvolume).
+
+**Boot entry names start with a capital** (`Sg-restore-<id>.conf`,
+`Sg-undo-update.conf`, `Sg-convert.conf`) and carry **no sort-key**:
+systemd-boot puts entries with a sort-key first and the rest by name,
+highest first, and a capital sorts below every lower-case name, so ours
+come last (checked with `bootctl list`). A sort-key put them at the top.
+The kernel-install plugin `94-sg-restore-points.install` remakes them when a
+kernel comes or goes.
+
+**ext4 machines** (installed before 0.1.0-180): the same hook keeps the
+replaced versions of OUR packages (Maintainer "Stained Glass OS"), repacked
+with dpkg-repack (zstd) into `/var/lib/stained-glass-rollback/set`;
+`undo-update` marks it, and `sg-undo-update.service` (before greetd and the
+Windows side) runs `apt-get install --allow-downgrades` (not `--no-download`: apt then refuses local .debs) of
+exactly that set (`SG_SNAP_UNDOING=1`: the hook does not keep it again),
+pins the undone versions, and says so in the status. The boot menu has
+"Stained Glass OS -- undo the last update (<date>)" (`sg.undo-update=1`)
+while a set is kept.
+
+**Converting ext4 to btrfs** (Control Panel > System and Security >
+Recovery, shown only on ext4): `convert-schedule` checks (fsck state from
+tune2fs, 20% or 5 GB free, mains power when there is a battery, installed by
+Setup), makes an initrd of the running kernel with mkinitramfs `-d` and a
+copy of `/usr/share/stained-glass/convert-initramfs` (MODULES=most when the
+boot partition has room, else dep; only this initrd carries
+`sg-convert-root` and btrfs-convert), writes `Sg-convert.conf` and
+`bootctl set-oneshot`s it. In the initrd (local-premount),
+`sg-convert-root`: e2fsck -f -p, btrfs-convert --uuid copy -L, `@` a snapshot
+of the converted top level, the other subvolumes reflink-filled and their
+places in `@` emptied, fstab, `@` the default subvolume (so the existing
+boot entries need no rootflags), the old copy in the top level removed,
+`converted` recorded, restart (sysrq b). `ext2_saved` stays until
+`convert-keep`; `convert-undo` runs `btrfs-convert -r` the same way (the
+rollback works with our subvolumes present: tested on loop devices). After
+an undo, the first ext4 start removes restore-point entries and hides
+kernels the ext4 system lacks.
+
+- **Gates:** `test/restore-points-test.sh` (lint: the APT hook's set, the
+  undo entry and apply, pins, the prepared list, convert-check on battery;
+  mutants NO_PIN, ANY_PACKAGE, UNDO_LOCKS, UNDO_ONLINE), `make test-snapshot`
+  (`test/snapshot-test.sh`, loop devices only: restore points, keep three,
+  low space, going back with homes and prefix untouched, the hidden kernel,
+  the next start; a real ext4 converted and undone byte for byte; mutants
+  KEEP_ALL, CONVERT_NO_SAVED, CONVERT_KEEP_HOME).
+- **btrfs subvolume sync waits for ever** on a deleted subvolume that is
+  still mounted (the old `@` while it is the running root): sg-snapshot
+  bounds it (60 s).
+- **`SG_SNAP_*`** make every path a test's (see the header).
+- **Undo runs inside the start's own transaction** (before greetd): the
+  maintainer scripts' `systemctl restart X` waited for X, which waited for
+  the undo -- for ever. apt runs with `SYSTEMD_OFFLINE=1` (systemctl leaves
+  PID 1 alone), `daemon-reload` after. undo-apply never holds sg-snapshot's
+  lock (the postinst's `sg-snapshot status` and the APT hook run inside it),
+  and `dh_installsystemd --no-stop-on-upgrade` for sg-undo-update and
+  sg-snapshot: the preinst's stop killed the undo half way. apt is not given
+  `--no-download` (it then refuses local .debs: "Pathname to install is not
+  absolute"); `dpkg --configure -a` first.
+- **The conversion's initrd is initramfs-tools without busybox**: klibc has
+  no `mv` or `touch`, and btrfs-convert's pthread_cancel loads libgcc_s at
+  run time. The hook's command list is the gate's: test-snapshot runs
+  sg-convert-root with only those on PATH (`SG_CONVERT_PATH_TAIL`). Its
+  messages go to /dev/console (tty0, the last console=), not the serial log.
 
 ## Never disable mscoree/mshtml for more than one command
 

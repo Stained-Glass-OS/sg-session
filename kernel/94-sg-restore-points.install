@@ -1,0 +1,11 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): the boot menu's restore points and
+# "undo the last update" entry start a kernel that is on the boot partition;
+# a kernel added or removed changes which (sg-snapshot entries). Never fails
+# a kernel's installation.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+case "${1:-}" in add|remove) ;; *) exit 0 ;; esac
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+[ -x /usr/bin/sg-snapshot ] || exit 0
+/usr/bin/sg-snapshot entries >/dev/null 2>&1 || :
+exit 0
