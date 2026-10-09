@@ -27,7 +27,14 @@ pkg-config --exists dbus-1 || { echo "SKIP: no libdbus-1-dev"; exit 77; }
 T=$(mktemp -d /var/tmp/sg-screensaver.XXXXXX)
 RC=0; FP=""; CP=""
 # shellcheck disable=SC2317  # invoked via trap
-cleanup() { for p in $CP $FP; do kill "$p" 2>/dev/null; done; rm -rf "$T"; }
+# the bus daemon, the service it started and the clients outlive
+# dbus-run-session: everything run from $T goes (23 daemons and services
+# were found left over on the host, 2026-10-09)
+cleanup() {
+    for p in $CP $FP; do kill "$p" 2>/dev/null; done
+    pkill -f -- "$T/" 2>/dev/null
+    rm -rf "$T"
+}
 trap cleanup EXIT INT TERM
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }

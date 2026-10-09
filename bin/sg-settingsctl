@@ -175,10 +175,18 @@ def pid_alive(name):
 def stop(name):
     pid = pid_alive(name)
     if pid:
+        # the helper's whole group (start() makes it a session of its own):
+        # device-sounds-run's "udevadm monitor" outlived it before, one more
+        # each time the session started again
         try:
-            os.kill(pid, signal.SIGTERM)
+            if os.environ.get("SG_MUTANT_STOP_LEAVES_CHILDREN"):
+                raise OSError
+            os.killpg(pid, signal.SIGTERM)
         except OSError:
-            pass
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
     try:
         os.unlink(os.path.join(runtime_dir(), name + ".pid"))
     except OSError:

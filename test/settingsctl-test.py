@@ -6,6 +6,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import atexit
 import os
 import re
 import subprocess
@@ -109,6 +110,27 @@ ENV = dict(os.environ, SG_SETTINGSCTL_TOOLS=tools, XDG_CONFIG_HOME=os.path.join(
            SG_SYSTEM_UPDATE=os.path.join(tmp, "system-update"), SG_UPDATE_STATE=os.path.join(tmp, "sg-update"),
            PATH="/usr/bin:/bin")
 os.makedirs(ENV["XDG_RUNTIME_DIR"])
+
+
+# stop everything the test started, whatever happens: each helper is a
+# session of its own (start(): start_new_session), so its whole group goes --
+# device-sounds-run's udevadm monitor too. Only sg-nightlight and sg-idle
+# were stopped, so every run left a real "udevadm monitor" (and the
+# device-sounds watcher) running for ever (74 found on the host, 2026-10-09).
+def stop_helpers():
+    rd = ENV["XDG_RUNTIME_DIR"]
+    for name in os.listdir(rd) if os.path.isdir(rd) else []:
+        if not name.endswith(".pid"):
+            continue
+        try:
+            with open(os.path.join(rd, name)) as f:
+                pid = int(f.read())
+            os.killpg(pid, 15)
+        except (OSError, ValueError):
+            pass
+
+
+atexit.register(stop_helpers)
 
 
 def ctl(*args, env=None):
@@ -344,6 +366,20 @@ def sounds_played(env=SENV):
     _time.sleep(0.3)
     return [os.path.basename(c.split()[-1]) for c in calls() if c.startswith("pw-play")]
 
+
+# the session starting again stops the watcher it started before, with its
+# udevadm monitor (a stand-in that stays, here): none left behind
+_events_udevadm = open(os.path.join(tools, "udevadm")).read()
+with open(os.path.join(tools, "udevadm"), "w") as _f:
+    _f.write("#!/bin/sh\nsleep 600\n")   # a monitor that stays
+ctl("session-start")
+ctl("session-start")
+_time.sleep(0.5)
+_left = subprocess.run(["pgrep", "-f", os.path.join(tools, "udevadm")], capture_output=True, text=True).stdout.split()
+check("session-start again: the earlier device-sounds watcher goes with its monitor (one left, not two)",
+      len(_left) <= 1, _left)
+with open(os.path.join(tools, "udevadm"), "w") as _f:
+    _f.write(_events_udevadm)
 
 got = sounds_played()
 check("device sounds: a device in, then out -- one sound each, not one per interface",
@@ -661,12 +697,5 @@ check("printers: arguments are refused", code == 2, lines)
 code, lines = ctl("reboot")
 check("an unknown command is refused", code == 2 and lines[-1].startswith("ERROR invalid"), lines)
 
-# stop what the test started
-for name in ("sg-nightlight", "sg-idle"):
-    try:
-        with open(os.path.join(ENV["XDG_RUNTIME_DIR"], name + ".pid")) as f:
-            os.kill(int(f.read()), 15)
-    except (OSError, ValueError):
-        pass
 print("settingsctl-test: %s" % ("FAIL (%d)" % FAILS if FAILS else "PASS"))
 sys.exit(1 if FAILS else 0)

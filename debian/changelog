@@ -1,3 +1,15 @@
+sg-session (0.1.0-184) unstable; urgency=medium
+
+  * sg-settingsctl: a helper it stops goes with its whole process group --
+    starting the session again left the device-sounds watcher's
+    "udevadm monitor" running, one more each time. settingsctl-test checks
+    it (mutant SG_MUTANT_STOP_LEAVES_CHILDREN) and stops every helper it
+    started; screensaver-test stops its bus daemon, service and clients.
+    Test runs had left 74 monitors and 23 bus daemons on the build host,
+    and with the agents' builds they filled its process limit.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 13:15:00 -0700
+
 sg-session (0.1.0-183) unstable; urgency=medium
 
   * Restore points: SG Store installs and removals are kept apart from
