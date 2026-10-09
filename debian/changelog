@@ -1,3 +1,17 @@
+sg-session (0.1.0-181) unstable; urgency=medium
+
+  * The session's org.freedesktop.ScreenSaver service (power/
+    sg-screensaverd, D-Bus activated): Inhibit/UnInhibit, as Linux programs
+    (Firefox, video players) and Wine's power requests and
+    SetThreadExecutionState ask; while anything is held it holds an INHIBIT
+    on the compositor's control socket (sg-compositor 0.2.0+sg50), so the
+    screen-off and sleep timers (swayidle) wait. A program's inhibitions go
+    with its bus connection. SimulateUserActivity restarts the idle time,
+    Lock/SetActive lock, GetActive tells. test/screensaver-test.sh (in
+    lint); mutant SG_MUTANT_NO_HOLD. Build-Depends libdbus-1-dev.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 00:24:44 -0700
+
 sg-session (0.1.0-180) unstable; urgency=medium
 
   * Restore points and going back (David 2026-10-08), the whole OS on one

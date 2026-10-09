@@ -33,7 +33,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter token-probe procagent polkitagent rdp
+install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
@@ -103,6 +103,12 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp
 	        build/sg-keyring \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# The session's org.freedesktop.ScreenSaver service (power/): what Linux
+	@# programs and Wine's power requests ask to keep the screen on through;
+	@# D-Bus starts it on the first call.
+	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/dbus-1/services
+	install -m 0755 build/sg-screensaverd $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0644 power/org.freedesktop.ScreenSaver.service $(DESTDIR)$(PREFIX)/share/dbus-1/services/
 	@# Remote Desktop (ADR 0010): the daemon and its certificate helper. The
 	@# unit is installed disabled, as Remote Desktop is on Windows.
 	@if [ -f build/sg-rdp-authd ]; then \
@@ -322,6 +328,8 @@ lint:
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
+	@sh test/screensaver-test.sh >/dev/null 2>&1; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ] || { sh test/screensaver-test.sh; exit 1; }
+	@! sh test/screensaver-test.sh --mutant NO_HOLD >/dev/null 2>&1 || [ $$? -eq 77 ] || { echo "screensaver-test: mutant NO_HOLD passed"; exit 1; }
 	@sh test/display-scale-test.sh
 	@sh test/lockscale-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/systemroot-temp-test.sh
@@ -537,6 +545,11 @@ token-probe:
 # the gate can exercise the real wire format, and they are installed beside the
 # bridge because the gate runs in the image, where there is no source tree.
 CFLAGS_BRIDGE := -O2 -Wall -Wextra
+
+.PHONY: power
+power:
+	@mkdir -p build
+	$(CC) $(CFLAGS_BRIDGE) $$(pkg-config --cflags dbus-1) -o build/sg-screensaverd power/sg-screensaverd.c $$(pkg-config --libs dbus-1)
 
 .PHONY: greeter
 greeter:

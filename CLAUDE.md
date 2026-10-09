@@ -57,6 +57,7 @@ separately.
 | `systemd/sg-prefix-init.service` | first-boot fallback if the image didn't bake a prefix |
 | `systemd/sg-wineserver.service` | runs the machine-level server before greetd |
 | `bin/sg-install` | installs the live system onto a disk (see below) |
+| `power/sg-screensaverd` | the session's `org.freedesktop.ScreenSaver` service (D-Bus activated): Inhibit holds the compositor's idle off (INHIBIT on its control socket), so the screen and sleep timers wait -- for Linux programs and Wine's power requests; `test/screensaver-test.sh` |
 | `setup/` | Setup: the wizard, its bridge, and `sg-installd`; the first-run setup (OOBE): `sg-oobe`, `sg-oobed` |
 | `bin/sg-netctl` | network settings: the CLI, sg-netd, and the bridge for Windows programs (see below) |
 | `bin/sg-firewall` | Stained Glass Firewall: the daemon (sg-firewall.service), its nftables table, its commands (see below) |
