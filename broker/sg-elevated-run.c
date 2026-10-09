@@ -363,6 +363,15 @@ int main(int argc, char **argv)
     /* Wine: a desktop of this display's own, so the desktop process Wine
      * starts for it runs on this display and ends with it. */
     setenv("SG_WINSTATION", desk, 1);
+    /* ... in the requester's session (wine-sg 1706: each user has one, with
+     * its own WinSta0, Local\ namespace and clipboard), where its windows,
+     * tray icons and messages belong; wine-sg honours it for the SYSTEM
+     * account only, and Wine's processes started from it stay there. */
+    {
+        char sess[16];
+        snprintf(sess, sizeof(sess), "%ld", uid_arg);
+        setenv("SG_SESSION_UID", sess, 1);
+    }
 
     apply_user_look();
 

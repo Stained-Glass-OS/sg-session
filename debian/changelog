@@ -1,3 +1,12 @@
+sg-session (0.1.0-187) unstable; urgency=medium
+
+  * sg-elevated-run: the elevated program runs in the requesting user's
+    session (SG_SESSION_UID, wine-sg 1706 gives each user of the shared
+    prefix a session of its own), so its windows, tray icons and messages
+    reach that user's desktop rather than session 1's.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 16:37:13 -0700
+
 sg-session (0.1.0-186) unstable; urgency=medium
 
   * CI: Debian's image from AWS's public mirror of Docker's official images
