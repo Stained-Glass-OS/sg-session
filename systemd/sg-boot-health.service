@@ -1,0 +1,21 @@
+# A start that does not finish shows the boot menu at the next one: early at
+# every start, the boot loader is asked to show its menu next time
+# (sg-boot-health begin); sg-boot-ok.service takes the request back once this
+# start succeeded. Not on a live medium, in a container or without UEFI.
+[Unit]
+Description=Stained Glass OS: show the boot menu next time unless this start succeeds
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+ConditionKernelCommandLine=!systemd.volatile
+ConditionKernelCommandLine=!sg.live
+ConditionVirtualization=!container
+ConditionPathExists=/sys/firmware/efi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-boot-health begin
+TimeoutStartSec=30
+
+[Install]
+WantedBy=sysinit.target

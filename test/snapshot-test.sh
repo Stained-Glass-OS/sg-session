@@ -17,7 +17,9 @@
 #     untouched, the update's versions kept from apt, a kernel the restore
 #     point lacks hidden from the boot menu; Settings is told a restart is
 #     pending;
-#   - at the next start (boot): the old @ gone, a started boot copy made again.
+#   - at the next start (boot): the old @ gone, a started boot copy made again;
+#   - restore points for SG Store's installs are kept (the last two) apart from
+#     the updates' (the last three): installs never push an update's out.
 # ext4 -> btrfs (convert/sg-convert-root, as the initrd runs it): a stand-in
 # system on ext4 converted: @ the default subvolume, the homes, logs, caches,
 # temporary files and prefix in their subvolumes and gone from @, fstab naming
@@ -27,7 +29,7 @@
 # Needs passwordless sudo, losetup, mkfs.btrfs, btrfs-convert, mkfs.ext4; skips
 # (77) without them.
 #
-#   sh test/snapshot-test.sh [--mutant KEEP_ALL|CONVERT_NO_SAVED|CONVERT_KEEP_HOME]
+#   sh test/snapshot-test.sh [--mutant KEEP_ALL|CONVERT_NO_SAVED|CONVERT_KEEP_HOME|ONE_POOL|EXPIRE_NEVER|EXPIRE_EARLY]
 # shellcheck disable=SC2015,SC2086,SC2317,SC2024,SC2013
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -159,6 +161,21 @@ snap env SG_SNAP_LOW=$((1 << 50)) python3 "$HERE/bin/sg-snapshot" create --label
 [ "$(sudo -n ls "$T/top/@snapshots" | wc -l)" = 1 ] && pass "low on space: the oldest go first, the newest stays" \
     || fail "low space kept: $(sudo -n ls "$T/top/@snapshots")"
 
+# SG Store's installs are kept apart: the newest point, two more updates, then three installs
+for n in 1 2; do NOW=$((1791500000 + (9 + n) * 3600)); hook $((180 + n)) $((181 + n)) >/dev/null 2>&1; done
+for n in 3 4 5; do
+    NOW=$((1791500000 + (9 + n) * 3600))
+    printf 'VERSION 3\n\nlibx 1.%s amd64 same < 1.%s amd64 same /x/libx.deb\n' "$n" "$((n + 1))" \
+        | snap env SG_SNAP_SOURCE=store python3 "$HERE/bin/sg-snapshot" apt-hook >/dev/null 2>&1
+done
+if [ "$(grep -c '^SNAPSHOT .*	update$' "$T/status")" = 3 ] && [ "$(grep -c '^SNAPSHOT .*	store$' "$T/status")" = 2 ] \
+        && ! sudo -n test -d "$T/top/@snapshots/$(id_at $((1791500000 + 12 * 3600)))" \
+        && sudo -n test -d "$T/top/@snapshots/$(id_at $((1791500000 + 13 * 3600)))" \
+        && sudo -n grep -q '"source": "store"' "$T/top/@snapshots/$(id_at $((1791500000 + 14 * 3600)))/info"; then
+    pass "SG Store's installs: the last two kept apart from the last three updates (three installs dropped the oldest install only)"
+else fail "retention by source: $(grep SNAPSHOT "$T/status")"; fi
+grep -q "^SNAPSHOT .*SG Store: libx" "$T/status" && pass "an install's restore point is named for the SG Store" || fail "label: $(grep SNAPSHOT "$T/status")"
+
 # --- the conversion's initrd, as convert-schedule makes it (mkinitramfs -d) -------------------
 K=$(uname -r)
 if command -v mkinitramfs >/dev/null && [ -d "/lib/modules/$K" ]; then
@@ -239,6 +256,28 @@ if [ "$(sudo -n blkid -p -o value -s TYPE "$LOOP2")" = ext4 ] && sudo -n e2fsck 
 else fail "undo: $(tail -5 "$T/undo.out" "$T/convert.log"; echo "$SUM_AFTER" | head -5)"; fi
 sudo -n mount -o ro "$LOOP2" "$T/m" && st=$(sudo -n cat "$T/m/var/lib/stained-glass-convert/state" 2>&1); sudo -n umount "$T/m"
 [ "$st" = "undone 20261008-120000" ] && pass "the undo is recorded" || fail "undo state: $st"
+
+# --- 14 days to undo it, then it is kept by itself --------------------------------------------
+SG_CONVERT_NOW=20261009-120000 conv btrfs > "$T/conv2.out" 2>&1
+sudo -n mount -o subvolid=5 "$LOOP2" "$T/top"
+REAL=$(date +%s)
+sudo -n sh -c "echo 'converted $(date -d "@$REAL" +%Y%m%d-%H%M%S)' > '$T/convert-state'"
+expire() {   # DAYS -- sg-snapshot convert-expire as that many days after the conversion
+    NOW=$((REAL + $1 * 86400)); snap python3 "$HERE/bin/sg-snapshot" convert-expire 2>&1
+}
+expire 3 > "$T/exp3.out"
+if sudo -n test -d "$T/top/ext2_saved" && grep -q '^CONVERT_DEADLINE 1[01]	' "$T/status" && grep -q '^CONVERT converted' "$T/status"; then
+    pass "3 days after the conversion: still undoable, the Recovery page told the days left ($(grep '^CONVERT_DEADLINE' "$T/status"))"
+else fail "3 days: $(cat "$T/exp3.out"; grep CONVERT "$T/status")"; fi
+expire 13 > "$T/exp13.out"
+sudo -n test -d "$T/top/ext2_saved" && pass "13 days after: still undoable" || fail "13 days: the saved ext4 image is gone: $(cat "$T/exp13.out")"
+expire 15 > "$T/exp15.out"
+if ! sudo -n test -e "$T/top/ext2_saved" && grep -q '^kept .* auto$' "$T/convert-state"; then
+    if grep -q '^KEPT .*	auto$' "$T/status" && ! grep -q '^CONVERT_DEADLINE' "$T/status"; then
+        pass "15 days after: kept by itself (the saved ext4 image deleted, the space freed), the Recovery page told it was automatic"
+    else fail "15 days, status: $(grep -E 'KEPT|CONVERT|SAVED' "$T/status")"; fi
+else fail "15 days: $(cat "$T/exp15.out" "$T/convert-state"; sudo -n ls "$T/top")"; fi
+sudo -n umount "$T/top"
 
 [ $RC = 0 ] && echo "snapshot-test: PASS" || echo "snapshot-test: FAIL"
 exit $RC

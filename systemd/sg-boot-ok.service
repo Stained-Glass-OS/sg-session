@@ -1,0 +1,18 @@
+# This start succeeded: the boot menu is not shown at the next one
+# (sg-boot-health ok). After graphical.target when the system has one (the
+# sign-in screen is up), after a short grace; otherwise after multi-user.target.
+# Type=simple: nothing waits for it (graphical.target is not delayed).
+[Unit]
+Description=Stained Glass OS: this start succeeded, no boot menu next time
+After=multi-user.target graphical.target
+ConditionKernelCommandLine=!systemd.volatile
+ConditionKernelCommandLine=!sg.live
+ConditionVirtualization=!container
+ConditionPathExists=/sys/firmware/efi
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sg-boot-health ok
+
+[Install]
+WantedBy=multi-user.target

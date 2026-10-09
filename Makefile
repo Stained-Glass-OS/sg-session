@@ -18,7 +18,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
-               bin/sg-update-prepare bin/sg-boot-splash bin/sg-kernel-entries bin/sg-boot-layout bin/sg-file-access-check \
+               bin/sg-update-prepare bin/sg-boot-splash bin/sg-boot-health bin/sg-kernel-entries bin/sg-boot-layout bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check \
                bin/sg-firewall-check
 LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
@@ -51,6 +51,10 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	install -D -m 0644 systemd/packagekit-offline-update.service.d/50-sg-restore-point.conf \
 	    $(UNITDIR)/packagekit-offline-update.service.d/50-sg-restore-point.conf
 	install -m 0644 systemd/sg-snapshot.service systemd/sg-undo-update.service $(UNITDIR)
+	install -m 0644 systemd/sg-snapshot-expire.service systemd/sg-snapshot-expire.timer $(UNITDIR)
+	@# A start that does not finish shows the boot menu at the next one (sg-boot-health).
+	install -m 0755 bin/sg-boot-health $(BINDIR)
+	install -m 0644 systemd/sg-boot-health.service systemd/sg-boot-ok.service $(UNITDIR)
 	install -D -m 0755 kernel/94-sg-restore-points.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/94-sg-restore-points.install
 	install -m 0755 convert/sg-convert-root $(LIBDIR)
 	install -d $(SHAREDIR)/convert-initramfs/hooks $(SHAREDIR)/convert-initramfs/scripts/local-premount
@@ -322,7 +326,7 @@ lint:
 	@sh test/prefix-current-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-snapshot
 	@sh test/restore-points-test.sh
-	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE PLYMOUTH_REQUIRED; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done
+	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE PLYMOUTH_REQUIRED ONE_POOL STORE_UNDO EXPIRE_NEVER EXPIRE_EARLY; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done
 	@sh test/prefix-repair-test.sh
 	@! sh test/prefix-repair-test.sh --mutant >/dev/null
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
@@ -410,6 +414,8 @@ lint:
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
 	@sh test/netbrowse-test.sh
 	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
+	@sh test/boot-health-test.sh
+	@for m in NO_BEGIN NO_OK UPDATE_ARMS UNIT_ORDER; do ! sh test/boot-health-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-health-test: mutant $$m passed"; exit 1; }; done
 	@sh test/kernel-entries-test.sh
 	@sh test/boot-layout-test.sh
 	@for m in verify live bootroot marker; do ! sh test/boot-layout-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-layout-test: mutant $$m passed"; exit 1; }; done
@@ -422,7 +428,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
@@ -792,7 +798,7 @@ test-profile:
 .PHONY: test-snapshot
 test-snapshot:
 	@sh test/snapshot-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -eq 0 ] || exit $$rc
-	@for m in KEEP_ALL CONVERT_NO_SAVED CONVERT_KEEP_HOME; do \
+	@for m in KEEP_ALL CONVERT_NO_SAVED CONVERT_KEEP_HOME ONE_POOL EXPIRE_NEVER EXPIRE_EARLY; do \
 	    if sh test/snapshot-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
 	    echo "mutant $$m caught"; done
 

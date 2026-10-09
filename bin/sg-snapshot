@@ -6,7 +6,12 @@
 # subvolumes of their own), a restore point is a read-only snapshot of @,
 # taken before every apt run that changes packages (the APT hook below: the
 # automatic updater's offline install, a manual apt upgrade, SG Store). The
-# last three are kept; when the drive is low on space the oldest go first.
+# last three taken for updates (and by hand) are kept, and, apart from them,
+# the last two taken for SG Store's installs and uninstalls (info "source":
+# "store", from the SG_SNAP_SOURCE=store sg-admind gives its apt runs): an app
+# install never pushes out a restore point from before an update. A restore
+# point without a source (the first versions) counts as an update's. When the
+# drive is low on space the Store's go first, the oldest first.
 #
 # The restore points live in the top level, never mounted in the running
 # system: @snapshots/<id>/snapshot (read-only), @snapshots/<id>/info (what
@@ -39,7 +44,10 @@
 # system drive", which then makes the layout and restarts. btrfs-convert's
 # ext2_saved keeps the old file system until the person keeps the
 # conversion (convert-keep) or undoes it (convert-undo: btrfs-convert -r, in
-# the same initrd).
+# the same initrd). The undo is offered for 14 days (SG_SNAP_CONVERT_DAYS):
+# convert-expire (at each start, and daily from sg-snapshot-expire.timer) then
+# keeps the conversion by itself -- ext2_saved deleted, its space freed -- and
+# the status says so (CONVERT_DEADLINE while it can be undone, KEPT after).
 #
 #   sg-snapshot status                facts, for Settings and the Control Panel
 #                                     (also published in /run/stained-glass-snapshot/status)
@@ -52,7 +60,7 @@
 #   sg-snapshot entries               the boot menu's restore points
 #   sg-snapshot boot                  at each start (sg-snapshot.service)
 #   sg-snapshot undo-update | undo-cancel | undo-apply
-#   sg-snapshot convert-check | convert-schedule | convert-cancel | convert-keep | convert-undo
+#   sg-snapshot convert-check | convert-schedule | convert-cancel | convert-keep | convert-undo | convert-expire
 #
 # Every answer ends with OK, or ERROR <message> (exit 1).
 #
@@ -64,10 +72,13 @@
 # points go), SG_SNAP_KEEP, SG_SNAP_ROLLBACK (/var/lib/stained-glass-rollback),
 # SG_SNAP_REPACK (dpkg-repack), SG_SNAP_APT (apt-get), SG_SNAP_DPKGQ
 # (dpkg-query), SG_SNAP_CONVERT_STATE, SG_SNAP_POWER (/sys/class/power_supply),
-# SG_SNAP_BOOTCTL, SG_SNAP_MKINITRAMFS, SG_SNAP_UNAME.
+# SG_SNAP_BOOTCTL, SG_SNAP_MKINITRAMFS, SG_SNAP_UNAME, SG_SNAP_KEEP_STORE,
+# SG_SNAP_SOURCE (store: this apt run is SG Store's), SG_SNAP_CONVERT_DAYS,
+# SG_SNAP_CONVERTED_AT (seconds: when the conversion was made).
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
+import datetime
 import fcntl
 import json
 import os
@@ -87,7 +98,9 @@ SNAPDIR = "@snapshots"
 ETC = E("SG_SNAP_ETC", "/etc")
 TOP = E("SG_SNAP_TOP", "/run/sg-snapshot/top")
 STATUS = E("SG_SNAP_STATUS", "/run/stained-glass-snapshot/status")
-KEEP = int(E("SG_SNAP_KEEP", "3"))
+KEEP = int(E("SG_SNAP_KEEP", "3"))                  # for updates (and made by hand)
+KEEP_STORE = int(E("SG_SNAP_KEEP_STORE", "2"))      # for SG Store's installs and uninstalls
+CONVERT_DAYS = int(E("SG_SNAP_CONVERT_DAYS", "14"))
 ROLLBACK_REL = "var/lib/stained-glass-rollback"
 ROLLBACK = E("SG_SNAP_ROLLBACK", "/" + ROLLBACK_REL)
 CONVERT_STATE = E("SG_SNAP_CONVERT_STATE", "/var/lib/stained-glass-convert/state")
@@ -366,8 +379,8 @@ def make_entries(top=None):
             if not k:
                 continue
             base = kents[k][0]
-            title = ("Stained Glass OS -- before the update of %s" if info.get("kind") == "auto"
-                     else "Stained Glass OS -- restore point of %s") % human(sid)
+            title = ("Stained Glass OS -- before the %s" % before_what(info, sid)) if before_what(info, sid) \
+                else "Stained Glass OS -- restore point of %s" % human(sid)
             write_entry(edir, "%s%s.conf" % (RESTORE_ENTRY, sid), title,
                         base, snapshot_options(base.get("options", ""), "%s/%s/boot" % (SNAPDIR, sid),
                                                ["sg.snapshot=" + sid]))
@@ -418,22 +431,52 @@ def delete_snapshot(top, sid):
     say("restore point %s deleted" % sid)
 
 
+def pool(info):
+    """which kept-count a restore point belongs to: SG Store's own, or the
+    updates' (and those made by hand, and those from before there was a source)"""
+    if E("SG_MUTANT_SNAP_ONE_POOL"):
+        return "update"
+    return "store" if info.get("source") == "store" else "update"
+
+
+def before_what(info, sid):
+    """'update of <date>' / 'SG Store change of <date>' for a restore point
+    taken before packages changed; None for one made by hand"""
+    if info.get("kind") != "auto":
+        return None
+    if info.get("source") == "store":
+        return "SG Store change of %s" % human(sid)
+    return "update of %s" % human(sid)
+
+
+def surplus(snaps, keep_ids=()):
+    """[id] to delete for the counts: the updates' keep KEEP, SG Store's keep
+    KEEP_STORE, each pool's oldest first; never one asked to keep"""
+    out = []
+    for name, limit in (("update", KEEP), ("store", KEEP_STORE)):
+        mine = [sid for sid, info in snaps if pool(info) == name]
+        extra = len(mine) - limit
+        for sid in mine:
+            if extra <= 0:
+                break
+            if sid in keep_ids:
+                continue
+            out.append(sid)
+            extra -= 1
+    return out
+
+
 def prune(top, keep_ids=()):
     if E("SG_MUTANT_SNAP_KEEP_ALL"):
         return
-    snaps = snapshots(top)
-    extra = len(snaps) - KEEP
-    for sid, _ in snaps:            # the oldest first, never one asked to keep
-        if extra <= 0:
-            break
-        if sid in keep_ids:
-            continue
+    for sid in surplus(snapshots(top), keep_ids):
         delete_snapshot(top, sid)
-        extra -= 1
-    # a drive low on space: the oldest first, never the newest
+    # a drive low on space: SG Store's first, then the updates', the oldest
+    # first, never the newest
     snaps = snapshots(top)
     protect = set(keep_ids) or {snaps[-1][0]} if snaps else set()
     snaps = [s for s in snaps if s[0] not in protect]
+    snaps.sort(key=lambda s: 0 if pool(s[1]) == "store" else 1)     # (stable: oldest first within)
     while snaps and free_bytes(top) < low_mark(top):
         delete_snapshot(top, snaps.pop(0)[0])
         try:                        # the space comes back as the cleaner gets to it
@@ -442,7 +485,7 @@ def prune(top, keep_ids=()):
             pass
 
 
-def take(top, label, kind, changes=None):
+def take(top, label, kind, changes=None, source=None):
     sid = new_id()
     d = os.path.join(top, SNAPDIR, sid)
     while os.path.exists(d):        # two in one second
@@ -453,6 +496,8 @@ def take(top, label, kind, changes=None):
     btrfs("subvolume", "snapshot", "-r", os.path.join(top, "@"), os.path.join(d, "snapshot"))
     info = {"id": sid, "label": label, "kind": kind, "kernels": kernels_in(os.path.join(d, "snapshot")),
             "changes": changes or []}
+    if source:
+        info["source"] = source
     write(os.path.join(d, "info"), json.dumps(info, indent=1) + "\n", 0o600)
     btrfs("subvolume", "snapshot", os.path.join(d, "snapshot"), os.path.join(d, "boot"))
     say("restore point %s: %s" % (sid, label))
@@ -493,8 +538,9 @@ def cmd_list(args):
     need_btrfs()
     with Top() as top:
         kents = kernel_entries(entries_dir())
-        return ["SNAPSHOT %s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
-                                                 "yes" if bootable(info, kents) else "no", info.get("label", ""))
+        return ["SNAPSHOT %s\t%s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
+                                                       "yes" if bootable(info, kents) else "no", info.get("label", ""),
+                                                       pool(info))
                 for sid, info in reversed(snapshots(top))]
 
 
@@ -526,12 +572,13 @@ def cmd_rollback(args):
         edir = entries_dir()
         kents = kernel_entries(edir, include_hidden=True)
         have = [k for k in info.get("kernels", []) if k in kents]
+        what = before_what(info, sid)
         if not have:
-            raise Fail("The version from before the update of %s cannot be started: its Linux kernel is no longer "
-                       "on the boot partition." % human(sid))
+            raise Fail("The version from before the %s cannot be started: its Linux kernel is no longer "
+                       "on the boot partition." % (what or "restore point of %s" % human(sid)))
         if os.path.isdir(os.path.join(top, "@")):
-            undo = take(top, ("Before going back to the version from before the update of %s" if info.get("kind") == "auto"
-                              else "Before going back to the restore point of %s") % human(sid), "manual")
+            undo = take(top, ("Before going back to the version from before the %s" % what) if what
+                        else "Before going back to the restore point of %s" % human(sid), "manual")
         else:
             undo = None
         old = os.path.join(top, "@old-" + new_id())
@@ -545,9 +592,9 @@ def cmd_rollback(args):
         newroot = os.path.join(top, "@")
         # what this restore point was taken before: not installed again
         went_back_prefs_into(os.path.join(newroot, "etc"), info.get("changes", []),
-                             "went back to the version from before the update of %s" % human(sid))
+                             "went back to the version from before the %s" % (what or "restore point of %s" % human(sid)))
         write(os.path.join(newroot, ROLLBACK_REL, "went-back"),
-              json.dumps({"id": sid, "when": new_id(), "undo": undo}) + "\n")
+              json.dumps({"id": sid, "when": new_id(), "undo": undo, "source": pool(info)}) + "\n")
         match_kernels(edir, info.get("kernels", []))
         prune(top, keep_ids=tuple(x for x in (sid, undo) if x))
         make_entries(top)
@@ -637,7 +684,7 @@ def cmd_apt_hook(args):
     text = sys.stdin.read()          # all of it: apt writes it whole
     if live() or E("SG_SNAP_UNDOING") == "1":
         return []
-    return before_changes(parse_hook(text))
+    return before_changes(parse_hook(text), apt_source())
 
 
 def prepared_changes():
@@ -662,10 +709,16 @@ def cmd_pre_offline(args):
     return before_changes(prepared_changes())
 
 
-def before_changes(changes):
+def apt_source():
+    """'store' when SG Store's apt run (sg-admind gives it SG_SNAP_SOURCE=store),
+    else None: an update"""
+    return "store" if E("SG_SNAP_SOURCE") == "store" else None
+
+
+def before_changes(changes, source=None):
     if not changes:
         return []
-    label = "Updates: " + describe(changes)
+    label = ("SG Store: " if source == "store" else "Updates: ") + describe(changes)
     kind = layout_kind()
     if kind == "btrfs":
         if booted_snapshot():
@@ -676,10 +729,12 @@ def before_changes(changes):
             return []
         with Top() as top:
             snaps = snapshots(top)
-            if snaps and snaps[-1][1].get("kind") == "auto" and \
+            # the same apt run, again (the offline update and its APT hook) -- of
+            # the same kind: an app installed a moment after an update has its own
+            if snaps and snaps[-1][1].get("kind") == "auto" and snaps[-1][1].get("source") == source and \
                     now() - time.mktime(time.strptime(snaps[-1][0], "%Y%m%d-%H%M%S")) < 300:
-                return ["SNAPSHOT " + snaps[-1][0]]     # the same apt run, again
-            sid = take(top, label[:300], "auto", changes)
+                return ["SNAPSHOT " + snaps[-1][0]]
+            sid = take(top, label[:300], "auto", changes, source)
             try:                        # "went back" is old news once packages change again
                 os.unlink(os.path.join(ROLLBACK, "went-back"))
             except FileNotFoundError:
@@ -688,7 +743,8 @@ def before_changes(changes):
             make_entries(top)
             publish(top)
         return ["SNAPSHOT " + sid]
-    save_previous(changes, label)
+    if source != "store" or E("SG_MUTANT_SNAP_STORE_UNDO"):     # (SG Store's installs do not replace the update to undo)
+        save_previous(changes, label)
     return []
 
 
@@ -974,16 +1030,81 @@ def cmd_convert_cancel(args):
     return []
 
 
+def keep_conversion(top, auto=False):
+    saved = os.path.join(top, "ext2_saved")
+    if os.path.isdir(saved):
+        btrfs("subvolume", "delete", saved)
+    write(CONVERT_STATE, "kept %s%s\n" % (new_id(), " auto" if auto else ""))
+
+
 def cmd_convert_keep(args):
     if layout_kind() != "btrfs":
         raise Fail("The system drive has not been converted.")
     with Top() as top:
-        saved = os.path.join(top, "ext2_saved")
-        if os.path.isdir(saved):
-            btrfs("subvolume", "delete", saved)
-        write(CONVERT_STATE, "kept %s\n" % new_id())
+        keep_conversion(top)
         publish(top)
     return []
+
+
+def saved_created(top):
+    """when the conversion was made (seconds): the time it recorded in its
+    state; failing that, the creation time of the old file system's subvolume
+    (btrfs-convert leaves that empty)"""
+    if E("SG_SNAP_CONVERTED_AT"):
+        return int(E("SG_SNAP_CONVERTED_AT"))
+    detail = convert_state()[1].split()
+    if detail and ID_RE.match(detail[0]):
+        return int(time.mktime(time.strptime(detail[0], "%Y%m%d-%H%M%S")))
+    p = btrfs("subvolume", "show", os.path.join(top, "ext2_saved"), check=False)
+    m = re.search(r"Creation time:\s+(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)( [+-]\d{4})?", p.stdout)
+    if m:
+        try:
+            if m.group(2):
+                return int(datetime.datetime.strptime(m.group(1) + m.group(2), "%Y-%m-%d %H:%M:%S %z").timestamp())
+            return int(time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")))
+        except ValueError:
+            pass
+    return None
+
+
+def convert_deadline(top):
+    """seconds when the conversion stops being undoable (and is kept by itself),
+    while it still can be undone; else None"""
+    if layout_kind() != "btrfs" or convert_state()[0] != "converted":
+        return None
+    if not os.path.isdir(os.path.join(top, "ext2_saved")):
+        return None
+    t = saved_created(top)
+    if t is None:
+        return None
+    return t + (1 if E("SG_MUTANT_SNAP_EXPIRE_EARLY") else CONVERT_DAYS) * 86400
+
+
+def convert_days_left(deadline):
+    return max(0, -((now() - deadline) // 86400))       # rounded up
+
+
+def expire_convert(top):
+    """keep the conversion when its days are over: the old file system deleted,
+    the space freed. True if it did"""
+    if E("SG_MUTANT_SNAP_EXPIRE_NEVER"):
+        return False
+    dl = convert_deadline(top)
+    if dl is None or now() < dl:
+        return False
+    keep_conversion(top, auto=True)
+    say("the conversion of the system drive was kept: %d days passed" % CONVERT_DAYS)
+    return True
+
+
+def cmd_convert_expire(args):
+    if layout_kind() != "btrfs":
+        return []
+    with Top() as top:
+        done = expire_convert(top)
+        dl = convert_deadline(top)
+        publish(top)
+    return ["KEPT"] if done else (["WAITING %d" % convert_days_left(dl)] if dl else [])
 
 
 def cmd_convert_undo(args):
@@ -1057,7 +1178,8 @@ def cmd_boot(args):
                 # kept already (a restore point from before Keep was gone back to)
                 write(CONVERT_STATE, "kept %s\n" % new_id())
             elif st == "converted":
-                say("the system drive was converted to btrfs: waiting for the person to keep it or undo it")
+                if not expire_convert(top):
+                    say("the system drive was converted to btrfs: waiting for the person to keep it or undo it")
         make_entries(top)
         publish(top)
     return []
@@ -1077,7 +1199,8 @@ def publish(top):
     try:
         if wb:
             w = json.loads(wb)
-            lines.append("WENTBACK %s\t%s" % (w.get("id", ""), human(w.get("id", "00000000-000000"))))
+            lines.append("WENTBACK %s\t%s\t%s" % (w.get("id", ""), human(w.get("id", "00000000-000000")),
+                                                  "store" if w.get("source") == "store" else "update"))
     except ValueError:
         pass
     if kind == "btrfs" and top is not None:
@@ -1090,11 +1213,18 @@ def publish(top):
         except (Fail, IndexError, ValueError):
             pass
         for sid, info in reversed(snapshots(top)):
-            lines.append("SNAPSHOT %s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
-                                                          "yes" if bootable(info, kents) else "no",
-                                                          info.get("label", "").replace("\t", " ")))
+            lines.append("SNAPSHOT %s\t%s\t%s\t%s\t%s\t%s" % (sid, human(sid), info.get("kind", "?"),
+                                                              "yes" if bootable(info, kents) else "no",
+                                                              info.get("label", "").replace("\t", " "), pool(info)))
     if top is not None:     # btrfs: ours, or a conversion whose layout failed
         lines.append("SAVED " + ("yes" if os.path.isdir(os.path.join(top, "ext2_saved")) else "no"))
+        dl = convert_deadline(top)
+        if dl is not None:  # the days left to undo it, and when it is kept by itself
+            lines.append("CONVERT_DEADLINE %d\t%s" % (convert_days_left(dl), time.strftime("%Y-%m-%d", time.localtime(dl))))
+    if st == "kept":
+        w = detail.split()
+        lines.append("KEPT %s\t%s" % (human(w[0]) if w and ID_RE.match(w[0]) else "",
+                                      "auto" if "auto" in w[1:] else "you"))
     if kind == "ext4":
         s = undo_set()
         if s:
@@ -1130,7 +1260,8 @@ COMMANDS = {"status": cmd_status, "create": cmd_create, "list": cmd_list, "delet
             "rollback": cmd_rollback, "apt-hook": cmd_apt_hook, "pre-offline-update": cmd_pre_offline, "entries": None, "boot": cmd_boot,
             "undo-update": cmd_undo_update, "undo-cancel": cmd_undo_cancel, "undo-apply": cmd_undo_apply,
             "convert-check": cmd_convert_check, "convert-schedule": cmd_convert_schedule,
-            "convert-cancel": cmd_convert_cancel, "convert-keep": cmd_convert_keep, "convert-undo": cmd_convert_undo}
+            "convert-cancel": cmd_convert_cancel, "convert-keep": cmd_convert_keep, "convert-undo": cmd_convert_undo,
+            "convert-expire": cmd_convert_expire}
 
 
 def cmd_entries(args):

@@ -1,0 +1,70 @@
+#!/bin/sh
+# A start that did not finish shows the boot menu at the next one (Stained
+# Glass OS), the way Advanced startup appears after failed starts: the menu,
+# with the restore points, for a few seconds instead of hidden -- until a start
+# succeeds.
+#
+#   sg-boot-health begin   early at every start (sg-boot-health.service): asks the
+#                          boot loader to show its menu at the NEXT start
+#                          (systemd-boot's oneshot menu timeout, which the loader
+#                          itself uses up and forgets)
+#   sg-boot-health ok      once the start finished (sg-boot-ok.service, after
+#                          graphical.target, a few seconds of grace): takes the
+#                          request back
+#
+# A start that panics, hangs, drops to emergency mode or never gets to the
+# graphical session never takes the request back, so the next one shows the
+# menu; so does a power-off in the middle of one. Not asked for: a live medium,
+# a start that is no start of the installed system (a container, no UEFI, a boot
+# loader that is not systemd-boot) and the offline update's start (it ends in a
+# restart by design). Nothing is renamed or counted: the entries, loader.conf and
+# systemd-boot's own boot counting (a kernel on trial) are left alone.
+#
+# Stand-ins for the gate: SG_BOOTHEALTH_BOOTCTL, _CMDLINE, _EFI, _SECONDS,
+# _GRACE, _UPDATE (the file the offline update leaves); SG_MUTANT_BOOTHEALTH_*.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+BOOTCTL=${SG_BOOTHEALTH_BOOTCTL:-bootctl}
+CMDLINE=${SG_BOOTHEALTH_CMDLINE:-/proc/cmdline}
+EFI=${SG_BOOTHEALTH_EFI:-/sys/firmware/efi}
+SECONDS_SHOWN=${SG_BOOTHEALTH_SECONDS:-10}
+GRACE=${SG_BOOTHEALTH_GRACE:-15}
+UPDATE=${SG_BOOTHEALTH_UPDATE:-/system-update}
+
+say() { echo "sg-boot-health: $*" >&2; }
+
+cmdline_has() {
+    # $1: a word, or a prefix ending in "=*" (e.g. "sg.live=*")
+    case "$1" in
+        *'=*') pat="^${1%'*'}" ;;
+        *) pat="^$1\$" ;;
+    esac
+    tr ' ' '\n' < "$CMDLINE" 2>/dev/null | grep -Eq "$pat"
+}
+
+case "${1:-}" in
+    begin)
+        [ -e "$EFI" ] || exit 0
+        cmdline_has 'systemd.volatile=*' && exit 0
+        cmdline_has 'sg.live=*' && exit 0
+        if [ -z "${SG_MUTANT_BOOTHEALTH_UPDATE_ARMS:-}" ]; then
+            [ -e "$UPDATE" ] && exit 0
+            cmdline_has 'systemd.unit=system-update.target' && exit 0
+        fi
+        [ -n "${SG_MUTANT_BOOTHEALTH_NO_BEGIN:-}" ] && exit 0
+        "$BOOTCTL" set-timeout-oneshot "$SECONDS_SHOWN" >/dev/null 2>&1 \
+            || say "the boot loader cannot be asked (not systemd-boot?): no menu after a failed start"
+        ;;
+    ok)
+        [ -e "$EFI" ] || exit 0
+        [ "$GRACE" -gt 0 ] 2>/dev/null && sleep "$GRACE"
+        [ -n "${SG_MUTANT_BOOTHEALTH_NO_OK:-}" ] && exit 0
+        # (empty: the request is removed; failing is no news when none was made)
+        "$BOOTCTL" set-timeout-oneshot "" >/dev/null 2>&1 || true
+        ;;
+    *)
+        echo "usage: sg-boot-health begin|ok" >&2
+        exit 2
+        ;;
+esac
+exit 0

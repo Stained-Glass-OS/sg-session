@@ -1,0 +1,13 @@
+# The conversion of the system drive to btrfs is kept by itself 14 days after
+# it was made (sg-snapshot convert-expire): the saved ext4 image deleted, the
+# space freed. Also checked at each start (sg-snapshot boot).
+[Unit]
+Description=Stained Glass OS: keep the converted system drive after 14 days
+ConditionKernelCommandLine=!systemd.volatile
+ConditionPathExists=/var/lib/stained-glass-convert/state
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-snapshot convert-expire
+TimeoutStartSec=10min

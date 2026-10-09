@@ -1,0 +1,10 @@
+[Unit]
+Description=Stained Glass OS: keep the converted system drive after 14 days (daily)
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target

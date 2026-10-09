@@ -11,11 +11,16 @@
 #     undo-apply reinstalls exactly that set with downgrades allowed and keeps
 #     the undone versions from apt; the offline update's prepared list labels
 #     the same way;
+#   - SG Store's installs (SG_SNAP_SOURCE=store) never replace the update to undo;
+#   - retention: the last 3 restore points for updates and, apart, the last 2 for
+#     SG Store's installs (a point without a source is an update's);
+#   - the conversion is kept by itself after 14 days (the saved ext4 image deleted),
+#     not a day before; the Recovery page is told the days left;
 #   - converting: on a battery, not on mains, it is refused.
 #
 # Stand-ins: dpkg-query, dpkg-repack, apt-get (they record what they are asked).
 #
-#   sh test/restore-points-test.sh [--mutant NO_PIN|ANY_PACKAGE|UNDO_LOCKS|UNDO_ONLINE|PLYMOUTH_REQUIRED]   (a mutant must fail it)
+#   sh test/restore-points-test.sh [--mutant NO_PIN|ANY_PACKAGE|UNDO_LOCKS|UNDO_ONLINE|PLYMOUTH_REQUIRED|ONE_POOL|STORE_UNDO|EXPIRE_NEVER|EXPIRE_EARLY]   (a mutant must fail it)
 # shellcheck disable=SC2015,SC2016
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -120,6 +125,14 @@ else fail "undo entry: $(cat "$e" 2>&1)"; fi
 hook | python3 "$SNAP" apt-hook >/dev/null 2>&1
 [ "$(grep -c sg-shell "$T/repacked")" = 1 ] && pass "the same update a moment later (the offline update, then its APT hook): kept once" \
     || fail "repacked again: $(cat "$T/repacked")"
+# SG Store's installs do not replace the update to undo
+printf 'VERSION 3\n\nwine-sg 10.0-206 amd64 same < 10.0-208 amd64 same /var/cache/apt/archives/wine-sg.deb\n' \
+    | SG_SNAP_SOURCE=store python3 "$SNAP" apt-hook >/dev/null 2>&1
+python3 -c "
+import json; s = json.load(open('$m'))
+assert [(x['name'], x['version'], x['new']) for x in sorted(s['packages'], key=lambda x: x['name'])] == [('sg-shell', '0.1.0-169', '0.1.0-170'), ('wine-sg', '10.0-206', '10.0-207')], s
+" 2>/dev/null && pass "an install from the SG Store leaves the update to undo alone" || fail "store install replaced the undo set: $(cat "$m" 2>&1)"
+
 python3 "$SNAP" undo-update >/dev/null 2>&1 && [ -f "$T/rollback/pending" ] && grep -q '^PENDING undo' "$T/status" \
     && pass "undo-update: at the next start" || fail "undo-update"
 python3 "$SNAP" undo-apply > "$T/undo.out" 2>&1
@@ -173,6 +186,66 @@ assert "debian-6.12.2.conf.sg-hidden" in names and "debian-6.12.1+3.conf" in nam
 s.match_kernels(d, ["6.12.1", "6.12.2"])
 assert "debian-6.12.2.conf" in os.listdir(d)
 EOF
+
+# --- retention: updates and SG Store's installs are counted apart -----------------------
+python3 - "$SNAP" "$T" <<'EOF' && pass "retention: 3 for updates and 2 for SG Store's installs, apart (old points without a source: updates)" || fail "retention"
+import importlib.machinery, importlib.util, sys
+l = importlib.machinery.SourceFileLoader('s', sys.argv[1])
+s = importlib.util.module_from_spec(importlib.util.spec_from_loader('s', l)); l.exec_module(s)
+def pt(n, store=False):
+    return ("20261001-0%d0000" % n, {"kind": "auto", **({"source": "store"} if store else {})})
+# 3 updates, then 2 installs: nothing goes
+snaps = [pt(1), pt(2), pt(3), pt(4, True), pt(5, True)]
+assert s.surplus(snaps) == [], s.surplus(snaps)
+# a third install drops the oldest install only, never an update
+snaps.append(pt(6, True))
+assert s.surplus(snaps) == ["20261001-040000"], s.surplus(snaps)
+# many installs never push out the updates
+snaps = [pt(1), pt(2), pt(3)] + [pt(n, True) for n in (4, 5, 6, 7, 8)]
+assert s.surplus(snaps) == ["20261001-040000", "20261001-050000", "20261001-060000"], s.surplus(snaps)
+# a fourth update drops the oldest update only
+snaps = [pt(1), pt(2), pt(3), pt(4)] + [pt(5, True), pt(6, True)]
+assert s.surplus(snaps) == ["20261001-010000"], s.surplus(snaps)
+# points from before there was a source count as updates
+old = ("20260901-010000", {"kind": "auto"})
+assert s.pool(old[1]) == "update" and s.pool(pt(1, True)[1]) == "store"
+assert s.surplus([old] + [pt(1), pt(2), pt(3)]) == ["20260901-010000"]
+# the point asked to keep is never a victim
+assert "20261001-040000" not in s.surplus(snaps + [pt(7, True)], keep_ids=("20261001-040000",))
+EOF
+
+# --- the conversion is kept by itself after 14 days ---------------------------------------
+mkdir -p "$T/top/ext2_saved"
+python3 - "$SNAP" "$T" <<'EOF' && pass "conversion: undoable for 14 days (days left shown), kept by itself on the 14th (the saved ext4 image deleted), not before" || fail "conversion expiry"
+import importlib.machinery, importlib.util, os, sys, time
+snap, t = sys.argv[1], sys.argv[2]
+l = importlib.machinery.SourceFileLoader('s', snap)
+s = importlib.util.module_from_spec(importlib.util.spec_from_loader('s', l)); l.exec_module(s)
+top, state = os.path.join(t, "top"), os.path.join(t, "convert-state")
+deleted = []
+s.layout_kind = lambda: "btrfs"
+s.btrfs = lambda *a, check=True: deleted.append(a) or type("P", (), {"stdout": ""})()
+day = 86400
+t0 = 1791000000
+os.environ["SG_SNAP_CONVERTED_AT"] = str(t0)
+def at(days, extra=0):
+    os.environ["SG_SNAP_NOW"] = str(t0 + days * day + extra)
+open(state, "w").write("converted 20261001-120000\n")
+at(3)
+assert not s.expire_convert(top) and not deleted and s.convert_days_left(s.convert_deadline(top)) == 11, deleted
+at(13, 23 * 3600)
+assert not s.expire_convert(top) and not deleted and s.convert_days_left(s.convert_deadline(top)) == 1
+at(14)
+assert s.expire_convert(top), "not kept after 14 days"
+assert deleted and deleted[0][:2] == ("subvolume", "delete") and deleted[0][2].endswith("ext2_saved"), deleted
+assert open(state).read().split()[0] == "kept" and open(state).read().split()[-1] == "auto", open(state).read()
+# kept by the person, or undone already: nothing to expire
+deleted.clear()
+open(state, "w").write("kept 20261002-100000\n")
+at(40)
+assert s.convert_deadline(top) is None and not s.expire_convert(top) and not deleted
+EOF
+rm -rf "$T/top"
 
 [ $RC = 0 ] && echo "restore-points-test: PASS" || echo "restore-points-test: FAIL"
 exit $RC

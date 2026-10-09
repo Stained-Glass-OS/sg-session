@@ -1,3 +1,30 @@
+sg-session (0.1.0-183) unstable; urgency=medium
+
+  * Restore points: SG Store installs and removals are kept apart from
+    updates. The last three restore points taken for updates stay no matter
+    how many apps are installed; the last two taken for the Store are kept
+    beside them (sg-admind passes SG_SNAP_SOURCE=store, the point records
+    "source"; points without one count as updates). A Store change never
+    replaces ext4's "undo the last update" set. Gates: restore-points-test
+    (surplus() cases, undo set) and snapshot-test (real btrfs); mutants
+    SG_MUTANT_SNAP_ONE_POOL, STORE_UNDO.
+  * A start that did not finish shows the boot menu (with the restore points)
+    for 10 seconds at the next one, until a start succeeds: sg-boot-health
+    asks systemd-boot for a one-shot menu timeout early in every start
+    (sg-boot-health.service) and takes the request back once the sign-in
+    screen is up (sg-boot-ok.service). Not for live media, the offline
+    update's start, or without UEFI. Gate test/boot-health-test.sh; mutants
+    NO_BEGIN, NO_OK, UPDATE_ARMS, UNIT_ORDER.
+  * Converting ext4 to btrfs: "Undo the conversion" is offered for 14 days;
+    then sg-snapshot keeps the conversion by itself (the saved ext4 image
+    deleted, the space freed) at the next start or by the daily
+    sg-snapshot-expire.timer. The status carries CONVERT_DEADLINE (days left)
+    and KEPT (by you or automatically). Gates: restore-points-test and
+    snapshot-test (3 days = 11 left, 13 days still undoable, 15 days kept);
+    mutants SG_MUTANT_SNAP_EXPIRE_NEVER, EXPIRE_EARLY.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 11:06:43 -0700
+
 sg-session (0.1.0-182) unstable; urgency=medium
 
   * Restore points: undoing an update on a system with no boot splash

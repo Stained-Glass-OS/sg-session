@@ -2246,9 +2246,15 @@ menu's "Stained Glass OS -- before the update of <date>" entry starts
 (`rootflags=subvol=@snapshots/<id>/boot sg.snapshot=<id>`, on the newest
 kernel both in the restore point and on the boot partition). A copy that was
 started is made again from its snapshot at the next ordinary start
-(`sg-snapshot.service`, `boot`). Three kept; the oldest first when the drive
-is low (5% or 2 GB), never the newest. Never in an update's way: the hook
-always exits 0.
+(`sg-snapshot.service`, `boot`). **Two counts, apart** (0.1.0-183): the last
+three taken for updates (apt, the offline update, by hand) and the last two
+taken for SG Store installs and removals -- sg-admind runs the Store's apt
+with `SG_SNAP_SOURCE=store`, the hook stores `info.source = "store"` and
+labels it "SG Store: ...", boot entries "before the SG Store change of
+<date>". A point without a source counts as an update's, and a Store install
+never replaces ext4's "undo the last update" set. `surplus()` is the pure
+rule; when the drive is low (5% or 2 GB) the Store's go first, then the
+oldest, never the newest. Never in an update's way: the hook always exits 0.
 
 **Going back** (`rollback ID`; Settings > Recovery through sg-admind's
 `restore-point` verb, or "Keep this version" while a restore point runs):
@@ -2292,7 +2298,12 @@ of the converted top level, the other subvolumes reflink-filled and their
 places in `@` emptied, fstab, `@` the default subvolume (so the existing
 boot entries need no rootflags), the old copy in the top level removed,
 `converted` recorded, restart (sysrq b). `ext2_saved` stays until
-`convert-keep`; `convert-undo` runs `btrfs-convert -r` the same way (the
+`convert-keep` -- or **14 days** (0.1.0-183): `convert-expire` (at each start,
+in `boot`, and daily by `sg-snapshot-expire.timer`) deletes it and records
+`kept <id> auto`; the status says `CONVERT_DEADLINE <days left>\t<date>` while
+it can be undone, `KEPT <when>\tauto|you` after, and the Recovery pages show
+both. The date is the one `sg-convert-root` recorded (btrfs-convert leaves the
+subvolume's creation time empty). `convert-undo` runs `btrfs-convert -r` the same way (the
 rollback works with our subvolumes present: tested on loop devices). After
 an undo, the first ext4 start removes restore-point entries and hides
 kernels the ext4 system lacks.
@@ -2303,7 +2314,25 @@ kernels the ext4 system lacks.
   (`test/snapshot-test.sh`, loop devices only: restore points, keep three,
   low space, going back with homes and prefix untouched, the hidden kernel,
   the next start; a real ext4 converted and undone byte for byte; mutants
-  KEEP_ALL, CONVERT_NO_SAVED, CONVERT_KEEP_HOME).
+  KEEP_ALL, CONVERT_NO_SAVED, CONVERT_KEEP_HOME, and, 0.1.0-183, ONE_POOL
+  EXPIRE_NEVER EXPIRE_EARLY: Store points kept apart, 3 days = 11 left, 15
+  days = kept by itself). restore-points-test also has `surplus()` and the
+  expiry as unit tests (mutants ONE_POOL STORE_UNDO EXPIRE_NEVER EXPIRE_EARLY).
+- **A start that did not finish shows the boot menu at the next one**
+  (`bin/sg-boot-health`, 0.1.0-183; `sg-boot-health.service` early, before
+  sysinit; `sg-boot-ok.service` after multi-user and graphical.target + 15 s
+  grace, Type=simple). `begin` runs `bootctl set-timeout-oneshot 10`
+  (LoaderConfigTimeoutOneShot: systemd-boot shows the menu for 10 s at the
+  NEXT start and forgets the variable itself); `ok` removes it. So a panic, a
+  hang, emergency mode, a start with no sign-in screen, or a power-off in the
+  middle leaves it set and the next start shows the menu with the restore
+  points -- until a start succeeds. Not asked for: live media, containers,
+  no UEFI, the offline update's start (`/system-update`). Entries and
+  loader.conf are untouched (no renaming, unlike `+N` boot counting, which
+  stays for a kernel on trial). Gate `test/boot-health-test.sh` (lint;
+  stand-in bootctl that behaves as the loader; mutants NO_BEGIN NO_OK
+  UPDATE_ARMS UNIT_ORDER); the VM gate checks the real variable
+  (sg-image restore-points-test).
 - **btrfs subvolume sync waits for ever** on a deleted subvolume that is
   still mounted (the old `@` while it is the running root): sg-snapshot
   bounds it (60 s).
