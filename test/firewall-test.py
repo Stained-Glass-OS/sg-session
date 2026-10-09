@@ -29,6 +29,7 @@ SRC = os.path.join(HERE, "..", "bin", "sg-firewall")
 FAILS = 0
 
 # name: (what the copy breaks, the text replaced, its replacement)
+QUESTION_MUTANTS = {"FW_CANCEL_IGNORED"}   # caught only by the question's checks
 MUTANTS = {
     # the zones' last rule lets everything in
     "FW_ACCEPT_ALL": ('t.append("\\t\\tcounter drop")', 't.append("\\t\\taccept")'),
@@ -320,35 +321,39 @@ def run_checks(fw, t):
     d.networks = [("u-home", "eth0", "Home", "802-3-ethernet", "private")]
     me = fw.Listener("tcp", "0.0.0.0", 3400, 999, 990)
     me.program, me.kind, me.owner_uid = SONOS, "windows", ME
+    # (only the question needs an ordinary account: the rest runs as root
+    # too -- CI's container -- which a return here skipped, and the upgrade's
+    # mutant survived there)
     if os.getuid() != ME:
         print("SKIP  the question (this test needs an ordinary account)")
-        return
-    plan = fw.evaluate(d.conf, fw.all_rules(d.conf, {}), [me])
-    d.update_asks(plan, fw.all_rules(d.conf, {}))
-    adir = fw.ask_dir(ME)
-    asks = [n for n in os.listdir(adir) if n.endswith(".ask")] if os.path.isdir(adir) else []
-    check(len(asks) == 1, "the question is put in the person's own folder")
-    body = open(os.path.join(adir, asks[0])).read() if asks else ""
-    check("program=%s\n" % SONOS in body and "port=3400" in body and "category=private" in body and "kind=windows" in body,
-          "it names the program, its port and the network it is on")
-    check(oct(os.stat(adir).st_mode & 0o777) == "0o700", "the folder is the person's alone")
-    d.update_asks(plan, fw.all_rules(d.conf, {}))
-    check(len([n for n in os.listdir(adir) if n.endswith(".ask")]) == 1, "asked once")
-    aid = asks[0][:-4] if asks else "x"
-    with open(os.path.join(adir, aid + ".cancel"), "w") as f:
-        f.write("Sonos\n")
-    d.answers()
-    conf2 = fw.read_config()
-    blocked = [r for r in conf2.rules if r.program == SONOS]
-    check(len(blocked) == 1 and blocked[0].action == "block" and blocked[0].name == "Sonos",
-          "Cancel: the program is blocked and listed (unticked), as on Windows")
-    d.reload_conf()
-    rules = fw.all_rules(d.conf, {})
-    d.update_asks(fw.evaluate(d.conf, rules, [me]), rules)
-    check(not os.path.exists(os.path.join(adir, aid + ".ask")), "the question goes once it is answered")
+    else:
+        plan = fw.evaluate(d.conf, fw.all_rules(d.conf, {}), [me])
+        d.update_asks(plan, fw.all_rules(d.conf, {}))
+        adir = fw.ask_dir(ME)
+        asks = [n for n in os.listdir(adir) if n.endswith(".ask")] if os.path.isdir(adir) else []
+        check(len(asks) == 1, "the question is put in the person's own folder")
+        body = open(os.path.join(adir, asks[0])).read() if asks else ""
+        check("program=%s\n" % SONOS in body and "port=3400" in body and "category=private" in body and "kind=windows" in body,
+              "it names the program, its port and the network it is on")
+        check(oct(os.stat(adir).st_mode & 0o777) == "0o700", "the folder is the person's alone")
+        d.update_asks(plan, fw.all_rules(d.conf, {}))
+        check(len([n for n in os.listdir(adir) if n.endswith(".ask")]) == 1, "asked once")
+        aid = asks[0][:-4] if asks else "x"
+        with open(os.path.join(adir, aid + ".cancel"), "w") as f:
+            f.write("Sonos\n")
+        d.answers()
+        conf2 = fw.read_config()
+        blocked = [r for r in conf2.rules if r.program == SONOS]
+        check(len(blocked) == 1 and blocked[0].action == "block" and blocked[0].name == "Sonos",
+              "Cancel: the program is blocked and listed (unticked), as on Windows")
+        d.reload_conf()
+        rules = fw.all_rules(d.conf, {})
+        d.update_asks(fw.evaluate(d.conf, rules, [me]), rules)
+        check(not os.path.exists(os.path.join(adir, aid + ".ask")), "the question goes once it is answered")
 
     # --- the commands sg-admind runs
-    os.unlink(fw.CONF)
+    if os.path.exists(fw.CONF):
+        os.unlink(fw.CONF)
 
     def run(*a):
         try:
@@ -432,6 +437,9 @@ def run_checks(fw, t):
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--list-mutants"]:
-        print("\n".join(MUTANTS))
+        # as root (CI's container) the question is not asked, so a mutant
+        # only it catches is not listed there
+        ordinary = 1000 <= os.getuid() < 60000
+        print("\n".join(m for m in MUTANTS if ordinary or m not in QUESTION_MUTANTS))
         sys.exit(0)
     sys.exit(main(sys.argv[1:]))

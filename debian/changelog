@@ -1,3 +1,12 @@
+sg-session (0.1.0-179) unstable; urgency=medium
+
+  * Tests: firewall-test ran nothing after the question's checks as root
+    (CI's container returned early), so the upgrade's mutant
+    FW_MIGRATE_NOTHING survived there and CI failed; only the question is
+    skipped now, and its one mutant is not listed as root.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 08 Oct 2026 21:50:00 -0700
+
 sg-session (0.1.0-178) unstable; urgency=medium
 
   * The elevation broker hands the elevated program every argument, an empty
