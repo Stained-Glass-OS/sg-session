@@ -28,7 +28,7 @@ jobs:
     # never appeared on the X display at all. Testing the distribution we target
     # keeps the gate measuring our code instead of that difference.
     container:
-      image: debian:trixie
+      image: public.ecr.aws/docker/library/debian:trixie
       options: --user root
     steps:
       - uses: actions/checkout@v4
@@ -120,7 +120,7 @@ jobs:
     name: build .deb
     runs-on: ubuntu-latest
     container:
-      image: debian:trixie
+      image: public.ecr.aws/docker/library/debian:trixie
       options: --user root
     steps:
       - uses: actions/checkout@v4
