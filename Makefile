@@ -322,7 +322,7 @@ lint:
 	@sh test/prefix-current-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-snapshot
 	@sh test/restore-points-test.sh
-	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done
+	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE PLYMOUTH_REQUIRED; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done
 	@sh test/prefix-repair-test.sh
 	@! sh test/prefix-repair-test.sh --mutant >/dev/null
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)

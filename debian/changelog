@@ -1,3 +1,13 @@
+sg-session (0.1.0-182) unstable; urgency=medium
+
+  * Restore points: undoing an update on a system with no boot splash
+    (plymouth not installed) stopped at its first message with
+    FileNotFoundError -- CI's container, and any machine without plymouth.
+    The message is now best-effort. restore-points-test runs without a
+    splash; mutant SG_MUTANT_SNAP_PLYMOUTH_REQUIRED.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 05:40:00 -0700
+
 sg-session (0.1.0-181) unstable; urgency=medium
 
   * The session's org.freedesktop.ScreenSaver service (power/

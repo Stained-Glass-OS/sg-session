@@ -15,7 +15,7 @@
 #
 # Stand-ins: dpkg-query, dpkg-repack, apt-get (they record what they are asked).
 #
-#   sh test/restore-points-test.sh [--mutant NO_PIN|ANY_PACKAGE|UNDO_LOCKS|UNDO_ONLINE]   (a mutant must fail it)
+#   sh test/restore-points-test.sh [--mutant NO_PIN|ANY_PACKAGE|UNDO_LOCKS|UNDO_ONLINE|PLYMOUTH_REQUIRED]   (a mutant must fail it)
 # shellcheck disable=SC2015,SC2016
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -88,7 +88,8 @@ echo "BOOT_IMAGE=x root=PARTUUID=feed rw" > "$T/cmdline"
 export SG_T="$T" SG_SNAP_FSTYPE=ext4 SG_SNAP_ETC="$T/etc" SG_SNAP_ENTRIES="$T/entries" SG_SNAP_STATUS="$T/status" \
     SG_SNAP_ROLLBACK="$T/rollback" SG_SNAP_DPKGQ="$T/bin/dpkg-query" SG_SNAP_REPACK="$T/bin/dpkg-repack" \
     SG_SNAP_APT="$T/bin/apt-get" SG_SNAP_DPKG=true SG_SNAP_SYSTEMCTL=true SG_SNAP_CMDLINE="$T/cmdline" SG_SNAP_LOCK="$T/lock" SG_SNAP_POWER="$T/power" \
-    SG_SNAP_CONVERT_STATE="$T/convert-state" SG_SNAP_NOW=1791500000
+    SG_SNAP_CONVERT_STATE="$T/convert-state" SG_SNAP_NOW=1791500000 \
+    SG_SNAP_PLYMOUTH="$T/no-plymouth"   # no splash, as in CI's container: the undo goes on
 SNAP="$HERE/bin/sg-snapshot"
 export SG_SNAP_BIN="$SNAP"
 hook() {

@@ -762,7 +762,14 @@ def cmd_undo_cancel(args):
 
 
 def plymouth(text):
-    subprocess.run(["plymouth", "display-message", "--text=" + text], capture_output=True, check=False)
+    # no splash (plymouth not installed, CI's container): the undo goes on
+    # without the message -- it stopped with FileNotFoundError before
+    try:
+        subprocess.run([E("SG_SNAP_PLYMOUTH", "plymouth"), "display-message", "--text=" + text],
+                       capture_output=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        if E("SG_MUTANT_SNAP_PLYMOUTH_REQUIRED"):
+            raise
 
 
 def cmd_undo_apply(args):
