@@ -1,3 +1,14 @@
+sg-session (0.1.0-185) unstable; urgency=medium
+
+  * sg-netctl: live addresses, routes and neighbour (ARP) entries --
+    addr add|del, route add|del|set, neigh add|del|flush -- for an
+    administrator, through ip(8), as Windows' IP Helper makes them (wine-sg
+    2416: CreateUnicastIpAddressEntry, CreateIpForwardEntry2,
+    CreateIpNetEntry2 and the rest; VPN clients and network tools). A new
+    error kind "exists". netctl-test; mutant SG_MUTANT_NETCTL_LIVE_ANYONE.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 14:55:00 -0700
+
 sg-session (0.1.0-184) unstable; urgency=medium
 
   * sg-settingsctl: a helper it stops goes with its whole process group --

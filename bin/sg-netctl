@@ -30,6 +30,13 @@
 #   ipv6 DEVICE static ADDRESS/PREFIX [--gateway ADDR] [--dns ADDR[,...]]
 #   dns DEVICE auto|ADDR[,ADDR...]
 #   enable DEVICE | disable DEVICE | renew DEVICE | release DEVICE
+#   addr add|del DEVICE ADDRESS/PREFIX
+#   route add|del|set DEVICE DEST/PREFIX [--gateway ADDR] [--metric N]
+#   neigh add DEVICE ADDR HWADDR [--permanent] | neigh del DEVICE ADDR
+#   neigh flush [DEVICE] [--family 4|6]
+#     (live changes, as Windows' IP Helper makes them -- CreateIpForwardEntry2,
+#     CreateUnicastIpAddressEntry, CreateIpNetEntry2 -- not saved settings;
+#     wine-sg 2416 asks for them; an administrator only)
 #   wifi scan [--rescan]
 #   wifi connect (--ssid TEXT | --ssid-hex HEX) [--hidden] [--security open|wpa-psk|sae]
 #                [--no-autoconnect] [--password-stdin] [--device DEVICE]
@@ -42,7 +49,7 @@
 #   vpn connect NAME [--password-stdin] | vpn disconnect NAME | vpn remove NAME
 #
 # Output: lines, then a last line "OK" or "ERROR <kind> <message>", kind one
-# of denied, invalid, notfound, auth, unsupported, failed. Exit status 0 on
+# of denied, invalid, notfound, exists, auth, unsupported, failed. Exit status 0 on
 # OK, 3 denied, 2 invalid, 1 anything else.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -73,7 +80,7 @@ NM_DIR = os.environ.get("SG_NM_DIR", "/etc/NetworkManager/system-connections")
 MAX_REQUEST = 65536
 EXIT = {"denied": 3, "invalid": 2}
 
-ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release"}
+ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release", "addr", "route", "neigh"}
 USER_COMMANDS = {"whoami", "adapters", "wifi", "vpn"}
 
 
@@ -448,6 +455,110 @@ def cmd_dns(pos, opts, emit):
     activate(uuid_, d["device"])
     log("DNS of %s set to %s" % (d["device"], pos[1]))
     show_adapter(device(d["device"]), emit)
+
+
+# --- live addresses, routes and neighbours (administrators) ----------------------
+# Windows programs (VPN clients, installers, network tools) add an address, a
+# route or an ARP entry through IP Helper; those are live, not saved in the
+# adapter's settings, so they go to the kernel with ip(8), not to
+# NetworkManager's profiles -- as Windows' active store.
+
+def ip_tool(*args):
+    try:
+        r = subprocess.run(["ip", *args], capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, LC_ALL="C", LANG="C"), stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise Fail("unsupported", "ip (iproute2) is not installed")
+    except subprocess.TimeoutExpired:
+        raise Fail("failed", "the network did not answer in time")
+    if r.returncode != 0:
+        msg = (r.stderr.strip().splitlines() or ["ip failed"])[-1]
+        low = msg.lower()
+        if "no such device" in low or "cannot find device" in low:
+            raise Fail("notfound", clean(msg), r.stderr)
+        if "no such process" in low or "cannot assign" in low or "not found" in low:
+            raise Fail("notfound", clean(msg), r.stderr)
+        if "file exists" in low:
+            raise Fail("exists", clean(msg), r.stderr)
+        if "invalid" in low or "error: " in low:
+            raise Fail("invalid", clean(msg), r.stderr)
+        raise Fail("failed", clean(msg), r.stderr)
+    return r
+
+
+def network(text, what):
+    try:
+        return ipaddress.ip_interface(text)
+    except ValueError:
+        raise Fail("invalid", "not an %s: %s" % (what, clean(text)))
+
+
+def address(text, what="address"):
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        raise Fail("invalid", "not an %s: %s" % (what, clean(text)))
+
+
+def cmd_addr(pos, emit):
+    if len(pos) != 3 or pos[0] not in ("add", "del"):
+        raise Fail("invalid", "usage: addr add|del DEVICE ADDRESS/PREFIX")
+    dev = device(pos[1])["device"]
+    a = network(pos[2], "address/prefix")
+    ip_tool("-%d" % a.version, "address", pos[0], a.with_prefixlen, "dev", dev)
+    log("address %s %s %s" % (pos[0], a.with_prefixlen, dev))
+
+
+def cmd_route(pos, opts, emit):
+    if len(pos) != 3 or pos[0] not in ("add", "del", "set"):
+        raise Fail("invalid", "usage: route add|del|set DEVICE DEST/PREFIX [--gateway ADDR] [--metric N]")
+    dev = device(pos[1])["device"]
+    dest = network(pos[2], "destination/prefix").network
+    args = ["-%d" % dest.version, "route", {"add": "add", "del": "del", "set": "replace"}[pos[0]],
+            str(dest), "dev", dev]
+    if "gateway" in opts:
+        gw = address(opts["gateway"], "gateway")
+        if gw.version != dest.version:
+            raise Fail("invalid", "the gateway and the destination are not the same IP version")
+        if not gw.is_unspecified:
+            args += ["via", str(gw)]
+    if "metric" in opts:
+        if not re.fullmatch(r"\d{1,9}", opts["metric"]):
+            raise Fail("invalid", "a metric is a number")
+        args += ["metric", opts["metric"]]
+    ip_tool(*args)
+    log("route %s %s %s" % (pos[0], dest, dev))
+
+
+def cmd_neigh(pos, opts, emit):
+    if pos[:1] == ["flush"]:
+        if len(pos) > 2:
+            raise Fail("invalid", "usage: neigh flush [DEVICE] [--family 4|6]")
+        fam = opts.get("family")
+        if fam not in (None, "4", "6"):
+            raise Fail("invalid", "the family is 4 or 6")
+        args = (["-" + fam] if fam else []) + ["neigh", "flush"]
+        args += ["dev", device(pos[1])["device"]] if len(pos) == 2 else ["all"]
+        ip_tool(*args)
+        log("neighbours flushed%s" % (" on " + pos[1] if len(pos) == 2 else ""))
+        return
+    if pos[:1] == ["add"] and len(pos) == 4:
+        dev = device(pos[1])["device"]
+        a = address(pos[2])
+        if not re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", pos[3]):
+            raise Fail("invalid", "not a hardware address: %s" % clean(pos[3]))
+        ip_tool("-%d" % a.version, "neigh", "replace", str(a), "lladdr", pos[3].replace("-", ":").lower(),
+                "dev", dev, "nud", "permanent" if opts.get("permanent") else "reachable")
+        log("neighbour %s on %s" % (a, dev))
+        return
+    if pos[:1] == ["del"] and len(pos) == 3:
+        dev = device(pos[1])["device"]
+        a = address(pos[2])
+        ip_tool("-%d" % a.version, "neigh", "del", str(a), "dev", dev)
+        log("neighbour %s removed from %s" % (a, dev))
+        return
+    raise Fail("invalid", "usage: neigh add DEVICE ADDR HWADDR [--permanent] | neigh del DEVICE ADDR | "
+                          "neigh flush [DEVICE] [--family 4|6]")
 
 
 def cmd_state(cmd, pos, emit):
@@ -1055,7 +1166,8 @@ def run(argv, secret, uid, emit):
         raise Fail("invalid", "unknown command %s" % clean(cmd))
     if not may_use(uid):
         raise Fail("denied", "this account may not change network settings")
-    if cmd in ADMIN_COMMANDS and not is_admin(uid):
+    live_ok = cmd in ("addr", "route", "neigh") and os.environ.get("SG_MUTANT_NETCTL_LIVE_ANYONE")
+    if cmd in ADMIN_COMMANDS and not is_admin(uid) and not live_ok:
         raise Fail("denied", "changing an adapter's settings needs an administrator")
     if cmd == "whoami":
         try:
@@ -1080,6 +1192,15 @@ def run(argv, secret, uid, emit):
     elif cmd in ("enable", "disable", "renew", "release"):
         pos, _ = parse_opts(argv[1:], set(), set())
         cmd_state(cmd, pos, emit)
+    elif cmd == "addr":
+        pos, _ = parse_opts(argv[1:], set(), set())
+        cmd_addr(pos, emit)
+    elif cmd == "route":
+        pos, opts = parse_opts(argv[1:], set(), {"gateway", "metric"})
+        cmd_route(pos, opts, emit)
+    elif cmd == "neigh":
+        pos, opts = parse_opts(argv[1:], {"permanent"}, {"family"})
+        cmd_neigh(pos, opts, emit)
     elif cmd == "wifi":
         pos, opts = parse_opts(argv[1:], WIFI_FLAGS, WIFI_VALUED)
         cmd_wifi(pos, opts, secret, emit)

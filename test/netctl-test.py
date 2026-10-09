@@ -252,6 +252,46 @@ def run_tests(t):
         check(out[-1].startswith(("ERROR invalid", "ERROR notfound")) and
               not any(c[:2] == ["connection", "modify"] for c in calls()), "refused before NetworkManager: " + why)
 
+    # --- live addresses, routes, neighbours (wine-sg 2416's IP Helper writes) --------
+    iplog = os.path.join(t, "ip.log")
+    ipfake = os.path.join(bindir, "ip")
+    with open(ipfake, "w") as f:
+        f.write("#!/bin/sh\necho \"$*\" >> \"%s\"\n"
+                "case \"$*\" in *10.0.2.77*) echo 'RTNETLINK answers: File exists' >&2; exit 2;; esac\n" % iplog)
+    os.chmod(ipfake, 0o755)
+
+    def ipcalls():
+        try:
+            return [l.strip() for l in open(iplog)]
+        finally:
+            open(iplog, "w").close()
+
+    state()
+    open(iplog, "w").close()
+    out = serve(["route", "add", "eth0", "10.9.0.0/16", "--gateway", "10.0.2.2"])
+    check(out[-1].startswith("ERROR denied") and ipcalls() == [],
+          "a live route needs an administrator; ip is not asked: %s" % out[-1:])
+    out = serve(["addr", "add", "eth0", "10.0.2.99/24"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-4 address add 10.0.2.99/24 dev eth0"],
+          "addr add: an address on eth0, live (ip address add)")
+    out = serve(["route", "set", "eth0", "10.9.1.5/16", "--gateway", "10.0.2.2", "--metric", "25"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-4 route replace 10.9.0.0/16 dev eth0 via 10.0.2.2 metric 25"],
+          "route set: the network of the destination, via the gateway, with the metric")
+    out = serve(["route", "add", "eth0", "fd00::/64", "--gateway", "10.0.2.2"], admin=True)
+    check(out[-1].startswith("ERROR invalid") and ipcalls() == [], "route add: a gateway of the other IP version is refused")
+    out = serve(["route", "del", "nosuch0", "10.9.0.0/16"], admin=True)
+    check(out[-1].startswith("ERROR notfound") and ipcalls() == [], "route del: an adapter that is not there: notfound")
+    out = serve(["neigh", "add", "eth0", "10.0.2.50", "zz:00:11:22:33:44"], admin=True)
+    check(out[-1].startswith("ERROR invalid") and ipcalls() == [], "neigh add: not a hardware address: refused")
+    out = serve(["neigh", "add", "eth0", "10.0.2.50", "00-11-22-AA-BB-CC", "--permanent"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-4 neigh replace 10.0.2.50 lladdr 00:11:22:aa:bb:cc dev eth0 nud permanent"],
+          "neigh add: a permanent ARP entry, the hardware address normalised")
+    out = serve(["neigh", "flush", "--family", "6"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-6 neigh flush all"], "neigh flush: every adapter's IPv6 neighbours")
+    out = serve(["addr", "add", "eth0", "10.0.2.77/24"], admin=True)
+    ipcalls()
+    check(out[-1].startswith("ERROR exists"), "an address that is there already: ERROR exists (%s)" % out[-1:])
+
     # --- Wi-Fi: the key never on a command line; failed joins not remembered -----
     secret = "correct horse \\ battery"
     state(scan=[{"hex": b"Cafe Net".hex(), "signal": 55, "security": "WPA2"}])

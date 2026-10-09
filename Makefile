@@ -362,6 +362,7 @@ lint:
 	@! sh test/netlock-deps-test.sh --mutant >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-netctl
 	@python3 test/netctl-test.py
+	@! SG_MUTANT_NETCTL_LIVE_ANYONE=1 python3 test/netctl-test.py >/dev/null 2>&1 || { echo "netctl-test: mutant NETCTL_LIVE_ANYONE survived"; exit 1; }
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firewall
 	@python3 test/firewall-test.py >/dev/null || python3 test/firewall-test.py
 	@for m in $$(python3 test/firewall-test.py --list-mutants); do ! python3 test/firewall-test.py --mutant $$m >/dev/null 2>&1 || { echo "firewall mutant $$m survived"; exit 1; }; done
