@@ -17,6 +17,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
@@ -34,6 +35,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/random.h>
 #include <sys/wait.h>
 
 #define MAXFIELD 256
@@ -44,7 +46,9 @@ static int   g_monitor = -1;
 static const char *g_admin_group = "sg-admins";
 static const char *g_system_user = "sgsystem";
 static const char *g_polkit_respond = "/usr/libexec/stained-glass/sg-polkit-respond";
+static const char *g_ticket_dir = "/run/stained-glass-broker/tickets";
 static int is_admin_name(const char *name);
+static int plain_name(const char *s);
 
 static void logmsg(const char *fmt, ...)
 {
@@ -245,6 +249,92 @@ static int drop_privileges(const char *account)
     if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0) return -1;
     if (setuid(0) == 0) return -1;
     return 0;
+}
+
+/* ---- LogonUser: one-time logon tickets --------------------------------
+ * A Windows program that calls LogonUser (wine-sg 1709) asks here, with the
+ * account's name and password: "@logon", LOGON_USER, LOGON_PASSWORD,
+ * LOGON_TYPE. The monitor checks the password against PAM, as for elevation;
+ * the password is never written anywhere and is wiped once checked. On
+ * success the answer is a ticket: a file in a directory only the SYSTEM
+ * account (this process, and the machine wineserver) may read, named by 128
+ * random bits, saying which account the requester may have a token for, and
+ * until when. The wineserver takes it once (it unlinks it) from that same
+ * requester and makes the token; a ticket is good for 30 seconds. Root and
+ * the SYSTEM account cannot be logged on to this way, as SYSTEM has no
+ * password on Windows. */
+#define TICKET_LIFETIME 30
+
+static void sweep_tickets(void)
+{
+    DIR *d = opendir(g_ticket_dir);
+    struct dirent *e;
+    time_t now = time(NULL);
+    struct stat st;
+
+    if (!d) return;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        if (!fstatat(dirfd(d), e->d_name, &st, AT_SYMLINK_NOFOLLOW) && st.st_mtime + 2 * TICKET_LIFETIME < now)
+            unlinkat(dirfd(d), e->d_name, 0);
+    }
+    closedir(d);
+}
+
+/* returns 0 and the ticket's name, or -1 */
+static int make_ticket(uid_t target, uid_t requester, unsigned type, char *name, size_t max)
+{
+    unsigned char rnd[16];
+    char path[512], text[128];
+    int fd, i, len;
+
+    if (max < 33 || getrandom(rnd, sizeof(rnd), 0) != (ssize_t)sizeof(rnd)) return -1;
+    for (i = 0; i < 16; i++) snprintf(name + 2 * i, 3, "%02x", rnd[i]);
+    snprintf(path, sizeof(path), "%s/%s", g_ticket_dir, name);
+    len = snprintf(text, sizeof(text), "uid=%u\nfor=%u\ntype=%u\nexpires=%lld\n", (unsigned)target,
+                   (unsigned)requester, type, (long long)time(NULL) + TICKET_LIFETIME);
+    if ((fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600)) < 0) return -1;
+    if (write_full(fd, text, (size_t)len) || close(fd)) { unlink(path); return -1; }
+    return 0;
+}
+
+static void handle_logon(int conn, const struct ucred *cred, const struct passwd *rpw, char **envp, int envc)
+{
+    const char *user = NULL, *type_str = NULL;
+    char *pass = NULL, name[40], reply[64];
+    struct passwd *tpw;
+    unsigned char status = 1;
+    unsigned type = 2;
+    int i;
+
+    for (i = 0; i < envc; i++) {
+        if (!strncmp(envp[i], "LOGON_USER=", 11)) user = envp[i] + 11;
+        else if (!strncmp(envp[i], "LOGON_PASSWORD=", 15)) pass = envp[i] + 15;
+        else if (!strncmp(envp[i], "LOGON_TYPE=", 11)) type_str = envp[i] + 11;
+    }
+    if (type_str) type = (unsigned)strtoul(type_str, NULL, 10);
+    sweep_tickets();
+#ifndef SG_MUTANT_LOGON_NO_PASSWORD_CHECK
+    if (user && pass && plain_name(user) && (tpw = getpwnam(user)) && tpw->pw_uid != 0 &&
+        strcmp(tpw->pw_name, g_system_user) && check_password(user, pass))
+#else
+    if (user && plain_name(user) && (tpw = getpwnam(user)))
+#endif
+    {
+        if (!make_ticket(tpw->pw_uid, cred->uid, type, name, sizeof(name))) {
+            status = 0;
+            logmsg("logon: %s logged on %s (type %u)", rpw->pw_name, user, type);
+        } else {
+            status = 2;
+            logmsg("logon: cannot write a ticket in %s: %s", g_ticket_dir, strerror(errno));
+        }
+    } else logmsg("logon: %s failed to log on %s", rpw->pw_name, user && plain_name(user) ? user : "(a bad name)");
+    if (pass) explicit_bzero(pass, strlen(pass));
+    write_full(conn, &status, 1);
+    if (!status) {
+        int n = snprintf(reply, sizeof(reply), "TICKET %s\n", name);
+        write_full(conn, reply, (size_t)n);
+    }
 }
 
 /* ---- consent -----------------------------------------------------------
@@ -764,6 +854,7 @@ int main(void)
     if ((env = getenv("SG_CONSENT_UI"))) g_consent_ui = env;
     if ((env = getenv("SG_ELEVATED_RUN"))) g_elevated_run = env;
     if ((env = getenv("SG_POLKIT_RESPOND"))) g_polkit_respond = env;
+    if ((env = getenv("SG_LOGON_TICKET_DIR"))) g_ticket_dir = env;
     /* PAM policy for elevation credential prompts */
     setenv("SG_REMOTE_PAM_SERVICE", "stained-glass-elevate", 0);
     g_log = logpath ? fopen(logpath, "a") : stderr;
@@ -785,6 +876,15 @@ int main(void)
     if (!mon) { close(sv[1]); close(lfd); monitor_loop(sv[0], helper); _exit(0); }
     close(sv[0]); g_monitor = sv[1];
 
+    /* the logon tickets' directory: the SYSTEM account's alone (it, and the
+     * machine wineserver that runs as it, read them) */
+    {
+        struct passwd *spw = getpwnam(g_system_user);
+        if (mkdir(g_ticket_dir, 0700) < 0 && errno != EEXIST) logmsg("mkdir %s: %s", g_ticket_dir, strerror(errno));
+        if (spw && geteuid() == 0 && chown(g_ticket_dir, spw->pw_uid, spw->pw_gid) < 0)
+            logmsg("chown %s: %s", g_ticket_dir, strerror(errno));
+        chmod(g_ticket_dir, 0700);
+    }
     if (geteuid() == 0 && drop_privileges(g_system_user) < 0) { logmsg("cannot drop to %s", g_system_user); return 1; }
     logmsg("ready as %s, admins=%s, socket=%s", g_system_user, g_admin_group, sockpath);
 
@@ -823,6 +923,19 @@ int main(void)
         while (p < end && *p) { if (argc < (int)(sizeof(argv)/sizeof(argv[0])) - 1) argv[argc++] = p; p += strlen(p) + 1; }
 #endif
         envp[envc] = NULL; argv[argc] = NULL;
+        /* LogonUser (wine-sg 1709): a password check and a one-time ticket;
+         * never logged with its environment. It has no program to run (an
+         * older broker answers a request without one with a refusal at once,
+         * never with a consent prompt) */
+        if (!strcmp(cwd, "@logon")) {
+            handle_logon(conn, &cred, rpw, envp, envc);
+            explicit_bzero(blob, len);
+            close(conn);
+            if (errfd >= 0) close(errfd);
+            if (getenv("SG_BROKER_ONCE")) break;
+            continue;
+        }
+
         if (argc == 0) { write_full(conn, &status, 1); close(conn); if (errfd >= 0) close(errfd); continue; }
 
         /* Console shadow consent (sg-rdp-authd's monitor): cwd "@shadow",

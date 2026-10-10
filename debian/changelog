@@ -1,3 +1,17 @@
+sg-session (0.1.0-190) unstable; urgency=medium
+
+  * sg-brokerd: LogonUser's password check (wine-sg 1709). The "@logon"
+    request checks an account's password with PAM, in the root monitor as
+    for elevation, and answers with a one-time ticket: a file in
+    /run/stained-glass-broker/tickets (the SYSTEM account's alone) naming
+    the account, the requester and a 30-second limit. The machine
+    wineserver turns the ticket into the token. The password is never
+    written anywhere and is wiped once checked. Root and the SYSTEM account
+    cannot be logged on to. Test: make test-logon-ticket, mutant
+    SG_MUTANT_LOGON_NO_PASSWORD_CHECK.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 10 Oct 2026 00:09:50 -0700
+
 sg-session (0.1.0-189) unstable; urgency=medium
 
   * Tests: netctl-test's NETCTL_LIVE_ANYONE mutant only as an ordinary user;

@@ -706,6 +706,11 @@ test-boot-splash:
 test-elevate-debug: procagent
 	@sh test/elevate-debug-test.sh
 
+# LogonUser's password check and one-time tickets (wine-sg 1709).
+.PHONY: test-logon-ticket
+test-logon-ticket: procagent
+	@sh test/logon-ticket-test.sh
+
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh
