@@ -14,6 +14,7 @@ sg-session (0.1.0-188) unstable; urgency=medium
     window. Gates: snapshot-test (mutant NO_MERGE), the VM goback scenario.
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 15:57:20 -0700
+
 sg-session (0.1.0-187) unstable; urgency=medium
 
   * sg-elevated-run: the elevated program runs in the requesting user's
