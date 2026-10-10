@@ -1,3 +1,16 @@
+sg-session (0.1.0-193) unstable; urgency=medium
+
+  * Run as another account (wine-sg 1711) on the requester's screen: for
+    an account with no session display of its own, the broker's monitor
+    starts sg-elevated-run --as-uid as root. It runs the display's Xwayland
+    as the SYSTEM account (never root), hands it to the requester's
+    compositor as for an elevated program, makes the cookie readable by the
+    SYSTEM account and that account's group only, and runs the program as
+    the account. --as-uid refuses root, the SYSTEM account and other system
+    accounts.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 10 Oct 2026 03:05:35 -0700
+
 sg-session (0.1.0-192) unstable; urgency=medium
 
   * sg-brokerd: running a program as another account (wine-sg 1711:

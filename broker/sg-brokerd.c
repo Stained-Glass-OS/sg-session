@@ -50,6 +50,9 @@ static const char *g_polkit_respond = "/usr/libexec/stained-glass/sg-polkit-resp
 static const char *g_ticket_dir = "/run/stained-glass-broker/tickets";
 static int is_admin_name(const char *name);
 static int plain_name(const char *s);
+struct surface { char control[256], priv[256]; };
+static int find_surface(uid_t uid, struct surface *sf);
+static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run";
 
 static void logmsg(const char *fmt, ...)
 {
@@ -160,8 +163,8 @@ static void session_display_env(uid_t uid)
 static int monitor_spawn(uint32_t uid, char *blob, uint32_t len)
 {
     struct passwd *pw = getpwuid(uid), *sys = getpwnam(g_system_user);
-    char *cwd, *ticket, *p, *end = blob + len, *argv[256];
-    int argc = 1, status;
+    char *cwd, *ticket, *control, *requester, *p, *end = blob + len, *argv[256];
+    int argc = 1, status, own_display;
     pid_t pid;
 
     /* never root, the SYSTEM account or another system account */
@@ -173,11 +176,22 @@ static int monitor_spawn(uint32_t uid, char *blob, uint32_t len)
     if (!len || blob[len - 1]) return 0;
     cwd = blob; ticket = cwd + strlen(cwd) + 1;
     if (ticket >= end) return 0;
-    p = ticket + strlen(ticket) + 1;
+    control = ticket + strlen(ticket) + 1;
+    if (control >= end) return 0;
+    requester = control + strlen(control) + 1;
+    if (requester >= end) return 0;
+    p = requester + strlen(requester) + 1;
     argv[0] = (char *)g_launch_wine;
     while (p < end && argc < 255) { argv[argc++] = p; p += strlen(p) + 1; }
     argv[argc] = NULL;
     if (argc < 2) return 0;
+    /* the account's own session display when it has one; else a display of
+     * its own on the requester's screen (sg-elevated-run --as-uid) */
+    {
+        char envpath[128];
+        snprintf(envpath, sizeof(envpath), "/run/user/%u/sg-session.env", (unsigned)uid);
+        own_display = access(envpath, R_OK) == 0;
+    }
 
     if ((pid = fork()) < 0) return 0;
     if (!pid) {
@@ -186,6 +200,34 @@ static int monitor_spawn(uint32_t uid, char *blob, uint32_t len)
         setsid();
         if ((again = fork()) < 0) _exit(1);
         if (again) _exit(0);
+        if (!own_display && *control) {
+            /* sg-elevated-run, as root, gives up root for the X server
+             * (the SYSTEM account) and for the program (the account) */
+            char uidbuf[16], *xargv[264];
+            int k = 0, a;
+            snprintf(uidbuf, sizeof(uidbuf), "%u", (unsigned)uid);
+            clearenv();
+            setenv("HOME", pw->pw_dir, 1);
+            setenv("USER", pw->pw_name, 1);
+            setenv("LOGNAME", pw->pw_name, 1);
+            setenv("SHELL", pw->pw_shell && *pw->pw_shell ? pw->pw_shell : "/bin/sh", 1);
+            setenv("PATH", "/opt/wine-sg/bin:/usr/local/bin:/usr/bin:/bin", 1);
+            setenv("LANG", "C.UTF-8", 1);
+            setenv("WINEPREFIX", g_launch_prefix, 1);
+            setenv("SG_LAUNCH_TICKET", ticket, 1);
+            setenv("SG_SYSTEM_USER", g_system_user, 1);
+            if (!*cwd || chdir(cwd) != 0) { if (chdir("/") != 0) {} }
+            xargv[k++] = (char *)g_elevated_run;
+            xargv[k++] = "--control"; xargv[k++] = control;
+            xargv[k++] = "--uid"; xargv[k++] = requester;
+            xargv[k++] = "--as-uid"; xargv[k++] = uidbuf;
+            xargv[k++] = "--";
+            for (a = 0; argv[a] && k < 263; a++) xargv[k++] = argv[a];
+            xargv[k] = NULL;
+            { int null = open("/dev/null", O_RDWR); if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); } }
+            execv(g_elevated_run, xargv);
+            _exit(127);
+        }
         if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0 ||
             setuid(0) == 0)
             _exit(1);
@@ -559,8 +601,14 @@ static void handle_launch(int conn, const struct ucred *cred, const struct passw
     unlink(path);
     if (expires < (long long)time(NULL)) goto done;
 
-    /* to the monitor: the directory, the ticket, the arguments */
-    n = snprintf(blob, sizeof(blob), "%s%c%s%c", cwd, 0, ticket, 0);
+    /* to the monitor: the directory, the ticket, the requester's compositor
+     * (for a display on its screen) and uid, the arguments */
+    {
+        struct surface sf;
+        memset(&sf, 0, sizeof(sf));
+        if (!find_surface(cred->uid, &sf)) sf.control[0] = 0;
+        n = snprintf(blob, sizeof(blob), "%s%c%s%c%s%c%u%c", cwd, 0, ticket, 0, sf.control, 0, (unsigned)cred->uid, 0);
+    }
     if (n < 0 || (size_t)n >= sizeof(blob)) goto done;
     len = (uint32_t)n;
     for (i = 0; i < argc; i++) {
@@ -574,12 +622,17 @@ static void handle_launch(int conn, const struct ucred *cred, const struct passw
         write_full(g_monitor, &len, sizeof(len)) || write_full(g_monitor, blob, len) || read_full(g_monitor, &ok, 1))
         goto done;
     if (ok) {
-        struct passwd *tpw = getpwuid(uid);
-        char prog[160];
+        char prog[160], who[64], as[64];
+        struct passwd *tpw;
+        /* getpwuid's answer is overwritten by the next call: the
+         * requester's name first */
+        snprintf(who, sizeof(who), "%s", rpw->pw_name);
+        tpw = getpwuid(uid);
+        snprintf(as, sizeof(as), "%s", tpw ? tpw->pw_name : "?");
         plain_text(argv[0], prog, sizeof(prog));
         status = 0;
-        logmsg("launch: %s started %s as %s", rpw->pw_name, prog, tpw ? tpw->pw_name : "?");
-        syslog(LOG_AUTHPRIV | LOG_NOTICE, "Run as: %s started %s as %s", rpw->pw_name, prog, tpw ? tpw->pw_name : "?");
+        logmsg("launch: %s started %s as %s", who, prog, as);
+        syslog(LOG_AUTHPRIV | LOG_NOTICE, "Run as: %s started %s as %s", who, prog, as);
     } else logmsg("launch: refused for %s (uid %u)", rpw->pw_name, uid);
 done:
     if (status) logmsg("launch: %s's request refused", rpw->pw_name);
@@ -605,7 +658,6 @@ done:
 static const char *g_seat_dir = "/run/stained-glass-seat/seat0";
 static const char *g_consent_ui = "/usr/lib/stained-glass/sg-consent-ui";
 
-struct surface { char control[256], priv[256]; };
 
 static int surface_connect(const struct surface *sf)
 {
@@ -924,7 +976,6 @@ static int plain_name(const char *s)
  * session's display: any program in the session could type into it or read
  * it there. Without a compositor (the headless trust gate, SG_BROKER_TEST)
  * the program runs with no display at all. */
-static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run";
 
 /* Starts the elevated program. The child this forks answers the requester
  * itself, on CONN: "launched" (0), then -- when the program has ended -- its

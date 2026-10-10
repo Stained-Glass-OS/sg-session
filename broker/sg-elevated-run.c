@@ -19,7 +19,15 @@
  *   4. the display stays while the program or anything it started runs (this
  *      process is their subreaper), then goes.
  *
- * Usage:  sg-elevated-run --control SOCKET --uid UID [--] PROGRAM [ARG...]
+ * Usage:  sg-elevated-run --control SOCKET --uid UID [--as-uid TARGET] [--] PROGRAM [ARG...]
+ *
+ * --as-uid (wine-sg 1711, run as another account): started as root by the
+ * broker's monitor, for a program of another account that has no session
+ * display of its own. The display is the same -- an Xwayland of its own, run
+ * as the SYSTEM account and handed to the requester's compositor -- and its
+ * cookie is readable by the SYSTEM account and TARGET's group only; the
+ * program runs as TARGET, in the environment the monitor made from TARGET's
+ * account.
  *
  * SOCKET is the requester's compositor control socket, and it must be served
  * by UID (SO_PEERCRED) -- the broker found and checked it for the consent
@@ -37,6 +45,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pwd.h>
+#include <grp.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -275,7 +285,8 @@ static int is_console_program(const char *win)
 int main(int argc, char **argv)
 {
     const char *control = getenv("SG_ELEVATED_CONTROL"), *xwayland = getenv("SG_XWAYLAND");
-    long uid_arg = -1;
+    long uid_arg = -1, as_uid = -1;
+    struct passwd *as_pw = NULL, *sys_pw = NULL;
     int first = 1, wl[2], wm[2], ready[2], dfd[2], status = 0, program_status = 125, display = -1;
     char dir[] = "/tmp/sg-elevated-XXXXXX", cookie[64], buf[32], desk[64], dpy[32];
     size_t got = 0;
@@ -285,6 +296,7 @@ int main(int argc, char **argv)
     while (first < argc) {
         if (!strcmp(argv[first], "--control") && first + 1 < argc) { control = argv[first + 1]; first += 2; }
         else if (!strcmp(argv[first], "--uid") && first + 1 < argc) { uid_arg = strtol(argv[first + 1], NULL, 10); first += 2; }
+        else if (!strcmp(argv[first], "--as-uid") && first + 1 < argc) { as_uid = strtol(argv[first + 1], NULL, 10); first += 2; }
         else if (!strcmp(argv[first], "--")) { first++; break; }
         else break;
     }
@@ -293,6 +305,16 @@ int main(int argc, char **argv)
         return 125;
     }
     if (!xwayland) xwayland = "Xwayland";
+    if (as_uid >= 0) {
+        const char *sys = getenv("SG_SYSTEM_USER");
+        /* only root starts a program as another account, and never as root,
+         * the SYSTEM account or another system account */
+        if (geteuid() != 0 || as_uid < 1000 || !(as_pw = getpwuid((uid_t)as_uid)) ||
+            !(sys_pw = getpwnam(sys && *sys ? sys : "sgsystem")) || (uid_t)as_uid == sys_pw->pw_uid) {
+            logmsg("--as-uid %ld refused", as_uid);
+            return 125;
+        }
+    }
 
     /* Everything the program starts, however it detaches, stays ours to wait
      * for: the display lives as long as any of it. */
@@ -306,6 +328,11 @@ int main(int argc, char **argv)
     if (!mkdtemp(dir)) { logmsg("mkdtemp: %s", strerror(errno)); return 125; }
     snprintf(cookie, sizeof(cookie), "%s/Xauthority", dir);
     if (write_cookie(cookie)) { logmsg("cannot write the display's cookie"); rmdir(dir); return 125; }
+    if (as_pw && (chown(dir, sys_pw->pw_uid, as_pw->pw_gid) || chmod(dir, 0750) ||
+                  chown(cookie, sys_pw->pw_uid, as_pw->pw_gid) || chmod(cookie, 0640))) {
+        logmsg("cannot give the cookie to uid %ld: %s", as_uid, strerror(errno));
+        rm_dir(dir, cookie); return 125;
+    }
 
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, wl) || socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, wm) ||
         pipe2(ready, O_CLOEXEC) || pipe2(dfd, O_CLOEXEC)) {
@@ -326,6 +353,10 @@ int main(int argc, char **argv)
         snprintf(wls, sizeof(wls), "%d", wl[1]); snprintf(wms, sizeof(wms), "%d", wm[1]); snprintf(dfs, sizeof(dfs), "%d", dfd[1]);
         setenv("WAYLAND_SOCKET", wls, 1);
         unsetenv("WAYLAND_DISPLAY"); unsetenv("DISPLAY");
+        /* the X server as the SYSTEM account, never root */
+        if (sys_pw && (initgroups(sys_pw->pw_name, sys_pw->pw_gid) || setgid(sys_pw->pw_gid) ||
+                       setuid(sys_pw->pw_uid) || setuid(0) == 0))
+            _exit(127);
         { int nul = open("/dev/null", O_RDWR); if (nul >= 0) { dup2(nul, 0); dup2(nul, 1); if (!getenv("SG_ELEVATED_XLOG")) dup2(nul, 2); } }
         execlp(xwayland, xwayland, "-rootless", "-wm", wms, "-displayfd", dfs, "-auth", cookie,
                "-nolisten", "tcp", "-noreset", (char *)NULL);
@@ -367,13 +398,12 @@ int main(int argc, char **argv)
      * its own WinSta0, Local\ namespace and clipboard), where its windows,
      * tray icons and messages belong; wine-sg honours it for the SYSTEM
      * account only, and Wine's processes started from it stay there. */
-    {
+    if (!as_pw) {
         char sess[24];
         snprintf(sess, sizeof(sess), "%ld", uid_arg);
         setenv("SG_SESSION_UID", sess, 1);
+        apply_user_look();
     }
-
-    apply_user_look();
 
     {
         char **args = argv + first, sys32[4096];
@@ -400,6 +430,11 @@ int main(int argc, char **argv)
         if (pid < 0) { kill(xpid, SIGTERM); rm_dir(dir, cookie); return 125; }
         if (!pid) {
             signal(SIGPIPE, SIG_DFL);
+            /* another account's program: as that account (the monitor made
+             * its environment) */
+            if (as_pw && (initgroups(as_pw->pw_name, as_pw->pw_gid) || setgid(as_pw->pw_gid) ||
+                          setuid(as_pw->pw_uid) || setuid(0) == 0))
+                _exit(126);
             {
                 char here[16];
                 if (getcwd(here, sizeof(here)) && !strcmp(here, "/") && chdir(sys32) < 0) { /* stays */ }
