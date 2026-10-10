@@ -1,3 +1,11 @@
+sg-session (0.1.0-189) unstable; urgency=medium
+
+  * Tests: netctl-test's NETCTL_LIVE_ANYONE mutant only as an ordinary user;
+    the test skips as root, so in CI's container the mutant "survived" and
+    lint failed.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 18:40:00 -0700
+
 sg-session (0.1.0-188) unstable; urgency=medium
 
   * The boot menu is reachable: systemd-boot's hidden menu (timeout 0) waits
