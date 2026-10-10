@@ -2334,8 +2334,24 @@ kernels the ext4 system lacks.
   loader.conf are untouched (no renaming, unlike `+N` boot counting, which
   stays for a kernel on trial). Gate `test/boot-health-test.sh` (lint;
   stand-in bootctl that behaves as the loader; mutants NO_BEGIN NO_OK
-  UPDATE_ARMS UNIT_ORDER); the VM gate checks the real variable
+  UPDATE_ARMS UNIT_ORDER NO_WINDOW); the VM gate checks the real variable
   (sg-image restore-points-test).
+- **The boot menu is reachable at every start** (0.1.0-188). systemd-boot
+  with `timeout 0` hides the menu and polls for a held key for ~0.1 s, so
+  nobody could reach the restore points (David's VM). sg-install now writes
+  `timeout 3` (5 with another OS on the disk); `sg-boot-health window`
+  (postinst, first arrival of 0.1.0-188) changes our own loader.conf's
+  `timeout 0` to 3. The failed-start oneshot (10 s) overrides it. Space
+  or an arrow key stops the countdown. **Not Esc**: systemd-boot answers it
+  with "Press Enter to reboot into firmware interface" (VM-proven).
+- **Going back keeps every package of the point from apt** (0.1.0-188). A
+  second apt run of the same kind within 5 minutes of a point (PackageKit's
+  transaction brings more than the prepared update listed; a drivers run
+  beside an update) joined the point without recording its changes, so the
+  pin file (`sg-went-back`) lacked them and the updater brought them
+  straight back. `merge_changes` now joins them (oldest `old`, newest `new`,
+  label rewritten). Gate: snapshot-test (mutant NO_MERGE) and the VM
+  `goback` scenario (sg-image).
 - **btrfs subvolume sync waits for ever** on a deleted subvolume that is
   still mounted (the old `@` while it is the running root): sg-snapshot
   bounds it (60 s).

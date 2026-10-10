@@ -8,6 +8,7 @@
 #                          boot loader to show its menu at the NEXT start
 #                          (systemd-boot's oneshot menu timeout, which the loader
 #                          itself uses up and forgets)
+#   sg-boot-health window  (postinst) a menu timeout of 3 s instead of 0, so a key reaches the menu
 #   sg-boot-health ok      once the start finished (sg-boot-ok.service, after
 #                          graphical.target, a few seconds of grace): takes the
 #                          request back
@@ -42,7 +43,30 @@ cmdline_has() {
     tr ' ' '\n' < "$CMDLINE" 2>/dev/null | grep -Eq "$pat"
 }
 
+# The menu is reachable at every start. systemd-boot with "timeout 0" hides it
+# and looks for a held key for about a tenth of a second -- nobody can press a key
+# in that time (David's VM, 2026-10-09). "timeout 3" shows the menu for three
+# seconds at every start: Space or an arrow key stops the countdown (NOT Esc: systemd-boot answers it with "Press Enter to reboot into firmware interface"), and the
+# restore points are there to choose. Only a loader.conf that is ours ("# Stained
+# Glass OS") and says "timeout 0" is changed (sg-install writes 3 now; this brings
+# the machines installed with 0 along, once, from the package's postinst).
+loader_conf() {
+    if [ -n "${SG_BOOTHEALTH_LOADERCONF:-}" ]; then echo "$SG_BOOTHEALTH_LOADERCONF"; return; fi
+    _esp=$("$BOOTCTL" --print-esp-path 2>/dev/null) || _esp=""
+    for _d in "$_esp" /efi /boot/efi; do
+        [ -n "$_d" ] && [ -f "$_d/loader/loader.conf" ] && { echo "$_d/loader/loader.conf"; return; }
+    done
+}
+
 case "${1:-}" in
+    window)
+        [ -n "${SG_MUTANT_BOOTHEALTH_NO_WINDOW:-}" ] && exit 0
+        _c=$(loader_conf)
+        [ -n "$_c" ] && [ -w "$_c" ] || exit 0
+        head -n 1 "$_c" | grep -qx '# Stained Glass OS' || exit 0
+        grep -qx 'timeout 0' "$_c" || exit 0
+        sed -i 's/^timeout 0$/timeout 3/' "$_c" || say "cannot change $_c"
+        ;;
     begin)
         [ -e "$EFI" ] || exit 0
         cmdline_has 'systemd.volatile=*' && exit 0
@@ -63,7 +87,7 @@ case "${1:-}" in
         "$BOOTCTL" set-timeout-oneshot "" >/dev/null 2>&1 || true
         ;;
     *)
-        echo "usage: sg-boot-health begin|ok" >&2
+        echo "usage: sg-boot-health begin|ok|window" >&2
         exit 2
         ;;
 esac

@@ -43,6 +43,12 @@ case "$1" in
             done
         ) || true
         fi
+        # The boot menu is reachable (3 seconds at every start; Esc or an arrow
+        # key stops the countdown): machines installed with a hidden menu
+        # (timeout 0) get it when this version first arrives.
+        if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.1.0-188; then
+            /usr/bin/sg-boot-health window || true
+        fi
         # SSH on, with passwords for people's accounts (David 2026-10-01):
         # the image's lab-only leftovers go, and the server is enabled once,
         # when this version first arrives (an administrator may turn it off).

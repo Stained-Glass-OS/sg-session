@@ -12,7 +12,7 @@
 #   - the units: begin early (before sysinit), ok after multi-user.target and
 #     graphical.target, Type=simple (nothing waits for it), packaged enabled.
 #
-#   sh test/boot-health-test.sh [--mutant NO_BEGIN|NO_OK|UPDATE_ARMS|UNIT_ORDER]   (a mutant must fail it)
+#   sh test/boot-health-test.sh [--mutant NO_BEGIN|NO_OK|UPDATE_ARMS|UNIT_ORDER|NO_WINDOW]   (a mutant must fail it)
 # shellcheck disable=SC2015
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -74,6 +74,18 @@ touch "$T/not-systemd-boot"
 sh "$HB" begin >/dev/null 2>&1 && sh "$HB" ok && pass "a boot loader that is not systemd-boot: begin and ok still succeed" || fail "not systemd-boot made begin/ok fail"
 rm -f "$T/not-systemd-boot"
 sh "$HB" bogus 2>/dev/null && fail "an unknown verb succeeded" || pass "an unknown verb is refused"
+
+# the menu is reachable at every start: a hidden menu (timeout 0) looks for a held key for 0.1 s only
+export SG_BOOTHEALTH_LOADERCONF="$T/loader.conf"
+printf '# Stained Glass OS\ndefault debian-*\ntimeout 0\n' > "$T/loader.conf"
+sh "$HB" window
+grep -qx 'timeout 3' "$T/loader.conf" && grep -qxF 'default debian-*' "$T/loader.conf" \
+    && pass "a machine installed with a hidden menu (timeout 0) gets 3 seconds at every start (Space or an arrow key reaches it)" || fail "window: $(cat "$T/loader.conf")"
+printf '# Stained Glass OS\ndefault debian-*\ntimeout 5\n' > "$T/loader.conf"; sh "$HB" window
+grep -qx 'timeout 5' "$T/loader.conf" && pass "a menu already shown (another system on the disk: 5 seconds) is left alone" || fail "timeout 5 changed"
+printf 'default x\ntimeout 0\n' > "$T/loader.conf"; sh "$HB" window
+grep -qx 'timeout 0' "$T/loader.conf" && pass "a loader.conf that is not ours is left alone" || fail "foreign loader.conf changed"
+unset SG_BOOTHEALTH_LOADERCONF
 
 # the units
 U="$HERE/systemd"

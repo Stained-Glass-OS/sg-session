@@ -589,9 +589,11 @@ if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/loader/loader.conf" ] || grep -q '^# Stained
     {
         echo "# Stained Glass OS"
         echo "default $TOKEN-*"
-        # With another system on the disk the menu is shown, as Windows shows
-        # its own when there is a choice.
-        if [ "$others" = 1 ]; then echo "timeout 5"; else echo "timeout 0"; fi
+        # The menu is shown at every start: 5 seconds with another system on
+        # the disk (as Windows shows its own when there is a choice), 3 alone.
+        # "timeout 0" hides it and waits for a held key for a tenth of a
+        # second, so nobody could reach the restore points (David 2026-10-09).
+        if [ "$others" = 1 ]; then echo "timeout 5"; else echo "timeout 3"; fi
     } > "$E/loader/loader.conf"
 fi
 rm -f "$E/loader/random-seed"

@@ -29,7 +29,7 @@
 # Needs passwordless sudo, losetup, mkfs.btrfs, btrfs-convert, mkfs.ext4; skips
 # (77) without them.
 #
-#   sh test/snapshot-test.sh [--mutant KEEP_ALL|CONVERT_NO_SAVED|CONVERT_KEEP_HOME|ONE_POOL|EXPIRE_NEVER|EXPIRE_EARLY]
+#   sh test/snapshot-test.sh [--mutant KEEP_ALL|CONVERT_NO_SAVED|CONVERT_KEEP_HOME|ONE_POOL|EXPIRE_NEVER|EXPIRE_EARLY|NO_MERGE]
 # shellcheck disable=SC2015,SC2086,SC2317,SC2024,SC2013
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -103,6 +103,16 @@ if grep -q "^title Stained Glass OS -- before the update of " "$e" && grep -q "^
     pass "the boot menu: 'Stained Glass OS -- before the update of <date>', starting the restore point's copy"
 else fail "boot entry: $(cat "$e" 2>&1)"; fi
 grep -q "^SNAPSHOT $ID1	.*	auto	yes	Updates: sg-shell" "$T/status" && pass "Settings is told of it (bootable)" || fail "status: $(cat "$T/status")"
+
+# a second apt run minutes later (PackageKit brings more than the prepared update listed): the same
+# restore point, but going back must keep that run from apt too
+printf 'VERSION 3\nAPT::Architecture=amd64\n\nsg-extra 1.0 amd64 same < 2.0 amd64 same /x/sg-extra.deb\n' \
+    | snap env SG_SNAP_NOW=$((NOW + 90)) python3 "$HERE/bin/sg-snapshot" apt-hook > "$T/hook1b.out" 2>&1
+if [ "$(sudo -n ls "$T/top/@snapshots" | wc -l)" = 1 ] && sudo -n grep -q '"name": "sg-extra"' "$D1/info" \
+        && sudo -n grep -q '"old": "0.1.0-169"' "$D1/info" && sudo -n grep -q 'sg-extra 1.0 to 2.0' "$D1/info" \
+        && grep -q "^SNAPSHOT $ID1	.*sg-extra 1.0 to 2.0" "$T/status"; then
+    pass "a second apt run within minutes joins the same restore point: its changes are kept too (so going back pins them)"
+else fail "merge: $(cat "$T/hook1b.out"; sudo -n cat "$D1/info" 2>&1)"; fi
 
 # the system changes; four more updates
 sudo -n sh -c "echo two > '$S/etc/version'; echo 'my letter, edited' > '$S/home/alice/letter.txt'; echo app > '$S/var/lib/stained-glass/prefix/drive_c/Program Files/app.exe'"

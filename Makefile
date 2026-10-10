@@ -416,7 +416,7 @@ lint:
 	@sh test/netbrowse-test.sh
 	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
 	@sh test/boot-health-test.sh
-	@for m in NO_BEGIN NO_OK UPDATE_ARMS UNIT_ORDER; do ! sh test/boot-health-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-health-test: mutant $$m passed"; exit 1; }; done
+	@for m in NO_BEGIN NO_OK UPDATE_ARMS UNIT_ORDER NO_WINDOW; do ! sh test/boot-health-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-health-test: mutant $$m passed"; exit 1; }; done
 	@sh test/kernel-entries-test.sh
 	@sh test/boot-layout-test.sh
 	@for m in verify live bootroot marker; do ! sh test/boot-layout-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-layout-test: mutant $$m passed"; exit 1; }; done
@@ -799,7 +799,7 @@ test-profile:
 .PHONY: test-snapshot
 test-snapshot:
 	@sh test/snapshot-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -eq 0 ] || exit $$rc
-	@for m in KEEP_ALL CONVERT_NO_SAVED CONVERT_KEEP_HOME ONE_POOL EXPIRE_NEVER EXPIRE_EARLY; do \
+	@for m in KEEP_ALL CONVERT_NO_SAVED CONVERT_KEEP_HOME ONE_POOL EXPIRE_NEVER EXPIRE_EARLY NO_MERGE; do \
 	    if sh test/snapshot-test.sh --mutant $$m >/dev/null 2>&1; then echo "mutant $$m survived"; exit 1; fi; \
 	    echo "mutant $$m caught"; done
 

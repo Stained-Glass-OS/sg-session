@@ -504,6 +504,28 @@ def take(top, label, kind, changes=None, source=None):
     return sid
 
 
+def merge_changes(top, sid, info, changes, source):
+    """a second apt run of the same kind, within minutes of the restore point's
+    own (PackageKit's transaction brings more than the prepared update listed;
+    a drivers run beside an update): the point stays, but what it was taken
+    before now includes this run too -- going back must keep ALL of it from
+    apt, or the updater brings the rest straight back"""
+    if E("SG_MUTANT_SNAP_NO_MERGE"):
+        return
+    have = list(info.get("changes", []))
+    for c in changes:
+        for h in have:
+            if h.get("name") == c["name"]:
+                h["new"] = c["new"]         # (the oldest "old" stays: what the point has)
+                break
+        else:
+            have.append(dict(c))
+    info["changes"] = have
+    info["label"] = ("SG Store: " if source == "store" else "Updates: ") + describe(have)
+    info["label"] = info["label"][:300]
+    write(os.path.join(top, SNAPDIR, sid, "info"), json.dumps(info, indent=1) + "\n", 0o600)
+
+
 def booted_snapshot():
     sid = arg("sg.snapshot")
     return sid if sid and ID_RE.match(sid) else None
@@ -733,6 +755,8 @@ def before_changes(changes, source=None):
             # the same kind: an app installed a moment after an update has its own
             if snaps and snaps[-1][1].get("kind") == "auto" and snaps[-1][1].get("source") == source and \
                     now() - time.mktime(time.strptime(snaps[-1][0], "%Y%m%d-%H%M%S")) < 300:
+                merge_changes(top, snaps[-1][0], snaps[-1][1], changes, source)
+                publish(top)                # (its label says what it was taken before now)
                 return ["SNAPSHOT " + snaps[-1][0]]
             sid = take(top, label[:300], "auto", changes, source)
             try:                        # "went back" is old news once packages change again

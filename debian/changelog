@@ -1,3 +1,19 @@
+sg-session (0.1.0-188) unstable; urgency=medium
+
+  * The boot menu is reachable: systemd-boot's hidden menu (timeout 0) waits
+    for a held key for a tenth of a second, so the restore points could not be
+    reached (David's VM). Setup writes "timeout 3" (5 beside another system);
+    machines installed with "timeout 0" get 3 when this arrives (sg-boot-health
+    window, from the postinst). The failed-start menu stays (10 s). Gates:
+    boot-health-test (mutant NO_WINDOW), the VM bootmenu scenario.
+  * Going back keeps everything the restore point was taken before from apt:
+    a second apt run within five minutes of a point (PackageKit's transaction
+    brings more than the prepared update; a drivers run beside an update) was
+    not recorded, so its versions were not pinned and "check for updates"
+    installed them again. Now the point's changes include every run of its
+    window. Gates: snapshot-test (mutant NO_MERGE), the VM goback scenario.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 09 Oct 2026 15:57:20 -0700
 sg-session (0.1.0-187) unstable; urgency=medium
 
   * sg-elevated-run: the elevated program runs in the requesting user's
