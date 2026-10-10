@@ -181,6 +181,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	install -d $(DESTDIR)/etc/pam.d
 	install -m 0644 config/pam/stained-glass-lock config/pam/stained-glass-remote \
 	    config/pam/stained-glass-elevate config/pam/stained-glass-password config/pam/stained-glass-keyring \
+	    config/pam/stained-glass-logon \
 	    $(DESTDIR)/etc/pam.d/
 	@# The profile service (sg-profile-create), run at login by pam_exec;
 	@# the deb's postinst registers it with pam-auth-update.

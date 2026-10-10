@@ -5,8 +5,14 @@
 # directory only the broker's account may read, naming the account, the
 # requester and a time limit; the wineserver takes it from there. A wrong
 # password gets no ticket, nor does root or the SYSTEM account; the password
-# is in no ticket and no log. A throwaway broker, as this user (no root).
-# Mutant: SG_MUTANT_LOGON_NO_PASSWORD_CHECK (broker/sg-brokerd.c).
+# is in no ticket and no log. The check runs under the PAM service
+# stained-glass-logon (pam_faillock locks the account out); one requester
+# that fails too often is refused for a while without PAM being asked; every
+# success and failure goes to the Security log (4624, 4625: the account, the
+# requesting user and program, never the password). A throwaway broker, as
+# this user (no root).
+# Mutants: SG_MUTANT_LOGON_NO_PASSWORD_CHECK, SG_MUTANT_LOGON_NO_RATE_LIMIT,
+# SG_MUTANT_LOGON_NO_AUDIT (broker/sg-brokerd.c).
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 B=${SG_BROKER_BUILD:-$HERE/build}
@@ -22,14 +28,15 @@ other=daemon; ouid=$(id -u "$other" 2>/dev/null) || { echo "SKIP: no account $ot
 cat > "$T/pamcheck" <<EOS
 #!/bin/bash
 IFS= read -r -d '' user; IFS= read -r -d '' pass
+echo "\$SG_REMOTE_PAM_SERVICE \$user" >> "$T/pam-calls"
 [ "\$pass" = "$PW" ] && echo OK && exit 0
 echo FAIL; exit 1
 EOS
 chmod 755 "$T/pamcheck"
-mkdir "$T/run"
+mkdir "$T/run" "$T/audit"
 SG_BROKER_FOREGROUND=1 SG_BROKER_SOCK="$T/run/sock" SG_BROKERD_LOG="$T/brokerd.log" SG_SYSTEM_USER="$me" \
     SG_ADMIN_GROUP="$grp" SG_SEAT_DIR="$T/noseat" SG_BROKER_PAMCHECK="$T/pamcheck" SG_LOGON_TICKET_DIR="$T/run/tickets" \
-    SG_AUDIT_SPOOL="$T/audit" "$B/sg-brokerd" >/dev/null 2>&1 </dev/null & BPID=$!
+    SG_AUDIT_SPOOL="$T/audit" SG_LOGON_FAILURES=4 "$B/sg-brokerd" >/dev/null 2>&1 </dev/null & BPID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$T/run/sock" ] && break; sleep 0.3; done
 
 # the request as wine-sg's advapi32 sends it; the password on standard input
@@ -37,7 +44,7 @@ cat > "$T/client.py" <<'PY'
 import socket, struct, sys
 pw = sys.stdin.readline().rstrip('\n')
 blob = b'\0'.join([b'@logon', b'LOGON_USER=' + sys.argv[2].encode(), b'LOGON_PASSWORD=' + pw.encode(),
-                   b'LOGON_TYPE=2']) + b'\0\0'
+                   b'LOGON_TYPE=2', b'LOGON_PROGRAM=C:\\test\\checker.exe']) + b'\0\0'
 s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
 s.sendall(struct.pack('=I', len(blob)) + blob)
 st = s.recv(1)
@@ -69,8 +76,28 @@ for who in root "$me" "no-such-user" "../etc"; do
     out=$(echo "$PW" | logon "$who")
     [ "$out" = "STATUS 1" ] && pass "$who, with the password: refused" || fail "$who: $out"
 done
-if grep -rqF "$PW" "$T/brokerd.log" "$T/run/tickets" 2>/dev/null; then fail "the password is in a log or a ticket"
-else pass "the password is in no ticket and no log"; fi
+grep -q "^stained-glass-logon $other$" "$T/pam-calls" && ! grep -qv "^stained-glass-logon " "$T/pam-calls" \
+    && pass "PAM is asked under the service stained-glass-logon" || fail "PAM calls: $(cat "$T/pam-calls")"
+
+# the Security log: 4624 for the success, 4625 for each failure, naming the
+# account and the requester and its program
+ok=$(grep -l '^ID 4624$' "$T"/audit/*.evt 2>/dev/null | head -1)
+[ -n "$ok" ] && grep -qx "STRING $other" "$ok" && grep -q "^STRING LogonUser by $me, C:.test.checker.exe (pid [0-9]*)$" "$ok" \
+    && pass "a success is in the Security log (4624: $other, by $me and its program)" || fail "4624: $(cat $ok 2>/dev/null)"
+nf=$(grep -l '^ID 4625$' "$T"/audit/*.evt 2>/dev/null | wc -l)
+[ "$nf" -ge 5 ] && pass "each failure is (4625, $nf of them)" || fail "4625 events: $nf"
+
+# one requester that fails too often: refused for a while, PAM not asked
+# (4 failures so far with SG_LOGON_FAILURES=4 -- the wrong password, root
+# and two more -- then even the right password)
+calls=$(wc -l < "$T/pam-calls")
+out=$(echo "$PW" | logon "$other")
+[ "$out" = "STATUS 1" ] && [ "$(wc -l < "$T/pam-calls")" = "$calls" ] \
+    && pass "after too many failures the requester is refused, without asking PAM" \
+    || fail "after too many failures: $out ($(wc -l < "$T/pam-calls") PAM calls, were $calls)"
+
+if grep -rqF "$PW" "$T/brokerd.log" "$T/run/tickets" "$T/audit" 2>/dev/null; then fail "the password is in a log, a ticket or the Security log"
+else pass "the password is in no ticket, no log and not in the Security log"; fi
 
 echo
 [ $RC = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"

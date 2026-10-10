@@ -368,7 +368,7 @@ int main(int argc, char **argv)
      * tray icons and messages belong; wine-sg honours it for the SYSTEM
      * account only, and Wine's processes started from it stay there. */
     {
-        char sess[16];
+        char sess[24];
         snprintf(sess, sizeof(sess), "%ld", uid_arg);
         setenv("SG_SESSION_UID", sess, 1);
     }

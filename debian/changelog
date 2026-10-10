@@ -1,3 +1,18 @@
+sg-session (0.1.0-191) unstable; urgency=medium
+
+  * sg-brokerd: LogonUser's safeguards (wine-sg 1709/1710). The password
+    check runs under its own PAM service, stained-glass-logon, which locks
+    an account out after repeated failures (pam_faillock), as Windows'
+    account lockout policy does. A requester that fails 5 times within a
+    minute is refused without PAM being asked. Every success and failure
+    goes to the journal (authpriv) and to the Windows Security log as
+    4624/4625: the account, the requesting user, its program and pid,
+    never the password. Test: make test-logon-ticket, mutants
+    SG_MUTANT_LOGON_NO_RATE_LIMIT and SG_MUTANT_LOGON_NO_AUDIT.
+  * sg-elevated-run: the session buffer holds any uid (-Wformat-truncation).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 10 Oct 2026 01:26:05 -0700
+
 sg-session (0.1.0-190) unstable; urgency=medium
 
   * sg-brokerd: LogonUser's password check (wine-sg 1709). The "@logon"

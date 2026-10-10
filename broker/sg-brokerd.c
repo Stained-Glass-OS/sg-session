@@ -37,6 +37,7 @@
 #include <sys/un.h>
 #include <sys/random.h>
 #include <sys/wait.h>
+#include <syslog.h>
 
 #define MAXFIELD 256
 #define MAXBLOB  65536
@@ -73,11 +74,12 @@ static int read_full(int fd, void *buf, size_t len)
 }
 
 /* ---- root monitor: PAM only (identical contract to sg-lockd) ------------ */
-static int run_pamcheck(const char *helper, const char *user, const char *pass)
+static int run_pamcheck(const char *helper, const char *user, const char *pass, const char *service)
 {
     int in[2], out[2], status = 0; char reply[64] = ""; ssize_t n; pid_t pid;
     if (pipe(in) < 0 || pipe(out) < 0 || (pid = fork()) < 0) return 0;
     if (!pid) {
+        if (service) setenv("SG_REMOTE_PAM_SERVICE", service, 1);
         dup2(in[0], 0); dup2(out[1], 1);
         close(in[0]); close(in[1]); close(out[0]); close(out[1]);
         execl(helper, helper, (char *)NULL); _exit(127);
@@ -97,6 +99,9 @@ static int run_pamcheck(const char *helper, const char *user, const char *pass)
  * or of the SYSTEM account's (sg-polkit-agent runs as the session's user):
  * the broker that asks has the consent; this checks what it can itself. */
 #define MONITOR_POLKIT 0xffffffffu
+/* LogonUser's check (wine-sg 1709): the same, under the PAM service
+ * stained-glass-logon, which locks an account out after failures */
+#define MONITOR_LOGON  0xfffffffeu
 static int monitor_polkit(uint32_t agent_uid, uint32_t identity_uid, const char *cookie)
 {
     struct passwd *sys = getpwnam(g_system_user), *id = getpwuid(identity_uid);
@@ -143,24 +148,37 @@ static void monitor_loop(int fd, const char *helper)
             if (write_full(fd, &ok, 1)) _exit(0);
             continue;
         }
-        if (read_full(fd, &plen, sizeof(plen))) _exit(0);
-        if (ulen >= MAXFIELD || plen >= MAXFIELD) _exit(1);
-        if (read_full(fd, user, ulen) || read_full(fd, pass, plen)) _exit(0);
-        user[ulen] = 0; pass[plen] = 0;
-        ok = (unsigned char)run_pamcheck(helper, user, pass);
+        {
+            const char *service = NULL;
+            if (ulen == MONITOR_LOGON) {
+                service = "stained-glass-logon";
+                if (read_full(fd, &ulen, sizeof(ulen))) _exit(0);
+            }
+            if (read_full(fd, &plen, sizeof(plen))) _exit(0);
+            if (ulen >= MAXFIELD || plen >= MAXFIELD) _exit(1);
+            if (read_full(fd, user, ulen) || read_full(fd, pass, plen)) _exit(0);
+            user[ulen] = 0; pass[plen] = 0;
+            ok = (unsigned char)run_pamcheck(helper, user, pass, service);
+        }
         explicit_bzero(pass, sizeof(pass));
         if (!ok) sleep(2);
         if (write_full(fd, &ok, 1)) _exit(0);
     }
 }
-static int check_password(const char *user, const char *pass)
+static int check_password_as(const char *user, const char *pass, int logon)
 {
     unsigned ulen = (unsigned)strlen(user), plen = (unsigned)strlen(pass); unsigned char ok = 0;
+    uint32_t marker = MONITOR_LOGON;
     if (ulen >= MAXFIELD || plen >= MAXFIELD) return 0;
+    if (logon && write_full(g_monitor, &marker, sizeof(marker))) return 0;
     if (write_full(g_monitor, &ulen, sizeof(ulen)) || write_full(g_monitor, &plen, sizeof(plen)) ||
         write_full(g_monitor, user, ulen) || write_full(g_monitor, pass, plen) || read_full(g_monitor, &ok, 1))
         return 0;
     return ok == 1;
+}
+static int check_password(const char *user, const char *pass)
+{
+    return check_password_as(user, pass, 0);
 }
 
 static int polkit_respond(uid_t agent_uid, uid_t identity_uid, const char *cookie)
@@ -298,38 +316,110 @@ static int make_ticket(uid_t target, uid_t requester, unsigned type, char *name,
     return 0;
 }
 
+/* How fast one requester may fail: LOGON_FAILURES failures in LOGON_WINDOW
+ * seconds, then every request is refused, without asking PAM, until the
+ * window has passed -- LogonUser must not be a password-guessing oracle for
+ * any local program (PAM's stained-glass-logon service locks the account out
+ * besides). SG_LOGON_FAILURES changes the limit (the gate). */
+#define LOGON_WINDOW 60
+static struct { uid_t uid; time_t start; unsigned failures; } g_logon_rate[64];
+
+static int logon_rate_limited(uid_t uid, int failed)
+{
+    const char *env = getenv("SG_LOGON_FAILURES");
+    unsigned limit = env ? (unsigned)strtoul(env, NULL, 10) : 5, i, slot = 0;
+    time_t now = time(NULL), oldest = now;
+
+    for (i = 0; i < sizeof(g_logon_rate) / sizeof(g_logon_rate[0]); i++) {
+        if (g_logon_rate[i].uid == uid && g_logon_rate[i].start) { slot = i; goto found; }
+        if (g_logon_rate[i].start < oldest) { oldest = g_logon_rate[i].start; slot = i; }
+    }
+    g_logon_rate[slot].uid = uid; g_logon_rate[slot].start = now; g_logon_rate[slot].failures = 0;
+found:
+    if (now - g_logon_rate[slot].start >= LOGON_WINDOW) { g_logon_rate[slot].start = now; g_logon_rate[slot].failures = 0; }
+    if (failed) g_logon_rate[slot].failures++;
+#ifdef SG_MUTANT_LOGON_NO_RATE_LIMIT
+    return 0;
+#endif
+    return g_logon_rate[slot].failures >= limit;
+}
+
+static const char *logon_type_text(unsigned type)
+{
+    switch (type) {
+    case 2: return "2 (Interactive)";
+    case 3: return "3 (Network)";
+    case 4: return "4 (Batch)";
+    case 5: return "5 (Service)";
+    case 7: return "7 (Unlock)";
+    case 8: return "8 (NetworkCleartext)";
+    default: return "2 (Interactive)";
+    }
+}
+
+/* shown, never trusted: what the requester says its program is */
+static void plain_text(const char *in, char *out, size_t max)
+{
+    size_t n = 0;
+    for (; in && *in && n + 1 < max; in++) out[n++] = (*in < 32 || *in == 127 || *in == '"') ? '?' : *in;
+    out[n] = 0;
+}
+
 static void handle_logon(int conn, const struct ucred *cred, const struct passwd *rpw, char **envp, int envc)
 {
-    const char *user = NULL, *type_str = NULL;
-    char *pass = NULL, name[40], reply[64];
-    struct passwd *tpw;
+    const char *user = NULL, *type_str = NULL, *program = NULL;
+    char *pass = NULL, name[40], reply[64], prog[160], acct[80], process[256];
+    struct passwd *tpw = NULL;
     unsigned char status = 1;
     unsigned type = 2;
-    int i;
+    int i, limited = 0, ok = 0;
 
     for (i = 0; i < envc; i++) {
         if (!strncmp(envp[i], "LOGON_USER=", 11)) user = envp[i] + 11;
         else if (!strncmp(envp[i], "LOGON_PASSWORD=", 15)) pass = envp[i] + 15;
         else if (!strncmp(envp[i], "LOGON_TYPE=", 11)) type_str = envp[i] + 11;
+        else if (!strncmp(envp[i], "LOGON_PROGRAM=", 14)) program = envp[i] + 14;
     }
     if (type_str) type = (unsigned)strtoul(type_str, NULL, 10);
+    plain_text(program ? program : "-", prog, sizeof(prog));
+    plain_text(user && plain_name(user) ? user : "(a bad name)", acct, sizeof(acct));
+    snprintf(process, sizeof(process), "LogonUser by %s, %s (pid %d)", rpw->pw_name, prog, (int)cred->pid);
     sweep_tickets();
+    if ((limited = logon_rate_limited(cred->uid, 0)))
+        logmsg("logon: %s is refused for now (too many failures)", rpw->pw_name);
 #ifndef SG_MUTANT_LOGON_NO_PASSWORD_CHECK
-    if (user && pass && plain_name(user) && (tpw = getpwnam(user)) && tpw->pw_uid != 0 &&
-        strcmp(tpw->pw_name, g_system_user) && check_password(user, pass))
+    else if (user && pass && plain_name(user) && (tpw = getpwnam(user)) && tpw->pw_uid != 0 &&
+             strcmp(tpw->pw_name, g_system_user) && check_password_as(user, pass, 1))
 #else
-    if (user && plain_name(user) && (tpw = getpwnam(user)))
+    else if (user && plain_name(user) && (tpw = getpwnam(user)))
 #endif
-    {
-        if (!make_ticket(tpw->pw_uid, cred->uid, type, name, sizeof(name))) {
-            status = 0;
-            logmsg("logon: %s logged on %s (type %u)", rpw->pw_name, user, type);
-        } else {
-            status = 2;
-            logmsg("logon: cannot write a ticket in %s: %s", g_ticket_dir, strerror(errno));
-        }
-    } else logmsg("logon: %s failed to log on %s", rpw->pw_name, user && plain_name(user) ? user : "(a bad name)");
+        ok = 1;
     if (pass) explicit_bzero(pass, strlen(pass));
+
+    if (ok && !make_ticket(tpw->pw_uid, cred->uid, type, name, sizeof(name))) {
+        const char *st[5] = { acct, computer_name(), logon_type_text(type), process, "-" };
+        status = 0;
+        logmsg("logon: %s logged on %s (type %u, %s)", rpw->pw_name, acct, type, prog);
+        syslog(LOG_AUTHPRIV | LOG_NOTICE, "LogonUser: %s logged on as %s (type %u) from %s, pid %d",
+               rpw->pw_name, acct, type, prog, (int)cred->pid);
+#ifndef SG_MUTANT_LOGON_NO_AUDIT
+        audit(4624, 1, 12544, st, 5);
+#endif
+    } else if (ok) {
+        status = 2;
+        logmsg("logon: cannot write a ticket in %s: %s", g_ticket_dir, strerror(errno));
+    } else {
+        const char *st[6] = { acct, computer_name(), logon_type_text(type),
+                              limited ? "Too many failed logons: try again later." : "Unknown user name or bad password.",
+                              process, "-" };
+        if (!limited) logon_rate_limited(cred->uid, 1);
+        logmsg("logon: %s failed to log on %s (%s)", rpw->pw_name, acct, prog);
+        syslog(LOG_AUTHPRIV | LOG_WARNING, "LogonUser: %s failed to log on as %s (type %u) from %s, pid %d%s",
+               rpw->pw_name, acct, type, prog, (int)cred->pid, limited ? " (too many failures)" : "");
+#ifndef SG_MUTANT_LOGON_NO_AUDIT
+        audit(4625, 0, 12544, st, 6);
+#endif
+    }
     write_full(conn, &status, 1);
     if (!status) {
         int n = snprintf(reply, sizeof(reply), "TICKET %s\n", name);

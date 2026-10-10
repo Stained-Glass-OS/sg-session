@@ -1,0 +1,13 @@
+# PAM policy for LogonUser (wine-sg 1709): a Windows program checks an
+# account's password through the elevation broker (sg-brokerd, "@logon").
+# Any local program can ask, so this service locks an account out after
+# repeated failures, as Windows' account lockout policy does: pam_faillock
+# (its limits in /etc/security/faillock.conf). The broker also limits how
+# fast one requester may ask.
+auth    requisite                   pam_faillock.so preauth
+auth    [success=2 default=ignore]  pam_unix.so
+-auth   [success=1 default=ignore]  pam_winbind.so try_first_pass
+auth    [default=die]               pam_faillock.so authfail
+auth    sufficient                  pam_faillock.so authsucc
+auth    requisite                   pam_deny.so
+@include common-account
