@@ -712,6 +712,11 @@ test-elevate-debug: procagent
 test-logon-ticket: procagent
 	@sh test/logon-ticket-test.sh
 
+# Running a program as another account: the broker's refusals (wine-sg 1711).
+.PHONY: test-launch-ticket
+test-launch-ticket: procagent
+	@sh test/launch-ticket-test.sh
+
 .PHONY: test-sas-action
 test-sas-action:
 	@sh test/sas-action-test.sh

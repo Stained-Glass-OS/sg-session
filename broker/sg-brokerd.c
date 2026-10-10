@@ -102,6 +102,11 @@ static int run_pamcheck(const char *helper, const char *user, const char *pass, 
 /* LogonUser's check (wine-sg 1709): the same, under the PAM service
  * stained-glass-logon, which locks an account out after failures */
 #define MONITOR_LOGON  0xfffffffeu
+/* A program as another account (wine-sg 1711): the monitor starts it, as
+ * that account, with an environment made from that account alone */
+#define MONITOR_SPAWN  0xfffffffdu
+static const char *g_launch_wine = "/opt/wine-sg/bin/wine";
+static const char *g_launch_prefix = "/var/lib/stained-glass/prefix";
 static int monitor_polkit(uint32_t agent_uid, uint32_t identity_uid, const char *cookie)
 {
     struct passwd *sys = getpwnam(g_system_user), *id = getpwuid(identity_uid);
@@ -130,6 +135,80 @@ static int monitor_polkit(uint32_t agent_uid, uint32_t identity_uid, const char 
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/* the session of uid's own display, when it has one (sg-session.env) */
+static void session_display_env(uid_t uid)
+{
+    char path[128], line[512];
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/run/user/%u", (unsigned)uid);
+    if (access(path, X_OK) == 0) setenv("XDG_RUNTIME_DIR", path, 1);
+    snprintf(path, sizeof(path), "/run/user/%u/sg-session.env", (unsigned)uid);
+    if (!(f = fopen(path, "re"))) return;
+    while (fgets(line, sizeof(line), f)) {
+        char *nl = strchr(line, '\n'), *v;
+        if (nl) *nl = 0;
+        if (!(v = strchr(line, '='))) continue;
+        *v++ = 0;
+        if (*v == '\'' || *v == '"') { size_t n = strlen(v); v++; if (n >= 2) v[n - 2] = 0; }
+        if (!strcmp(line, "DISPLAY") || !strcmp(line, "WAYLAND_DISPLAY") || !strcmp(line, "XDG_RUNTIME_DIR"))
+            setenv(line, v, 1);
+    }
+    fclose(f);
+}
+
+static int monitor_spawn(uint32_t uid, char *blob, uint32_t len)
+{
+    struct passwd *pw = getpwuid(uid), *sys = getpwnam(g_system_user);
+    char *cwd, *ticket, *p, *end = blob + len, *argv[256];
+    int argc = 1, status;
+    pid_t pid;
+
+    /* never root, the SYSTEM account or another system account */
+#ifndef SG_MUTANT_SPAWN_SYSTEM_ACCOUNTS
+    if (!pw || uid < 1000 || (sys && uid == sys->pw_uid)) return 0;
+#else
+    if (!pw) return 0;
+#endif
+    if (!len || blob[len - 1]) return 0;
+    cwd = blob; ticket = cwd + strlen(cwd) + 1;
+    if (ticket >= end) return 0;
+    p = ticket + strlen(ticket) + 1;
+    argv[0] = (char *)g_launch_wine;
+    while (p < end && argc < 255) { argv[argc++] = p; p += strlen(p) + 1; }
+    argv[argc] = NULL;
+    if (argc < 2) return 0;
+
+    if ((pid = fork()) < 0) return 0;
+    if (!pid) {
+        pid_t again;
+        int null;
+        setsid();
+        if ((again = fork()) < 0) _exit(1);
+        if (again) _exit(0);
+        if (initgroups(pw->pw_name, pw->pw_gid) < 0 || setgid(pw->pw_gid) < 0 || setuid(pw->pw_uid) < 0 ||
+            setuid(0) == 0)
+            _exit(1);
+        /* everything from the account itself: nothing of the requester's */
+        clearenv();
+        setenv("HOME", pw->pw_dir, 1);
+        setenv("USER", pw->pw_name, 1);
+        setenv("LOGNAME", pw->pw_name, 1);
+        setenv("SHELL", pw->pw_shell && *pw->pw_shell ? pw->pw_shell : "/bin/sh", 1);
+        setenv("PATH", "/opt/wine-sg/bin:/usr/local/bin:/usr/bin:/bin", 1);
+        setenv("LANG", "C.UTF-8", 1);
+        setenv("WINEPREFIX", g_launch_prefix, 1);
+        setenv("SG_LAUNCH_TICKET", ticket, 1);
+        session_display_env(pw->pw_uid);
+        if (!*cwd || chdir(cwd) != 0) { if (chdir(pw->pw_dir) != 0 && chdir("/") != 0) {} }
+        if ((null = open("/dev/null", O_RDWR)) >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) return 0;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 static void monitor_loop(int fd, const char *helper)
 {
     /* the broker ignores SIGCHLD (its launches are fire and forget); the
@@ -138,6 +217,16 @@ static void monitor_loop(int fd, const char *helper)
     for (;;) {
         unsigned ulen, plen; char user[MAXFIELD], pass[MAXFIELD]; unsigned char ok;
         if (read_full(fd, &ulen, sizeof(ulen))) _exit(0);
+        if (ulen == MONITOR_SPAWN) {
+            uint32_t uid, blen;
+            char *blob;
+            if (read_full(fd, &uid, sizeof(uid)) || read_full(fd, &blen, sizeof(blen)) || blen > MAXBLOB ||
+                !(blob = malloc(blen ? blen : 1)) || read_full(fd, blob, blen)) _exit(0);
+            ok = (unsigned char)monitor_spawn(uid, blob, blen);
+            free(blob);
+            if (write_full(fd, &ok, 1)) _exit(0);
+            continue;
+        }
         if (ulen == MONITOR_POLKIT) {
             uint32_t agent_uid, identity_uid, clen;
             char cookie[MAXFIELD];
@@ -425,6 +514,76 @@ static void handle_logon(int conn, const struct ucred *cred, const struct passwd
         int n = snprintf(reply, sizeof(reply), "TICKET %s\n", name);
         write_full(conn, reply, (size_t)n);
     }
+}
+
+/* ---- a program as another account (wine-sg 1711) -----------------------
+ * "@launch": LAUNCH_TICKET, LAUNCH_CWD, then the program's arguments. The
+ * ticket is the wineserver's (this account's, in the tickets directory):
+ * which account, for which requester, until when; taken once. The monitor
+ * starts the program as that account. */
+static void handle_launch(int conn, const struct ucred *cred, const struct passwd *rpw, char **envp, int envc,
+                          char **argv, int argc)
+{
+    const char *ticket = NULL, *cwd = "";
+    char path[512], buf[256], *p, blob[MAXBLOB];
+    unsigned uid = ~0u, for_uid = ~0u, kind = 0;
+    long long expires = 0;
+    unsigned char status = 1, ok = 0;
+    uint32_t marker = MONITOR_SPAWN, len = 0, u;
+    struct stat st;
+    ssize_t n;
+    int fd, i;
+
+    for (i = 0; i < envc; i++) {
+        if (!strncmp(envp[i], "LAUNCH_TICKET=", 14)) ticket = envp[i] + 14;
+        else if (!strncmp(envp[i], "LAUNCH_CWD=", 11)) cwd = envp[i] + 11;
+    }
+    if (!ticket || strlen(ticket) != 32 || strspn(ticket, "0123456789abcdef") != 32 || argc < 1) goto done;
+    snprintf(path, sizeof(path), "%s/%s", g_ticket_dir, ticket);
+    if ((fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)) < 0) goto done;
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || (st.st_mode & 077) || (st.st_uid != geteuid() && st.st_uid != 0) ||
+        (n = read(fd, buf, sizeof(buf) - 1)) <= 0) { close(fd); goto done; }
+    close(fd);
+    buf[n] = 0;
+    for (p = buf; p && *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : NULL) {
+        if (!strncmp(p, "kind=launch\n", 12)) kind = 1;
+        else if (!strncmp(p, "uid=", 4)) uid = (unsigned)strtoul(p + 4, NULL, 10);
+        else if (!strncmp(p, "for=", 4)) for_uid = (unsigned)strtoul(p + 4, NULL, 10);
+        else if (!strncmp(p, "expires=", 8)) expires = strtoll(p + 8, NULL, 10);
+    }
+#ifndef SG_MUTANT_LAUNCH_ANY_REQUESTER
+    if (!kind || for_uid != cred->uid) goto done;
+#else
+    if (!kind) goto done;
+#endif
+    unlink(path);
+    if (expires < (long long)time(NULL)) goto done;
+
+    /* to the monitor: the directory, the ticket, the arguments */
+    n = snprintf(blob, sizeof(blob), "%s%c%s%c", cwd, 0, ticket, 0);
+    if (n < 0 || (size_t)n >= sizeof(blob)) goto done;
+    len = (uint32_t)n;
+    for (i = 0; i < argc; i++) {
+        size_t a = strlen(argv[i]) + 1;
+        if (len + a > sizeof(blob)) goto done;
+        memcpy(blob + len, argv[i], a);
+        len += (uint32_t)a;
+    }
+    u = uid;
+    if (write_full(g_monitor, &marker, sizeof(marker)) || write_full(g_monitor, &u, sizeof(u)) ||
+        write_full(g_monitor, &len, sizeof(len)) || write_full(g_monitor, blob, len) || read_full(g_monitor, &ok, 1))
+        goto done;
+    if (ok) {
+        struct passwd *tpw = getpwuid(uid);
+        char prog[160];
+        plain_text(argv[0], prog, sizeof(prog));
+        status = 0;
+        logmsg("launch: %s started %s as %s", rpw->pw_name, prog, tpw ? tpw->pw_name : "?");
+        syslog(LOG_AUTHPRIV | LOG_NOTICE, "Run as: %s started %s as %s", rpw->pw_name, prog, tpw ? tpw->pw_name : "?");
+    } else logmsg("launch: refused for %s (uid %u)", rpw->pw_name, uid);
+done:
+    if (status) logmsg("launch: %s's request refused", rpw->pw_name);
+    write_full(conn, &status, 1);
 }
 
 /* ---- consent -----------------------------------------------------------
@@ -945,6 +1104,8 @@ int main(void)
     if ((env = getenv("SG_ELEVATED_RUN"))) g_elevated_run = env;
     if ((env = getenv("SG_POLKIT_RESPOND"))) g_polkit_respond = env;
     if ((env = getenv("SG_LOGON_TICKET_DIR"))) g_ticket_dir = env;
+    if ((env = getenv("SG_LAUNCH_WINE"))) g_launch_wine = env;
+    if ((env = getenv("SG_LAUNCH_PREFIX"))) g_launch_prefix = env;
     /* PAM policy for elevation credential prompts */
     setenv("SG_REMOTE_PAM_SERVICE", "stained-glass-elevate", 0);
     g_log = logpath ? fopen(logpath, "a") : stderr;
@@ -1020,6 +1181,14 @@ int main(void)
         if (!strcmp(cwd, "@logon")) {
             handle_logon(conn, &cred, rpw, envp, envc);
             explicit_bzero(blob, len);
+            close(conn);
+            if (errfd >= 0) close(errfd);
+            if (getenv("SG_BROKER_ONCE")) break;
+            continue;
+        }
+
+        if (!strcmp(cwd, "@launch")) {
+            handle_launch(conn, &cred, rpw, envp, envc, argv, argc);
             close(conn);
             if (errfd >= 0) close(errfd);
             if (getenv("SG_BROKER_ONCE")) break;

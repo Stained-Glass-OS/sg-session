@@ -1,3 +1,21 @@
+sg-session (0.1.0-192) unstable; urgency=medium
+
+  * sg-brokerd: running a program as another account (wine-sg 1711:
+    CreateProcessWithLogonW, CreateProcessWithTokenW, CreateProcessAsUser).
+    The "@launch" request names a launch ticket the wineserver made (only
+    for SYSTEM, or for whoever LogonUser gave the token to) and the
+    program. The broker takes the ticket once, only from its requester and
+    only before it expires. Its root monitor then starts the program as
+    that account, with an environment made from the account alone: home,
+    names, a fixed PATH, the shared prefix, and the account's own session
+    display when it has one. Never root, the SYSTEM account or another
+    system account (below 1000). The journal records each start. Test:
+    make test-launch-ticket, mutants SG_MUTANT_LAUNCH_ANY_REQUESTER and
+    SG_MUTANT_SPAWN_SYSTEM_ACCOUNTS (also in wine-sg's
+    test/runasuser-gate.sh).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 10 Oct 2026 01:57:12 -0700
+
 sg-session (0.1.0-191) unstable; urgency=medium
 
   * sg-brokerd: LogonUser's safeguards (wine-sg 1709/1710). The password
