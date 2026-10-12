@@ -103,6 +103,11 @@ cat > "$T/bin/hklm" <<'EOS'
 #!/bin/sh
 cp "$1" "$SG_T/hklm.reg"
 EOS
+# sg-shell's location switch for GeoClue
+cat > "$T/bin/sg-location" <<'EOS'
+#!/bin/sh
+echo "$1" > "$SG_T/location"
+EOS
 chmod +x "$T"/bin/*
 printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' > "$T/etc/default/keyboard"
 # As on Debian: vconsole.conf is a link to the keyboard file (the first image
@@ -113,7 +118,7 @@ ln -s default/keyboard "$T/etc/vconsole.conf"
 SOCK="$T/oobed.sock"
 PATH="$T/bin:$PATH" SG_T=$T SG_NETCTL="$T/bin/sg-netctl" SG_SYSTEMCTL="$T/bin/systemctl" \
 SG_GETENT="$T/bin/getent" SG_USERADD="$T/bin/useradd" SG_USERDEL="$T/bin/userdel" SG_CHPASSWD="$T/bin/chpasswd" \
-SG_OOBE_HKLM_IMPORT="$T/bin/hklm" SG_OOBE_PENDING="$T/etc/stained-glass/oobe.pending" \
+SG_OOBE_HKLM_IMPORT="$T/bin/hklm" SG_OOBE_LOCATION_TOOL="$T/bin/sg-location" SG_OOBE_PENDING="$T/etc/stained-glass/oobe.pending" \
 SG_OOBE_CONF="$T/etc/stained-glass/oobe.conf" SG_OOBE_ETC="$T/etc" SG_OOBE_BROWSER_REQ="$T/oobe-browser" \
 python3 - "$SOCK" "$HERE/setup/sg-oobed" 2>"$T/oobed.log" <<'EOS' &
 import os, socket, subprocess, sys
@@ -246,6 +251,8 @@ if grep -q 'microphone\]' "$T/hklm.reg" 2>/dev/null && grep -A1 'microphone\]' "
         && grep -A1 'location\]' "$T/hklm.reg" | grep -q '"Value"="Allow"' && grep -q '"AllowTelemetry"=dword:00000000' "$T/hklm.reg"; then
     pass "HKLM gets the device's microphone and location switches and AllowTelemetry 0"
 else fail "HKLM: $(cat "$T/hklm.reg" 2>/dev/null)"; fi
+if [ "$(cat "$T/location" 2>/dev/null)" = on ]; then pass "...and the Linux location service is switched on (sg-location on)"
+else fail "sg-location after location on: '$(cat "$T/location" 2>/dev/null)'"; fi
 # Firefox comes installed (sg-session 0.1.0-170): no browser page, nothing
 # handed to the browser installation service
 if [ "$(get BROWSER)" = none ] && [ ! -e "$T/oobe-browser" ] && ! grep -q sg-oobe-browser "$T/systemctl.log" 2>/dev/null \
@@ -278,6 +285,8 @@ if [ "$(get BROWSER)" = none ] && [ ! -e "$T/oobe-browser" ] && ! grep -q sg-oob
         && [ "$(get LOCATION)$(get MICROPHONE)" = 01 ]; then
     pass "offline, no browser is installed; privacy accepted as offered (location off, microphone on)"
 else fail "second run: browser '$(get BROWSER)' location/mic '$(get LOCATION)$(get MICROPHONE)'"; fi
+if [ "$(cat "$T/location" 2>/dev/null)" = off ]; then pass "...and the Linux location service switched off (sg-location off)"
+else fail "sg-location after location off: '$(cat "$T/location" 2>/dev/null)'"; fi
 if grep -qx 'XKBLAYOUT="us"' "$T/etc/default/keyboard" && grep -qx 'XKBOPTIONS=""' "$T/etc/default/keyboard"; then
     pass "one layout: no switching option"
 else fail "keyboard: $(cat "$T/etc/default/keyboard")"; fi
@@ -285,7 +294,7 @@ else fail "keyboard: $(cat "$T/etc/default/keyboard")"; fi
 # --- sg-oobed on its own -----------------------------------------------------------------
 oobed() {
     PATH="$T/bin:$PATH" SG_T=$T SG_NETCTL="$T/bin/sg-netctl" SG_SYSTEMCTL="$T/bin/systemctl" SG_GETENT="$T/bin/getent" \
-    SG_OOBE_HKLM_IMPORT="$T/bin/hklm" SG_OOBE_PENDING="$T/etc/stained-glass/oobe.pending" \
+    SG_OOBE_HKLM_IMPORT="$T/bin/hklm" SG_OOBE_LOCATION_TOOL="$T/bin/sg-location" SG_OOBE_PENDING="$T/etc/stained-glass/oobe.pending" \
     SG_OOBE_CONF="$T/etc/stained-glass/oobe.conf" SG_OOBE_ETC="$T/etc" SG_OOBE_BROWSER_REQ="$T/oobe-browser" \
     "$HERE/setup/sg-oobed" 2>/dev/null
 }

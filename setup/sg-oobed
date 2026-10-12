@@ -34,6 +34,8 @@ ETC="${SG_OOBE_ETC:-/etc}"
 BROWSER_REQ="${SG_OOBE_BROWSER_REQ:-/var/lib/stained-glass/oobe-browser}"
 NETCTL="${SG_NETCTL:-sg-netctl}"
 SYSTEMCTL="${SG_SYSTEMCTL:-systemctl}"
+# The device's location switch for Linux: GeoClue on or off (sg-shell)
+LOCATION_TOOL="${SG_OOBE_LOCATION_TOOL:-/usr/libexec/stained-glass/sg-location}"
 # How HKLM is written: as SYSTEM in the machine's Windows system. The gate
 # stands in a recorder.
 HKLM_IMPORT="${SG_OOBE_HKLM_IMPORT:-}"
@@ -152,6 +154,12 @@ finish() {
     } > "$reg"
     if ! hklm_import "$reg"; then rm -f "$reg"; say "FAILED The privacy settings could not be saved."; return 1; fi
     rm -f "$reg"
+    # ...and the same switch for the Linux location service, GeoClue: it runs
+    # only while location is on (a machine without sg-shell has none)
+    if [ -x "$LOCATION_TOOL" ]; then
+        case "$location" in 1) "$LOCATION_TOOL" on ;; *) "$LOCATION_TOOL" off ;; esac >/dev/null 2>&1 ||
+            log "the location service was not switched"
+    fi
 
     # The record every user's first sign-in applies (sg-oobe-user): the
     # region, the layouts, the per-user privacy switches.

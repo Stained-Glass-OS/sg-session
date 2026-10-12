@@ -1,3 +1,12 @@
+sg-session (0.1.0-194) unstable; urgency=medium
+
+  * The first-run setup's Location choice also switches the Linux location
+    service: sg-oobed runs sg-shell's sg-location on or off after writing
+    the device's switch to HKLM, so GeoClue runs only when location was
+    chosen. Gate: oobe-e2e (both runs; mutant "always off" caught).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 12 Oct 2026 15:01:06 -0700
+
 sg-session (0.1.0-193) unstable; urgency=medium
 
   * Run as another account (wine-sg 1711) on the requester's screen: for
