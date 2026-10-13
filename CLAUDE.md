@@ -1033,6 +1033,7 @@ sg-netctl enable|disable|renew|release DEV                       (admin)
 sg-netctl addr add|del DEV ADDR/PREFIX                          (admin; live, ip(8))
 sg-netctl route add|del|set DEV DEST/PREFIX [--gateway A] [--metric N]  (admin; live)
 sg-netctl neigh add DEV ADDR HWADDR [--permanent] | neigh del DEV ADDR | neigh flush [DEV] [--family 4|6]  (admin; live)
+sg-netctl forwarding on|off | ttl N | tcp delete LADDR LPORT RADDR RPORT | proxyarp add|del DEV ADDR MASK  (admin; live: IPv4 forwarding, default TTL, ending a TCP connection (ss -K), proxy ARP; wine-sg 3179 IP Helper)
 sg-netctl wifi scan [--rescan]
     WIFI <signal>\t<open|wpa-psk|sae|enterprise|wep>\t<in-use yes|no>\t<saved yes|no>\t<ssid hex>\t<ssid text>
 sg-netctl wifi connect (--ssid TEXT | --ssid-hex HEX) [--hidden] [--security open|wpa-psk|sae]

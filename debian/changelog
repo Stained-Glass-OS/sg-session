@@ -1,3 +1,16 @@
+sg-session (0.1.0-196) unstable; urgency=medium
+
+  * sg-netctl: the live changes Windows' IP Helper makes that wine-sg 3179
+    asks for (EnableRouter/UnenableRouter, SetIpTTL, SetTcpEntry delete,
+    CreateProxyArpEntry), administrator only: "forwarding on|off"
+    (net.ipv4.ip_forward), "ttl N" (net.ipv4.ip_default_ttl, 1-255), "tcp
+    delete LADDR LPORT RADDR RPORT" (ss -K; notfound when no such
+    connection), "proxyarp add|del DEV ADDR MASK" (ip neigh proxy, up to 256
+    addresses). Gate: netctl-test (mutants NETCTL_SYSCTL_NOOP,
+    NETCTL_TCP_ANY); checked as root in the QA VM.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 13 Oct 2026 10:07:25 -0700
+
 sg-session (0.1.0-195) unstable; urgency=medium
 
   * Stained Glass Firewall obeys the settings programs set through the

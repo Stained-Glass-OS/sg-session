@@ -288,6 +288,43 @@ def run_tests(t):
           "neigh add: a permanent ARP entry, the hardware address normalised")
     out = serve(["neigh", "flush", "--family", "6"], admin=True)
     check(out[-1] == "OK" and ipcalls() == ["-6 neigh flush all"], "neigh flush: every adapter's IPv6 neighbours")
+    # --- forwarding, TTL, ending a TCP connection, proxy ARP (wine-sg 3179) -----
+    procsys = os.path.join(t, "procsys")
+    os.makedirs(os.path.join(procsys, "net", "ipv4"))
+    for n, v in (("ip_forward", "0"), ("ip_default_ttl", "64")):
+        with open(os.path.join(procsys, "net", "ipv4", n), "w") as f:
+            f.write(v + "\n")
+    env["SG_NETCTL_PROC_SYS"] = procsys
+    def sysval(n):
+        return open(os.path.join(procsys, "net", "ipv4", n)).read().strip()
+    out = serve(["forwarding", "on"])
+    check(out[-1].startswith("ERROR denied") and sysval("ip_forward") == "0", "forwarding needs an administrator")
+    out = serve(["forwarding", "on"], admin=True)
+    check(out[-1] == "OK" and sysval("ip_forward") == "1", "forwarding on: net.ipv4.ip_forward = 1")
+    out = serve(["forwarding", "off"], admin=True)
+    check(out[-1] == "OK" and sysval("ip_forward") == "0", "forwarding off")
+    out = serve(["ttl", "128"], admin=True)
+    check(out[-1] == "OK" and sysval("ip_default_ttl") == "128", "ttl 128: net.ipv4.ip_default_ttl")
+    out = serve(["ttl", "0"], admin=True)
+    check(out[-1].startswith("ERROR invalid") and sysval("ip_default_ttl") == "128", "ttl 0 is refused")
+    sslog = os.path.join(t, "ss.log")
+    with open(os.path.join(bindir, "ss"), "w") as f:
+        f.write("#!/bin/sh\necho \"$*\" >> \"%s\"\n"
+                "case \"$*\" in *10.0.2.15:5000*) echo 'ESTAB 0 0 10.0.2.15:5000 10.0.2.2:80';; esac\n" % sslog)
+    os.chmod(os.path.join(bindir, "ss"), 0o755)
+    out = serve(["tcp", "delete", "10.0.2.15", "5000", "10.0.2.2", "80"], admin=True)
+    check(out[-1] == "OK" and open(sslog).read().strip() == "-H -K -t -4 src 10.0.2.15:5000 dst 10.0.2.2:80",
+          "tcp delete: ss -K ends exactly that connection")
+    out = serve(["tcp", "delete", "10.0.2.15", "5001", "10.0.2.2", "80"], admin=True)
+    check(out[-1].startswith("ERROR notfound"), "tcp delete: a connection that is not there: notfound (%s)" % out[-1:])
+    out = serve(["proxyarp", "add", "eth0", "10.0.2.60", "255.255.255.255"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-4 neigh replace proxy 10.0.2.60 dev eth0"], "proxyarp add: one address")
+    out = serve(["proxyarp", "del", "eth0", "10.0.2.64", "255.255.255.252"], admin=True)
+    check(out[-1] == "OK" and ipcalls() == ["-4 neigh del proxy 10.0.2.65 dev eth0", "-4 neigh del proxy 10.0.2.66 dev eth0"],
+          "proxyarp del: a /30's two host addresses")
+    out = serve(["proxyarp", "add", "eth0", "10.0.0.0", "255.255.0.0"], admin=True)
+    check(out[-1].startswith("ERROR invalid") and ipcalls() == [], "proxyarp: more than 256 addresses is refused")
+
     out = serve(["addr", "add", "eth0", "10.0.2.77/24"], admin=True)
     ipcalls()
     check(out[-1].startswith("ERROR exists"), "an address that is there already: ERROR exists (%s)" % out[-1:])

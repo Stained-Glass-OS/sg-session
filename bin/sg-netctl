@@ -34,6 +34,13 @@
 #   route add|del|set DEVICE DEST/PREFIX [--gateway ADDR] [--metric N]
 #   neigh add DEVICE ADDR HWADDR [--permanent] | neigh del DEVICE ADDR
 #   neigh flush [DEVICE] [--family 4|6]
+#   forwarding on|off                 IPv4 forwarding (EnableRouter/UnenableRouter,
+#                                     SetIpStatistics)
+#   ttl N                             the default IPv4 TTL, 1-255 (SetIpTTL)
+#   tcp delete LADDR LPORT RADDR RPORT  end one IPv4 TCP connection
+#                                     (SetTcpEntry MIB_TCP_STATE_DELETE_TCB)
+#   proxyarp add|del DEVICE ADDR MASK answer ARP for ADDR/MASK on DEVICE
+#                                     (CreateProxyArpEntry; up to 256 addresses)
 #     (live changes, as Windows' IP Helper makes them -- CreateIpForwardEntry2,
 #     CreateUnicastIpAddressEntry, CreateIpNetEntry2 -- not saved settings;
 #     wine-sg 2416 asks for them; an administrator only)
@@ -80,7 +87,8 @@ NM_DIR = os.environ.get("SG_NM_DIR", "/etc/NetworkManager/system-connections")
 MAX_REQUEST = 65536
 EXIT = {"denied": 3, "invalid": 2}
 
-ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release", "addr", "route", "neigh"}
+ADMIN_COMMANDS = {"ipv4", "ipv6", "dns", "enable", "disable", "renew", "release", "addr", "route", "neigh",
+                  "forwarding", "ttl", "tcp", "proxyarp"}
 USER_COMMANDS = {"whoami", "adapters", "wifi", "vpn"}
 
 
@@ -559,6 +567,81 @@ def cmd_neigh(pos, opts, emit):
         return
     raise Fail("invalid", "usage: neigh add DEVICE ADDR HWADDR [--permanent] | neigh del DEVICE ADDR | "
                           "neigh flush [DEVICE] [--family 4|6]")
+
+
+PROC_SYS = os.environ.get("SG_NETCTL_PROC_SYS", "/proc/sys")
+
+
+def write_sysctl(name, value):
+    path = os.path.join(PROC_SYS, *name.split("."))
+    if os.environ.get("SG_MUTANT_NETCTL_SYSCTL_NOOP"):
+        return
+    try:
+        with open(path, "w") as f:
+            f.write("%s\n" % value)
+    except OSError as e:
+        raise Fail("failed", "%s could not be set: %s" % (name, e.strerror or e))
+
+
+def cmd_forwarding(pos, emit):
+    if len(pos) != 1 or pos[0] not in ("on", "off"):
+        raise Fail("invalid", "usage: forwarding on|off")
+    write_sysctl("net.ipv4.ip_forward", 1 if pos[0] == "on" else 0)
+    log("IPv4 forwarding %s" % pos[0])
+
+
+def cmd_ttl(pos, emit):
+    if len(pos) != 1 or not pos[0].isdigit() or not 1 <= int(pos[0]) <= 255:
+        raise Fail("invalid", "usage: ttl N (1-255)")
+    write_sysctl("net.ipv4.ip_default_ttl", int(pos[0]))
+    log("default TTL %s" % pos[0])
+
+
+def port(text):
+    if not text.isdigit() or not 0 < int(text) < 65536:
+        raise Fail("invalid", "not a port: %s" % clean(text))
+    return int(text)
+
+
+def cmd_tcp(pos, emit):
+    if len(pos) != 5 or pos[0] != "delete":
+        raise Fail("invalid", "usage: tcp delete LADDR LPORT RADDR RPORT")
+    la, lp, ra, rp = address(pos[1]), port(pos[2]), address(pos[3]), port(pos[4])
+    if la.version != 4 or ra.version != 4:
+        raise Fail("invalid", "an IPv4 connection")
+    try:
+        r = subprocess.run(["ss", "-H", "-K", "-t", "-4", "src", "%s:%d" % (la, lp), "dst", "%s:%d" % (ra, rp)],
+                           capture_output=True, text=True, timeout=30,
+                           env=dict(os.environ, LC_ALL="C", LANG="C"), stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise Fail("unsupported", "ss (iproute2) is not installed")
+    except subprocess.TimeoutExpired:
+        raise Fail("failed", "the network did not answer in time")
+    if r.returncode != 0:
+        raise Fail("failed", clean((r.stderr.strip().splitlines() or ["ss failed"])[-1]), r.stderr)
+    if not r.stdout.strip() and not os.environ.get("SG_MUTANT_NETCTL_TCP_ANY"):
+        raise Fail("notfound", "no such connection")
+    log("TCP connection %s:%d - %s:%d ended" % (la, lp, ra, rp))
+
+
+def cmd_proxyarp(pos, emit):
+    if len(pos) != 4 or pos[0] not in ("add", "del"):
+        raise Fail("invalid", "usage: proxyarp add|del DEVICE ADDR MASK")
+    dev = device(pos[1])["device"]
+    a = address(pos[2])
+    try:
+        net = ipaddress.IPv4Network("%s/%s" % (a, pos[3]), strict=False)
+    except ValueError:
+        raise Fail("invalid", "not an IPv4 address and mask: %s %s" % (clean(pos[2]), clean(pos[3])))
+    if net.num_addresses > 256:
+        raise Fail("invalid", "at most 256 addresses")
+    hosts = list(net) if net.num_addresses <= 2 else list(net.hosts())
+    for h in hosts:
+        if pos[0] == "add":
+            ip_tool("-4", "neigh", "replace", "proxy", str(h), "dev", dev)
+        else:
+            ip_tool("-4", "neigh", "del", "proxy", str(h), "dev", dev)
+    log("proxy ARP %s for %s on %s" % ("added" if pos[0] == "add" else "removed", net, dev))
 
 
 def cmd_state(cmd, pos, emit):
@@ -1201,6 +1284,14 @@ def run(argv, secret, uid, emit):
     elif cmd == "neigh":
         pos, opts = parse_opts(argv[1:], {"permanent"}, {"family"})
         cmd_neigh(pos, opts, emit)
+    elif cmd == "forwarding":
+        cmd_forwarding(parse_opts(argv[1:], set(), set())[0], emit)
+    elif cmd == "ttl":
+        cmd_ttl(parse_opts(argv[1:], set(), set())[0], emit)
+    elif cmd == "tcp":
+        cmd_tcp(parse_opts(argv[1:], set(), set())[0], emit)
+    elif cmd == "proxyarp":
+        cmd_proxyarp(parse_opts(argv[1:], set(), set())[0], emit)
     elif cmd == "wifi":
         pos, opts = parse_opts(argv[1:], WIFI_FLAGS, WIFI_VALUED)
         cmd_wifi(pos, opts, secret, emit)
