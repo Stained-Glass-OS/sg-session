@@ -29,7 +29,7 @@ SRC = os.path.join(HERE, "..", "bin", "sg-firewall")
 FAILS = 0
 
 # name: (what the copy breaks, the text replaced, its replacement)
-QUESTION_MUTANTS = {"FW_CANCEL_IGNORED"}   # caught only by the question's checks
+QUESTION_MUTANTS = {"FW_CANCEL_IGNORED", "FW_NOTIFY_IGNORED"}   # caught only by the question's checks
 MUTANTS = {
     # the zones' last rule lets everything in
     "FW_ACCEPT_ALL": ('t.append("\\t\\tcounter drop")', 't.append("\\t\\taccept")'),
@@ -47,6 +47,14 @@ MUTANTS = {
     "FW_MIGRATE_NOTHING": ('            c.rules.append(r)\n            lines.append', '            lines.append'),
     # the Cancel is ignored
     "FW_CANCEL_IGNORED": ('if not known_program(c.rules, program):', 'if False:'),
+    # programs' "notifications off" is ignored
+    "FW_NOTIFY_IGNORED": ('quiet = all(', 'quiet = False and all('),
+    # programs' "block all incoming" is ignored
+    "FW_NO_BLOCK_ALL": ('if setting(conf, p, "DoNotAllowExceptions"):', 'if False:'),
+    # programs' default inbound action is ignored
+    "FW_NO_DEFAULT_ALLOW": ('if setting(conf, p, "DefaultInboundAction") == 0:', 'if False:'),
+    # pushed settings are not taken
+    "FW_NO_SETTING_PUSH": ('if t > mtime and rid.startswith("setting:"):', 'if False:'),
     # a new network is Private
     "FW_NEW_NETWORK_PRIVATE": ('cat = conf.networks.get(uuid_, ["public"])[0]', 'cat = conf.networks.get(uuid_, ["private"])[0]'),
 }
@@ -291,6 +299,46 @@ def run_checks(fw, t):
     check("accept" in pub_off and "drop" not in pub_off, "the firewall off for Public: everything in")
     conf.profiles["public"] = True
 
+    # --- the settings programs set (INetFwPolicy2), from the registry and pushed
+    reg = os.path.join(t, "settings.reg")
+    with open(reg, "w") as f:
+        f.write('WINE REGISTRY Version 2\n\n'
+                '[System\\\\CurrentControlSet\\\\Services\\\\SharedAccess\\\\Parameters\\\\FirewallPolicy\\\\PublicProfile] 1\n'
+                '"DoNotAllowExceptions"=dword:00000001\n"DisableNotifications"=dword:00000001\n\n'
+                '[System\\\\CurrentControlSet\\\\Services\\\\SharedAccess\\\\Parameters\\\\FirewallPolicy\\\\StandardProfile] 1\n'
+                '"DefaultInboundAction"=dword:00000000\n\n'
+                '[System\\\\CurrentControlSet\\\\Services\\\\SharedAccess\\\\Parameters\\\\FirewallPolicy\\\\StandardProfile\\\\IcmpSettings] 1\n'
+                '"AllowInboundEchoRequest"=dword:00000000\n\n'
+                '[System\\\\CurrentControlSet\\\\Services\\\\SharedAccess\\\\Parameters\\\\FirewallPolicy\\\\DomainProfile\\\\Other] 1\n'
+                '"DoNotAllowExceptions"=dword:00000001\n')
+    st = fw.read_registry_settings(reg)
+    check(st == {"public": {"DoNotAllowExceptions": 1, "DisableNotifications": 1},
+                 "private": {"DefaultInboundAction": 0, "AllowInboundEchoRequest": 0}},
+          "the profiles' settings are read from FirewallPolicy (StandardProfile is Private; other subkeys ignored)")
+    conf.settings = st
+    text = fw.ruleset(conf, plan, {"eth0": "private", "wlan0": "public"})
+    pub = text.split("chain public {")[1].split("}")[0]
+    priv = text.split("chain private {")[1].split("}")[0]
+    dom = text.split("chain domain {")[1].split("}")[0]
+    check("@public_allow_tcp" not in pub and pub.rstrip().endswith("counter drop"),
+          "Block all incoming connections: the allowed apps' ports are not opened on Public")
+    check(priv.rstrip().endswith("accept") and "@private_block_tcp drop" in priv and "counter drop" not in priv,
+          "default inbound action Allow (Private): what no rule blocks comes in, block rules still win")
+    check("echo-request" not in priv and "echo-request" in dom, "a program's ICMP echo setting turns ping off on Private")
+    check(dom.rstrip().endswith("counter drop") and "@domain_allow_tcp accept" in dom, "Domain keeps its defaults")
+    conf.settings = {}
+    # pushed at once, before the registry reaches the disk
+    os.utime(reg, (time.time() - 100, time.time() - 100))
+    os.makedirs(os.path.dirname(fw.pushed_path()), exist_ok=True)
+    with open(fw.pushed_path(), "w") as f:
+        f.write("%f\tsetting:public:DoNotAllowExceptions\t0\n%f\tsetting:domain:DefaultInboundAction\t0\n"
+                "%f\tsetting:public:Bogus\t1\n" % (time.time(), time.time(), time.time()))
+    eff = fw.effective_settings(reg)
+    check(eff["public"].get("DoNotAllowExceptions") == 0 and eff["domain"].get("DefaultInboundAction") == 0
+          and "Bogus" not in eff["public"], "a pushed setting wins over the older registry file; unknown names ignored")
+    check(not any(k.startswith("setting:") for k in fw.effective_registry(reg)), "pushed settings are not rules")
+    os.unlink(fw.pushed_path())
+
     # --- Wine's notice: the program's path, and the socket itself (SCM_RIGHTS)
     d = fw.Daemon()
     d.open_notify()
@@ -328,8 +376,15 @@ def run_checks(fw, t):
         print("SKIP  the question (this test needs an ordinary account)")
     else:
         plan = fw.evaluate(d.conf, fw.all_rules(d.conf, {}), [me])
+        # a program turned the notifications off for Private, the network this PC is on: nobody is asked
+        d.conf.settings = {"private": {"DisableNotifications": 1}}
         d.update_asks(plan, fw.all_rules(d.conf, {}))
         adir = fw.ask_dir(ME)
+        check(not (os.path.isdir(adir) and [n for n in os.listdir(adir) if n.endswith(".ask")]),
+              "notifications off on the network in use (a program's setting): no question")
+        d.conf.settings = {"public": {"DisableNotifications": 1}}
+        d.update_asks(plan, fw.all_rules(d.conf, {}))
+        d.conf.settings = {}
         asks = [n for n in os.listdir(adir) if n.endswith(".ask")] if os.path.isdir(adir) else []
         check(len(asks) == 1, "the question is put in the person's own folder")
         body = open(os.path.join(adir, asks[0])).read() if asks else ""

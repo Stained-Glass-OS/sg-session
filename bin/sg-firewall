@@ -229,6 +229,7 @@ class Config:
         self.rules = []
         self.overrides = {}         # registry rule id -> {"removed": bool, "enabled", "action", "profiles"}
         self.groups = {g: set(GROUPS[g][1]) for g in GROUPS}
+        self.settings = {}          # profile -> {setting: number}: what programs set (effective_settings)
 
     def lines(self):
         out = ["# Stained Glass Firewall -- written by sg-firewall (Settings > Network & Internet > Firewall).",
@@ -377,6 +378,66 @@ def read_registry_rules(path=None):
     return rules
 
 
+# The firewall's settings per network type, where Windows keeps them and
+# programs set them (INetFwPolicy2: BlockAllInboundTraffic,
+# DefaultInboundAction, NotificationsDisabled, the ICMP settings):
+# FirewallPolicy\{DomainProfile,StandardProfile,PublicProfile}.
+POLICY_KEY = "[system\\\\currentcontrolset\\\\services\\\\sharedaccess\\\\parameters\\\\firewallpolicy\\\\"
+POLICY_PROFILES = {"domainprofile": "domain", "standardprofile": "private", "publicprofile": "public"}
+SETTINGS = ("DoNotAllowExceptions", "DefaultInboundAction", "DisableNotifications", "AllowInboundEchoRequest")
+
+
+def read_registry_settings(path=None):
+    """{profile: {setting: number}} from the FirewallPolicy profile keys of the machine's system.reg."""
+    path = path or SYSTEM_REG
+    out = {}
+    try:
+        f = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return out
+    with f:
+        cur = None
+        for line in f:
+            if line.startswith("["):
+                key = line.split("]")[0].lower()
+                cur = None
+                if key.startswith(POLICY_KEY):
+                    parts = key[len(POLICY_KEY):].split("\\\\")
+                    if parts[0] in POLICY_PROFILES and (len(parts) == 1 or parts[1:] == ["icmpsettings"]):
+                        cur = POLICY_PROFILES[parts[0]]
+                continue
+            if cur is None:
+                continue
+            m = re.match(r'^"([A-Za-z]+)"=dword:([0-9a-fA-F]{1,8})\s*$', line)
+            if m and m.group(1) in SETTINGS:
+                out.setdefault(cur, {})[m.group(1)] = int(m.group(2), 16)
+    return out
+
+
+def effective_settings(reg_path=None):
+    """The registry's settings, with what programs pushed since the file was last written
+    ("setting:PROFILE:NAME" through registry-push, the way rules are pushed)."""
+    path = reg_path or SYSTEM_REG
+    settings = read_registry_settings(path)
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        mtime = 0
+    for t, rid, text in read_pushed():
+        if t > mtime and rid.startswith("setting:"):
+            parts = rid.split(":")
+            if len(parts) == 3 and parts[1] in PROFILES and parts[2] in SETTINGS:
+                if text.isdigit():
+                    settings.setdefault(parts[1], {})[parts[2]] = int(text)
+                else:
+                    settings.get(parts[1], {}).pop(parts[2], None)
+    return settings
+
+
+def setting(conf, profile, name, default=None):
+    return getattr(conf, "settings", {}).get(profile, {}).get(name, default)
+
+
 def rule_from_registry(rid, text):
     """Windows' "v2.30|Action=Allow|Dir=In|Protocol=6|LPort=..|App=..|Name=..|" -> Rule (inbound only)."""
     fields = {}
@@ -449,7 +510,7 @@ def effective_registry(reg_path=None):
     except OSError:
         mtime = 0
     for t, rid, text in read_pushed():
-        if t > mtime:
+        if t > mtime and not rid.startswith("setting:"):
             if text:
                 rules[rid] = text
             else:
@@ -795,14 +856,25 @@ def ruleset(conf, plan, ifaces):
             t.append("\t\t# the firewall is off on %s networks" % p)
             t.append("\t\taccept")
         else:
-            if p != "public":
+            echo = setting(conf, p, "AllowInboundEchoRequest")
+            if (p != "public") if echo is None else echo:
                 t.append("\t\ticmp type echo-request accept")
                 t.append("\t\ticmpv6 type echo-request accept")
+            if setting(conf, p, "DoNotAllowExceptions"):
+                # "Block all incoming connections, including those in the list of allowed apps"
+                t.append("\t\t# all incoming connections are blocked, the allowed apps' too")
+                t.append("\t\tcounter drop")
+                t.append("\t}")
+                continue
             t.append("\t\ttcp dport @%s_block_tcp drop" % p)
             t.append("\t\tudp dport @%s_block_udp drop" % p)
             t.append("\t\ttcp dport @%s_allow_tcp accept" % p)
             t.append("\t\tudp dport @%s_allow_udp accept" % p)
-            t.append("\t\tcounter drop")
+            if setting(conf, p, "DefaultInboundAction") == 0:
+                # a program set the default for inbound to Allow: what no rule blocks comes in
+                t.append("\t\taccept")
+            else:
+                t.append("\t\tcounter drop")
         t.append("\t}")
     t.append("}")
     return "\n".join(t) + "\n"
@@ -968,6 +1040,7 @@ class Daemon:
         self.conf = Config()
         self.reg_key = None
         self.registry = {}
+        self.settings = {}
         self.hints = {}             # inode -> {"program", "uid", "pid", "proto", "port", "time"}
         self.owners = {}            # inode -> (kind, program, uid, pid): found once
         self.networks = []
@@ -1084,6 +1157,7 @@ class Daemon:
         if key != self.reg_key:
             self.reg_key = key
             self.registry = effective_registry()
+            self.settings = effective_settings()
             return True
         return False
 
@@ -1132,7 +1206,11 @@ class Daemon:
 
     def update_asks(self, plan, rules):
         want = {}
-        for l in plan.ask:
+        # "Notify me when Windows Firewall blocks a new app" off (NotificationsDisabled) on
+        # every kind of network this PC is on now: nobody is asked
+        in_use = set(iface_profiles(self.networks).values()) or {"public"}
+        quiet = all(setting(self.conf, p, "DisableNotifications") for p in in_use)
+        for l in ([] if quiet else plan.ask):
             target = l.owner_uid
             if target == system_uid() or not person_uid(target):
                 target = active_seat_uid()
@@ -1175,6 +1253,7 @@ class Daemon:
     def tick(self, now):
         self.reload_conf()
         self.reload_registry()
+        self.conf.settings = self.settings
         self.reload_networks(now)
         if self.answers():
             self.reload_conf()
@@ -1497,6 +1576,7 @@ def cmd_migrate(a):
 
 def current_state():
     conf = read_config()
+    conf.settings = effective_settings()
     rules = all_rules(conf, effective_registry())
     return conf, rules
 

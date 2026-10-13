@@ -1,3 +1,19 @@
+sg-session (0.1.0-195) unstable; urgency=medium
+
+  * Stained Glass Firewall obeys the settings programs set through the
+    Windows firewall API (INetFwPolicy2, wine-sg hnetcfg 3091), kept where
+    Windows keeps them (FirewallPolicy\{Domain,Standard,Public}Profile):
+    "Block all incoming connections" (DoNotAllowExceptions) shuts a
+    network type's allowed apps out too; a default inbound action of Allow
+    lets in what no rule blocks; "notify me" off (DisableNotifications) on
+    every network in use means nobody is asked; the ICMP echo setting turns
+    ping on or off. A program's change reaches the firewall at once as a
+    pushed "setting:PROFILE:NAME" (the way rules are pushed). Gate:
+    firewall-test (mutants FW_NO_BLOCK_ALL, FW_NO_DEFAULT_ALLOW,
+    FW_NO_SETTING_PUSH, FW_NOTIFY_IGNORED); the ruleset passes nft -c.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 12 Oct 2026 20:09:25 -0700
+
 sg-session (0.1.0-194) unstable; urgency=medium
 
   * The first-run setup's Location choice also switches the Linux location
