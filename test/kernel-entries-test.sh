@@ -17,7 +17,12 @@
 #   4. Setup without third-party drivers (sg-drivers --platform-off --root):
 #      a Surface gets hwsupport.off, a ThinkPad nothing; sg-install runs both.
 #
-# --mutant layout|tries|configured|newer|platformoff: must fail.
+#   5. a machine deployed from the disk image (no root= anywhere; its own
+#      initrd finds the root) with a Debian kernel's entry: /etc/kernel/cmdline
+#      and that entry get root=PARTUUID= (without it the update's initrd stops
+#      in its shell: qa3, 2026-10-17), the running kernel's entry untouched.
+#
+# --mutant layout|tries|configured|newer|platformoff|rootless: must fail.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 KE="$HERE/bin/sg-kernel-entries"
@@ -33,6 +38,7 @@ case "$MUTANT" in
     configured) sed '/set already: not ours to change/d' "$KE" > "$T/ke" ;;
     newer) sed '/| sort -V | tail -1)" = "\$k" \] || continue/d' "$KE" > "$T/ke" ;;
     platformoff) sed 's/^    \[ -n "\$(platform)" \] || exit 0$/    :/' "$DRV" > "$T/drv"; DRV="$T/drv" ;;
+    rootless) sed '/^    name_root "\$B"$/d' "$KE" > "$T/ke" ;;
 esac
 [ -f "$T/ke" ] && { chmod +x "$T/ke"; KE="$T/ke"; }
 [ -z "$MUTANT" ] || [ -f "$T/ke" ] || [ -f "$T/drv" ] || { echo "unknown mutant $MUTANT"; exit 2; }
@@ -91,6 +97,15 @@ apply; ls "$T/esp/loader/entries" > "$T/entries.3"; cat "$T/etc/install.conf" > 
 # a live boot: untouched
 machine; echo "root=LABEL=SGLIVEROOT systemd.volatile=overlay quiet" > "$T/cmdline"
 apply; ls "$T/esp/loader/entries" > "$T/entries.4"; ls "$T/etc" > "$T/etc.4"
+# a machine from the disk image: no root= anywhere, a Debian kernel's entry
+machine; rm -f "$T/etc/cmdline"; printf 'layout=bls\n' > "$T/etc/install.conf"
+printf 'title Stained Glass OS 0.1\nversion 6.12.113+deb13-amd64\nlinux /stained-glass/6.12.113+deb13-amd64/linux\noptions quiet splash\ninitrd /stained-glass/6.12.113+deb13-amd64/initrd.img-6.12.113+deb13-amd64\n' \
+    > "$T/esp/loader/entries/debian-6.12.113+deb13-amd64+2-1.conf"
+echo 'initrd=\\stained-glass\\initrd quiet splash' > "$T/cmdline"
+md5sum < "$T/esp/loader/entries/debian-stained-glass-6.12.111+deb13-amd64.conf" > "$T/running.sum5"
+SG_KE_ROOT_PARTUUID=abcd-1234 apply
+cat "$T/etc/cmdline" > "$T/cmdline.5" 2>/dev/null; grep '^options' "$T/esp/loader/entries/debian-6.12.113+deb13-amd64+2-1.conf" > "$T/entry.5"
+md5sum < "$T/esp/loader/entries/debian-stained-glass-6.12.111+deb13-amd64.conf" > "$T/running.sum6"
 exit 0
 EOS
     if unshare -rm sh "$T/run.sh"; then
@@ -110,6 +125,10 @@ EOS
             || fail "a configured machine was changed: $(cat "$T/install.conf.3") / $(cat "$T/ki.3")"
         [ "$(wc -l < "$T/entries.4")" = 1 ] && ! grep -qx install.conf "$T/etc.4" && pass "a live boot is left alone" \
             || fail "the live boot was changed: $(tr '\n' ' ' < "$T/etc.4")"
+        [ "$(cat "$T/cmdline.5" 2>/dev/null)" = "root=PARTUUID=abcd-1234 rw quiet splash" ] \
+            && [ "$(cat "$T/entry.5")" = "options root=PARTUUID=abcd-1234 rw quiet splash" ] && cmp -s "$T/running.sum5" "$T/running.sum6" \
+            && pass "a machine from the disk image: later kernels and the Debian kernel's entry name the root" \
+            || fail "no root named: cmdline '$(cat "$T/cmdline.5" 2>/dev/null)', entry '$(cat "$T/entry.5")'"
     else fail "the scratch boot partition could not be used"; fi
 else
     echo "SKIP  kernel-install, bootctl or a user namespace missing"; [ -z "$MUTANT" ] || exit 77

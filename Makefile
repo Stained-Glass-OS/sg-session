@@ -424,7 +424,7 @@ lint:
 	@sh test/kernel-entries-test.sh
 	@sh test/boot-layout-test.sh
 	@for m in verify live bootroot marker; do ! sh test/boot-layout-test.sh --mutant $$m >/dev/null 2>&1 || { echo "boot-layout-test: mutant $$m passed"; exit 1; }; done
-	@for m in layout tries configured newer platformoff; do ! sh test/kernel-entries-test.sh --mutant $$m >/dev/null 2>&1 || { echo "kernel-entries-test: mutant $$m passed"; exit 1; }; done
+	@for m in layout tries configured newer platformoff rootless; do ! sh test/kernel-entries-test.sh --mutant $$m >/dev/null 2>&1 || { echo "kernel-entries-test: mutant $$m passed"; exit 1; }; done
 	@sh test/surface-test.sh
 	@for m in dmi pin key tries twin; do ! sh test/surface-test.sh --mutant $$m >/dev/null 2>&1 || { echo "surface-test: mutant $$m passed"; exit 1; }; done
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]

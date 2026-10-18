@@ -22,9 +22,18 @@
 # has no boot entry gets one (kernel-install add, so with its tries). Nothing
 # is removed: the running kernel's entry stays as it is.
 #
+# --apply also names the root on the command line of a machine that has it
+# nowhere (one deployed from the disk image, not by Setup): the image's own
+# initrd finds the root partition by itself, but a Debian kernel update's
+# initrd (initramfs-tools) needs root=, and without it stopped in its shell --
+# no boot counting can help a machine waiting there (qa3, 2026-10-17, 6.12.113).
+# /etc/kernel/cmdline gets root=PARTUUID= (with the running options), and an
+# entry with a Debian initrd and no root= gets it too.
+#
 # For the gate: SG_KE_ETC (/etc/kernel), SG_KE_BOOT (the boot partition),
 # SG_KE_FILES (/boot: vmlinuz-VER, initrd.img-VER), SG_KE_UNAME, SG_KE_CMDLINE
-# (/proc/cmdline), SG_KE_KERNEL_INSTALL (kernel-install).
+# (/proc/cmdline), SG_KE_KERNEL_INSTALL (kernel-install), SG_KE_ROOT_PARTUUID
+# (the root file system's partition).
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -60,13 +69,30 @@ boot_path() {
     bootctl --print-boot-path 2>/dev/null || bootctl --print-esp-path 2>/dev/null
 }
 
+# the root named where the image left it out (above); $1 the boot partition
+name_root() {
+    _pu=${SG_KE_ROOT_PARTUUID:-$(findmnt -n -o PARTUUID / 2>/dev/null)}
+    [ -n "$_pu" ] || return 0
+    if ! grep -q 'root=' "$ETC/cmdline" 2>/dev/null; then
+        _opts=$(printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -v -e '^initrd=' -e '^BOOT_IMAGE=' -e '^root=' -e '^$' | tr '\n' ' ')
+        printf 'root=PARTUUID=%s rw %s\n' "$_pu" "${_opts% }" > "$ETC/cmdline" && say "the root is named for later kernels (root=PARTUUID=$_pu)"
+    fi
+    for _e in "$1"/loader/entries/*.conf; do
+        [ -f "$_e" ] || continue
+        grep -q '^initrd .*/initrd\.img-' "$_e" || continue      # a Debian initrd (initramfs-tools)
+        grep -q '^options.*[[:space:]]root=\|^options[[:space:]]*root=' "$_e" && continue
+        sed -i "s#^options[[:space:]]*#options root=PARTUUID=$_pu rw #" "$_e" && say "${_e##*/}: the root named (it could not start without it)"
+    done
+}
+
 apply() {
     cmdline=$(cat "${SG_KE_CMDLINE:-/proc/cmdline}" 2>/dev/null)
     case " $cmdline " in *" systemd.volatile="*|*" sg.live="*) return 0 ;; esac   # the live medium
-    grep -q '^layout=' "$ETC/install.conf" 2>/dev/null && return 0                 # set already: not ours to change
     [ -f "$ETC/entry-token" ] || return 0                                           # not a machine Setup installed
     B=$(boot_path) || return 0
     [ -n "$B" ] && [ -d "$B/loader/entries" ] || return 0                           # not systemd-boot
+    name_root "$B"
+    grep -q '^layout=' "$ETC/install.conf" 2>/dev/null && return 0                 # set already: not ours to change
     configure || return 0
     token=$(cat "$ETC/entry-token")
     files=${SG_KE_FILES:-/boot}

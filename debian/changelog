@@ -1,3 +1,14 @@
+sg-session (0.1.0-197) unstable; urgency=medium
+
+  * sg-kernel-entries --apply names the root (root=PARTUUID=) in
+    /etc/kernel/cmdline and in any boot entry with a Debian initrd and no
+    root=, on a machine deployed from the disk image: its first Debian kernel
+    update (6.12.113) stopped in the initramfs shell, which no boot counting
+    can undo (qa3, 2026-10-17; repaired there and booted 6.12.113). Machines
+    Setup installed already have it. kernel-entries-test, mutant rootless.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 17 Oct 2026 17:23:16 -0700
+
 sg-session (0.1.0-196) unstable; urgency=medium
 
   * sg-netctl: the live changes Windows' IP Helper makes that wine-sg 3179
