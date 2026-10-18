@@ -53,6 +53,11 @@ cmp -s "$E/loader/entries/Sg-convert.conf" "$T/sg-convert.orig" && [ ! -e "$E/lo
 # device scale off -- it doubled the 100% pictures, soft)
 grep -qx 'DeviceScale=1' "$T/plymouthd.conf" && pass "Plymouth's device scale is 1: the theme scales itself, crisp" \
     || fail "no DeviceScale=1: $(cat "$T/plymouthd.conf")"
+# the theme as Debian's plymouth-set-default-theme reads it (its awk: only the
+# section's first key) -- what update-initramfs puts in a kernel update's initrd
+pst=$(grep -v '^#' "$T/plymouthd.conf" | awk 'BEGIN { RS="[[][[:blank:]]*[^[:space:]]+[:blank:]*[]\n]"; FS="[=[:space:]]+"; OFS=""; ORS="" } $1 ~/Theme/ { print $2 }')
+[ "$pst" = stained-glass ] && pass "plymouth-set-default-theme reads our theme (the initrds get it)" \
+    || fail "plymouth-set-default-theme would read '$pst': $(tr '\n' ' ' < "$T/plymouthd.conf")"
 before=$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)
 sh "$HERE/bin/sg-boot-splash" apply
 [ "$(cat "$T/cmdline" "$E"/loader/entries/*.conf "$T/plymouthd.conf" | md5sum)" = "$before" ] && pass "a second run changes nothing" || fail "not idempotent"
@@ -76,5 +81,12 @@ sed 's/ DeviceTimeout=8 DeviceScale=1; do$/ DeviceTimeout=8; do/' "$HERE/bin/sg-
 cmp -s "$T/mut2" "$HERE/bin/sg-boot-splash" && fail "the mutant NO_DEVICE_SCALE did not apply"
 printf '[Daemon]\nTheme=spinner\n' > "$T/plymouthd.conf"; sh "$T/mut2" apply
 grep -qx 'DeviceScale=1' "$T/plymouthd.conf" && fail "MUTANT NO_DEVICE_SCALE not detected" || pass "MUTANT NO_DEVICE_SCALE caught (no DeviceScale=1)"
+# MUTANT THEME_NOT_FIRST: keys added before Theme= (qa3: DeviceScale=1 first,
+# plymouth-set-default-theme read no theme, initrds got the text one)
+sed '/^        sed -i .\/\^Theme=\/d. "\$CONF" && sed -i/d' "$HERE/bin/sg-boot-splash" > "$T/mut3"
+cmp -s "$T/mut3" "$HERE/bin/sg-boot-splash" && fail "the mutant THEME_NOT_FIRST did not apply"
+printf '[Daemon]\nTheme=spinner\n' > "$T/plymouthd.conf"; sh "$T/mut3" apply
+[ "$(sed -n '2p' "$T/plymouthd.conf")" = Theme=stained-glass ] && fail "MUTANT THEME_NOT_FIRST not detected" \
+    || pass "MUTANT THEME_NOT_FIRST caught (Theme= not first)"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

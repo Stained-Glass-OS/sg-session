@@ -96,6 +96,12 @@ apply() {
             if grep -q "^$k=" "$CONF"; then sed -i "s|^$k=.*|$kv|" "$CONF"
             else sed -i "/^\[Daemon\]/a $kv" "$CONF"; fi
         done
+        # Theme= first in [Daemon]: Debian's plymouth-set-default-theme (which
+        # picks the theme put into every initrd update-initramfs makes) reads
+        # only a section's first key -- with DeviceScale= first it found no
+        # theme, and a kernel update's initrd and the update screen at a
+        # restart were Plymouth's plain text (David, 2026-10-18)
+        sed -i '/^Theme=/d' "$CONF" && sed -i '/^\[Daemon\]/a Theme=stained-glass' "$CONF"
     fi
 
     # --- the command line for kernels to come -----------------------------------

@@ -1,3 +1,14 @@
+sg-session (0.1.0-198) unstable; urgency=medium
+
+  * sg-boot-splash: Theme= first in plymouthd.conf's [Daemon]. Debian's
+    plymouth-set-default-theme reads only a section's first key; with
+    DeviceScale= first it found no theme, so every initrd update-initramfs
+    made (a kernel update's) and the update screen at a restart had
+    Plymouth's plain text theme (David, 2026-10-18). The changed file makes
+    the initrds again. boot-splash-test, mutant THEME_NOT_FIRST.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 18 Oct 2026 09:29:14 -0700
+
 sg-session (0.1.0-197) unstable; urgency=medium
 
   * sg-kernel-entries --apply names the root (root=PARTUUID=) in
