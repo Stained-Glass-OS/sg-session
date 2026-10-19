@@ -1,3 +1,12 @@
+sg-session (0.1.0-200) unstable; urgency=medium
+
+  * sg-login-ui: the sign-in screen's, first-run setup's and Setup's Wine
+    runs set SG_SIGN_IN_SCREEN, so wineboot (wine-sg 5937) starts no
+    startup program under the sign-in screen's account (Everything.exe
+    -startup ran as sggreet) and leaves RunOnce for the first sign-in.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 19 Oct 2026 09:23:45 -0700
+
 sg-session (0.1.0-199) unstable; urgency=medium
 
   * CI: the Debian trixie container from ghcr.io/stained-glass-os/debian
