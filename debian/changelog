@@ -1,3 +1,12 @@
+sg-session (0.1.0-199) unstable; urgency=medium
+
+  * CI: the Debian trixie container from ghcr.io/stained-glass-os/debian
+    (made from Debian's archive by sg-image's base-image workflow): the
+    public registries' anonymous pull limit failed most runs before our
+    jobs began ("toomanyrequests: Data limit exceeded").
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 19 Oct 2026 09:11:44 -0700
+
 sg-session (0.1.0-198) unstable; urgency=medium
 
   * sg-boot-splash: Theme= first in plymouthd.conf's [Daemon]. Debian's
