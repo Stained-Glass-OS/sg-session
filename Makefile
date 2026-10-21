@@ -52,6 +52,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	    $(UNITDIR)/packagekit-offline-update.service.d/50-sg-restore-point.conf
 	install -m 0644 systemd/sg-snapshot.service systemd/sg-undo-update.service $(UNITDIR)
 	install -m 0644 systemd/sg-snapshot-expire.service systemd/sg-snapshot-expire.timer $(UNITDIR)
+	install -m 0644 systemd/sg-snapshot-rebalance.service systemd/sg-snapshot-rebalance.timer $(UNITDIR)
 	@# A start that does not finish shows the boot menu at the next one (sg-boot-health).
 	install -m 0755 bin/sg-boot-health $(BINDIR)
 	install -m 0644 systemd/sg-boot-health.service systemd/sg-boot-ok.service $(UNITDIR)

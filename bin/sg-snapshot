@@ -1302,6 +1302,52 @@ def cmd_entries(args):
 COMMANDS["entries"] = cmd_entries
 
 
+# btrfs hands the drive out in chunks, to data or to its metadata, and gives
+# a data chunk back only once it is entirely empty. Programs installed and
+# removed and restore points expired leave every data chunk partly used: the
+# whole drive given to data, nothing left for metadata, and "No space left on
+# device" with gigabytes free (qa5 2026-10-21: 4.5 GB free in data, metadata
+# full -- dpkg could not write its status, and every SG Store install failed).
+# Daily (sg-snapshot-rebalance.timer): while less than REBAL_WANT of the
+# drive is unallocated, the data chunks least used are packed together, the
+# emptiest first, so a run is short and does no more than it needs.
+REBAL_STEPS = (0, 5, 10, 25, 50, 75)
+
+
+def unallocated(top):
+    """(bytes given to no chunk, the device's size)"""
+    out = btrfs("filesystem", "usage", "-b", top).stdout
+    un = re.search(r"Device unallocated:\s+(\d+)", out)
+    size = re.search(r"Device size:\s+(\d+)", out)
+    if not un or not size:
+        raise Fail("btrfs filesystem usage: not understood")
+    return int(un.group(1)), int(size.group(1))
+
+
+def cmd_rebalance(args):
+    if not layout_kind().startswith("btrfs"):
+        return ["not btrfs: nothing to do"]
+    out = []
+    with Top() as top:
+        un, size = unallocated(top)
+        want = int(E("SG_SNAP_REBAL_WANT", str(max(1 << 30, size // 20))))
+        for usage in REBAL_STEPS:
+            if un >= want:
+                break
+            if E("SG_MUTANT_SNAP_NOREBAL"):
+                break
+            r = btrfs("balance", "start", "-dusage=%d" % usage, top, check=False)
+            before, (un, _) = un, unallocated(top)
+            out.append("balance -dusage=%d: unallocated %d MiB -> %d MiB%s" % (
+                usage, before >> 20, un >> 20, "" if r.returncode == 0 else " (" + (r.stderr or r.stdout).strip()[-200:] + ")"))
+            say(out[-1])
+        out.append("UNALLOCATED %d %d" % (un, want))
+    return out
+
+
+COMMANDS["rebalance"] = cmd_rebalance
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd not in COMMANDS:

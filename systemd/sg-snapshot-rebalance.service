@@ -1,0 +1,16 @@
+# btrfs gives data chunks back only when they are empty: after programs come
+# and go, the whole drive can belong to data, and metadata, with nowhere to
+# grow, says "No space left on device" with gigabytes free. This packs the
+# least used data chunks together while little of the drive is unallocated
+# (sg-snapshot rebalance; nothing to do on ext4).
+[Unit]
+Description=Stained Glass OS: keep room on the btrfs system drive
+ConditionKernelCommandLine=!systemd.volatile
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-snapshot rebalance
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=2h

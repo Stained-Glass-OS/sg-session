@@ -186,6 +186,31 @@ if [ "$(grep -c '^SNAPSHOT .*	update$' "$T/status")" = 3 ] && [ "$(grep -c '^SNA
 else fail "retention by source: $(grep SNAPSHOT "$T/status")"; fi
 grep -q "^SNAPSHOT .*SG Store: libx" "$T/status" && pass "an install's restore point is named for the SG Store" || fail "label: $(grep SNAPSHOT "$T/status")"
 
+# --- room for metadata: data chunks left partly used are packed together ---------------------
+# 4 MB files fill the drive's data chunks, then all but one in ten go: every
+# chunk is left nearly empty but still given to data (btrfs returns only empty
+# ones), the drive all but wholly allocated -- metadata has nowhere to grow
+unalloc() { sudo -n btrfs filesystem usage -b "$T/top" | awk '/Device unallocated:/ {print $3}'; }
+sudo -n mkdir -p "$T/top/fill"
+i=0; while [ $i -lt 2000 ]; do   # to the end of the drive
+    sudo -n dd if=/dev/zero of="$T/top/fill/$i" bs=1M count=4 status=none 2>/dev/null || break; i=$((i + 1))
+done
+sudo -n find "$T/top/fill" -type f ! -name '*0' -delete; sudo -n btrfs filesystem sync "$T/top" >/dev/null
+U0=$(unalloc)
+if [ "${U0:-0}" -lt $((1 << 30)) ]; then
+    snap env SG_MUTANT_SNAP_NOREBAL=1 python3 "$HERE/bin/sg-snapshot" rebalance > "$T/rebal-mut.out" 2>&1
+    [ "$(unalloc)" -lt $((1 << 30)) ] && pass "MUTANT NOREBAL leaves the drive allocated ($(($(unalloc) >> 20)) MiB free for metadata; gate catches it)" \
+        || fail "NOREBAL: $(cat "$T/rebal-mut.out")"
+    snap python3 "$HERE/bin/sg-snapshot" rebalance > "$T/rebal.out" 2>&1
+    U1=$(unalloc)
+    if [ "$U1" -ge $((1 << 30)) ] && grep -q '^UNALLOCATED ' "$T/rebal.out" && sudo -n test -f "$T/top/fill/40"; then
+        pass "rebalance packs the partly used data chunks: unallocated $((U0 >> 20)) MiB -> $((U1 >> 20)) MiB, the files kept"
+    else fail "rebalance: $((U0 >> 20)) -> $((U1 >> 20)) MiB: $(cat "$T/rebal.out")"; fi
+    snap python3 "$HERE/bin/sg-snapshot" rebalance > "$T/rebal2.out" 2>&1
+    ! grep -q '^balance ' "$T/rebal2.out" && pass "...and with room enough, does nothing" || fail "balanced again: $(cat "$T/rebal2.out")"
+else fail "the gate's drive was not filled: $((U0 >> 20)) MiB unallocated after $i files"; fi
+sudo -n rm -rf "$T/top/fill"
+
 # --- the conversion's initrd, as convert-schedule makes it (mkinitramfs -d) -------------------
 K=$(uname -r)
 if command -v mkinitramfs >/dev/null && [ -d "/lib/modules/$K" ]; then

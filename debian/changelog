@@ -1,3 +1,17 @@
+sg-session (0.1.0-202) unstable; urgency=medium
+
+  * sg-snapshot rebalance, daily (sg-snapshot-rebalance.timer): btrfs gives
+    a data chunk back only when it is empty, so after programs come and go
+    the whole drive can belong to data, and its metadata, with nowhere to
+    grow, fails with "No space left on device" while gigabytes are free --
+    qa5 (SG Store walk, 2026-10-21): 4.5 GB free, dpkg could not write its
+    status, and every install failed. While less than 1 GiB (or 5%) of the
+    drive is unallocated, the least used data chunks are packed together,
+    the emptiest first. Gate snapshot-test (a drive filled and thinned out);
+    mutant NOREBAL.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 21 Oct 2026 10:32:53 -0700
+
 sg-session (0.1.0-201) unstable; urgency=medium
 
   * sg-elevated-run, sg-brokerd: the requester of an elevated program goes
