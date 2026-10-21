@@ -699,6 +699,11 @@ test-elevate-look:
 test-elevate-console:
 	@sh test/elevate-console-test.sh
 
+# The requester of an elevated program goes on when the program ends, not its tree.
+.PHONY: test-elevate-exit
+test-elevate-exit:
+	@sh test/elevate-exit-test.sh
+
 # "Run with debugging" keeps logging when the program elevates.
 # The quiet boot on installed machines, and its recovery-mode entries.
 .PHONY: test-boot-splash

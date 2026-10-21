@@ -1040,11 +1040,29 @@ static int read_request_len(int conn, uint32_t *len, int *errfd)
     return 0;
 }
 
+/* The elevated program's exit status: from sg-elevated-run, which tells it on
+ * SFD the moment the program itself ends (it waits on for what the program left
+ * running, which holds the display); if SFD ends with nothing on it -- the
+ * program ran without sg-elevated-run, or that could not start it -- from the
+ * launched process PROG's own exit. */
+static uint32_t program_code(int sfd, pid_t prog)
+{
+    uint32_t code;
+    int st = 0;
+#ifndef SG_MUTANT_EXIT_AT_TREE_END
+    if (sfd >= 0 && !read_full(sfd, (char *)&code, sizeof(code))) { close(sfd); return code; }
+#endif
+    if (sfd >= 0) close(sfd);
+    while (waitpid(prog, &st, 0) < 0 && errno == EINTR) ;
+    return WIFEXITED(st) ? (uint32_t)WEXITSTATUS(st) : 128u + (uint32_t)WTERMSIG(st);
+}
+
 static int launch(char **argv, char **envp, const char *cwd, const char *system_user,
                   const struct surface *sf, uid_t requester_uid, int conn, int errfd)
 {
     struct passwd *pw = getpwnam(system_user);
     pid_t pid = fork(), prog;
+    int sfd[2];
     if (pid < 0) return 0;
     if (pid) return 1;             /* parent: the broker keeps serving */
 
@@ -1055,17 +1073,19 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
         unsigned char launched = 0;
         write_full(conn, &launched, 1);
     }
+    /* sfd: sg-elevated-run tells the program's own exit on it (program_code) */
+    if (pipe2(sfd, O_CLOEXEC) < 0) sfd[0] = sfd[1] = -1;
     if ((prog = fork()) < 0) _exit(1);
     if (prog) {
-        int st = 0;
         uint32_t code;
-        while (waitpid(prog, &st, 0) < 0 && errno == EINTR) ;
-        code = WIFEXITED(st) ? (uint32_t)WEXITSTATUS(st) : 128u + (uint32_t)WTERMSIG(st);
+        if (sfd[1] >= 0) close(sfd[1]);
+        code = program_code(sfd[0], prog);
         write_full(conn, &code, sizeof(code));
         close(conn);
         _exit(0);
     }
     close(conn);
+    if (sfd[0] >= 0) close(sfd[0]);
     /* a clean environment: only what the client passed, plus the SYSTEM
      * account's own identity */
     clearenv();
@@ -1117,6 +1137,11 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
         xargv[n++] = "--";
         for (i = 0; argv[i] && n < 259; i++) xargv[n++] = argv[i];
         xargv[n] = NULL;
+        if (sfd[1] >= 0) {
+            char fdbuf[16];
+            int fd = dup(sfd[1]);   /* without close-on-exec, for sg-elevated-run */
+            if (fd >= 0) { snprintf(fdbuf, sizeof(fdbuf), "%d", fd); setenv("SG_ELEVATED_STATUS_FD", fdbuf, 1); }
+        }
         execv(g_elevated_run, xargv);
         _exit(127);
     }

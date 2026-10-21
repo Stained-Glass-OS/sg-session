@@ -158,6 +158,51 @@ static int other_children(pid_t except)
     return count;
 }
 
+/* The program's own exit, told to the broker the moment it happens (the
+ * descriptor the broker passes in SG_ELEVATED_STATUS_FD): its requester -- the
+ * process that asked for elevation and waits on the elevated one -- goes on
+ * then, as it does on Windows, while the display stays for what the program
+ * left running. Told only when everything had ended, an Inno Setup
+ * uninstaller never finished: its second phase, started by the elevated
+ * first phase, waits for the requester to end (/INITPROCWND), and the
+ * requester waited for the second phase. */
+static void tell_exit(int *status_fd, int code)
+{
+    uint32_t c = (uint32_t)code;
+    if (*status_fd < 0) return;
+    if (write(*status_fd, &c, sizeof(c)) != (ssize_t)sizeof(c)) { /* the broker waits instead */ }
+    close(*status_fd);
+    *status_fd = -1;
+}
+
+/* Wait for the program PID, then for everything it left running (and the X
+ * server XPID, -1 once it has ended). Returns the program's exit status. */
+static int wait_program(pid_t pid, pid_t *xpid, int *status_fd)
+{
+    int program_status = 125, status = 0;
+    for (;;) {
+        int others;
+        pid_t w;
+        while ((w = waitpid(-1, &status, WNOHANG)) > 0) {
+            if (w == pid) {
+                program_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+#ifndef SG_MUTANT_EXIT_AT_TREE_END
+                tell_exit(status_fd, program_status);
+#endif
+            }
+            if (w == *xpid) { *xpid = -1; logmsg("Xwayland ended"); }
+        }
+        others = other_children(*xpid);
+        if (others == 0 || (others < 0 && w < 0 && errno == ECHILD)) break;
+        {
+            struct timespec ts = { 0, 250 * 1000 * 1000 };
+            nanosleep(&ts, NULL);
+        }
+    }
+    tell_exit(status_fd, program_status);
+    return program_status;
+}
+
 static void rm_dir(const char *dir, const char *cookie)
 {
     unlink(cookie);
@@ -287,7 +332,8 @@ int main(int argc, char **argv)
     const char *control = getenv("SG_ELEVATED_CONTROL"), *xwayland = getenv("SG_XWAYLAND");
     long uid_arg = -1, as_uid = -1;
     struct passwd *as_pw = NULL, *sys_pw = NULL;
-    int first = 1, wl[2], wm[2], ready[2], dfd[2], status = 0, program_status = 125, display = -1;
+    int first = 1, wl[2], wm[2], ready[2], dfd[2], program_status = 125, display = -1, status_fd = -1;
+    const char *env_fd;
     char dir[] = "/tmp/sg-elevated-XXXXXX", cookie[64], buf[32], desk[64], dpy[32];
     size_t got = 0;
     pid_t xpid, ppid;
@@ -316,6 +362,14 @@ int main(int argc, char **argv)
         }
     }
 
+    /* where the broker hears of the program's own exit (tell_exit); the
+     * program does not get it */
+    if ((env_fd = getenv("SG_ELEVATED_STATUS_FD"))) {
+        char *e;
+        long v = strtol(env_fd, &e, 10);
+        if (!*e && v > 2 && v < 1024 && fcntl((int)v, F_SETFD, FD_CLOEXEC) == 0) status_fd = (int)v;
+        unsetenv("SG_ELEVATED_STATUS_FD");
+    }
     /* Everything the program starts, however it detaches, stays ours to wait
      * for: the display lives as long as any of it. */
     prctl(PR_SET_CHILD_SUBREAPER, 1);
@@ -443,23 +497,7 @@ int main(int argc, char **argv)
             _exit(127);
         }
         /* Wait for the program, then for everything it left running. */
-        for (;;) {
-            int others;
-            pid_t w;
-            while ((w = waitpid(-1, &status, WNOHANG)) > 0) {
-                if (w == pid) program_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-                if (w == xpid) { xpid = -1; logmsg("display :%d: Xwayland ended", display); }
-            }
-            others = other_children(xpid);
-            if (others == 0 || (others < 0 && w < 0 && errno == ECHILD)) break;
-            if (xpid < 0 && others > 0) {
-                /* the display is gone; what is left cannot show anything */
-            }
-            {
-                struct timespec ts = { 0, 250 * 1000 * 1000 };
-                nanosleep(&ts, NULL);
-            }
-        }
+        program_status = wait_program(pid, &xpid, &status_fd);
     }
     if (xpid > 0) {
         kill(xpid, SIGTERM);

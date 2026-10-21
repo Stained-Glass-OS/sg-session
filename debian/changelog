@@ -1,3 +1,15 @@
+sg-session (0.1.0-201) unstable; urgency=medium
+
+  * sg-elevated-run, sg-brokerd: the requester of an elevated program goes
+    on when that program ends, as on Windows, not when everything it
+    started has (sg-elevated-run still holds the display for those). An
+    Inno Setup uninstaller run as an administrator (RawTherapee's,
+    KeePass's, GnuCash's) stayed at 100% for ever: its second phase waits
+    for the requester, which waited for the second phase. Gate
+    test-elevate-exit; mutant SG_MUTANT_EXIT_AT_TREE_END.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 20 Oct 2026 19:40:00 -0700
+
 sg-session (0.1.0-200) unstable; urgency=medium
 
   * sg-login-ui: the sign-in screen's, first-run setup's and Setup's Wine
