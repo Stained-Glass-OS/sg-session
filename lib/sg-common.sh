@@ -364,7 +364,9 @@ sg_programdata_shared() {
     # folder in ProgramData\AmbirTechnology, "a read write error" (David
     # 2026-10-02; wine-sg 0769 keeps it from happening, this mends what was).
     # Folders only: what is in them stays its maker's, as on Windows.
-    find "$_pd" -xdev -type d ! -type l -exec setfacl -m "g:$_grp:rwx" -m "d:g:$_grp:rwx" {} + 2>/dev/null || :
+    # (not the all-users Start menu: the administrators', sg_shared_shortcuts_protected)
+    find "$_pd" -xdev -path "$_pd/Microsoft/Windows/Start Menu" -prune -o \
+        -type d ! -type l -exec setfacl -m "g:$_grp:rwx" -m "d:g:$_grp:rwx" {} + 2>/dev/null || :
     return 0
 }
 
@@ -939,6 +941,30 @@ sg_program_files_protected() {
         done
     fi
     : > "$_st/program-files-others-1" 2>/dev/null || :
+    return 0
+}
+
+# The all-users Start menu (ProgramData\Microsoft\Windows\Start Menu, its
+# StartUp folder too) and the Public Desktop are the administrators': on
+# Windows the users may open them, not change them. ProgramData is shared with
+# the users (sg_programdata_shared) and Public is the Wine group's, so every
+# account could rewrite a shortcut another account opens, or put a program in
+# everyone's StartUp (qa4 2026-10-22: NVDA's and OneDrive's shortcuts, 0777
+# from before wine-sg 10.0-488, and the group's anyway). The group loses write
+# there -- its entries and the defaults, so what an installer makes later too;
+# SYSTEM keeps its own entry (sg_system_access) -- and so do others. Every
+# boot: the trees are small.
+#   sg_shared_shortcuts_protected DRIVE_C GROUP
+sg_shared_shortcuts_protected() {
+    _c=$1 _grp=$2
+    command -v setfacl >/dev/null 2>&1 || return 0
+    [ "${SG_MUTANT_SHORTCUTS_SHARED:-}" = 1 ] && return 0
+    for _d in "ProgramData/Microsoft/Windows/Start Menu" "users/Public/Desktop"; do
+        [ -d "$_c/$_d" ] || continue
+        find "$_c/$_d" -type d ! -type l -exec setfacl -m g::r-x -m d:g::r-x -m "g:$_grp:r-x" -m "d:g:$_grp:r-x" {} + 2>/dev/null || :
+        find "$_c/$_d" -type f -exec setfacl -m g::r-X -m "g:$_grp:r-X" {} + 2>/dev/null || :
+        find "$_c/$_d" ! -type l -perm -o=w -print0 2>/dev/null | xargs -0 -r chmod o-w 2>/dev/null || :
+    done
     return 0
 }
 

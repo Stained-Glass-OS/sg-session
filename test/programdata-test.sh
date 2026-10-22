@@ -75,6 +75,33 @@ canw "$T/p/Program Files/Common Files/System/shared.dll" && getfacl -p "$T/p/Pro
     || { echo "FAIL  SYSTEM lost write: $(getfacl -p "$T/p/Program Files/Common Files/System/shared.dll" 2>/dev/null | tr '\n' ' ')"; RC=1; }
 gw "$T/p/Program Files/Steam/steam.exe" && echo "PASS  a folder an installer shared with the users (setgid) stays shared" \
     || { echo "FAIL  Steam lost its sharing"; RC=1; }
+# sg_shared_shortcuts_protected: the all-users Start menu and the Public
+# Desktop are the administrators' (users may open, not change); the rest of
+# ProgramData stays shared; SYSTEM still writes
+sc() {   # LIB DIR [ENV] -> builds the tree and runs the boot steps
+    k=$2/c; mkdir -p "$k/ProgramData/Epic" "$k/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA" \
+        "$k/ProgramData/Microsoft/Windows/Start Menu/Programs/StartUp" "$k/users/Public/Desktop" "$2/st"
+    : > "$k/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA/NVDA.lnk"; : > "$k/users/Public/Desktop/Geany.lnk"
+    chmod 777 "$k/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA"; chmod 666 "$k/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA/NVDA.lnk"
+    chmod 775 "$k/users/Public/Desktop"; chmod 664 "$k/users/Public/Desktop/Geany.lnk"
+    ( . "$1" >/dev/null 2>&1; [ -n "${3:-}" ] && export "$3"
+      sg_programdata_shared "$k/ProgramData" "$grp" "$2/st"; sg_system_access "$k" "$me" "$2/st"
+      sg_shared_shortcuts_protected "$k" "$grp"
+      sg_programdata_shared "$k/ProgramData" "$grp" "$2/st" )   # the next boot's sharing leaves it so
+}
+anyw() { getfacl -p "$1" 2>/dev/null | grep -qE "^(group::|group:$grp:|other::)rw" || ow "$1"; }   # group (either entry) or others may write
+sc "$HERE/lib/sg-common.sh" "$T/sc"
+k=$T/sc/c; sm="$k/ProgramData/Microsoft/Windows/Start Menu/Programs"
+! anyw "$sm/NVDA" && ! anyw "$sm/NVDA/NVDA.lnk" && ! anyw "$sm/StartUp" && ! anyw "$k/users/Public/Desktop" && ! anyw "$k/users/Public/Desktop/Geany.lnk" \
+    && echo "PASS  the all-users Start menu, its StartUp and the Public Desktop: the users may not change them (a 0777/0666 one either)" \
+    || { echo "FAIL  shared shortcuts: $(getfacl -p "$sm/NVDA/NVDA.lnk" "$k/users/Public/Desktop/Geany.lnk" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+( umask 002; mkdir "$sm/Later" )
+! anyw "$sm/Later" && echo "PASS  a folder an installer makes there later inherits it" || { echo "FAIL  later Start folder: $(getfacl -p "$sm/Later" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+canw "$sm/NVDA/NVDA.lnk" && echo "PASS  the SYSTEM account still may (elevated installers)" || { echo "FAIL  SYSTEM lost write: $(getfacl -p "$sm/NVDA/NVDA.lnk" 2>/dev/null | tr '\n' ' ')"; RC=1; }
+has "$k/ProgramData/Epic" "group:$grp:rwx" && echo "PASS  the rest of ProgramData stays the users' to write" || { echo "FAIL  ProgramData\\Epic lost sharing"; RC=1; }
+sc "$HERE/lib/sg-common.sh" "$T/scm" SG_MUTANT_SHORTCUTS_SHARED=1
+anyw "$T/scm/c/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA/NVDA.lnk" && echo "PASS  MUTANT SHORTCUTS_SHARED leaves them every account's (test catches it)" \
+    || { echo "FAIL  MUTANT SHORTCUTS_SHARED not detected"; RC=1; }
 # sg_systemroot_temp: %SystemRoot%\SystemTemp, only the SYSTEM account may enter
 mkdir -p "$T/s/windows"; setfacl -d -m g::rwx "$T/s/windows" 2>/dev/null
 ( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_systemroot_temp "$T/s" "$me" )
