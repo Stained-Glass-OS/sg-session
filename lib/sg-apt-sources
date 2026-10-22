@@ -319,6 +319,23 @@ def disable_duplicates(paths):
     return changed
 
 
+def disable_keyless():
+    """a third-party entry whose keyring files are all gone can never be
+    used: apt warns "Failed to parse keyring" at every update (Edge's purge
+    deletes its key and leaves microsoft-edge.list, qa5 2026-10-22). It is
+    turned off; SG Store's adopt puts the maker's back if the app returns.
+    True if anything changed"""
+    if os.environ.get("SG_MUTANT") == "NO_KEYLESS":
+        return False
+    for e in all_entries():
+        files = e.keyring_files()
+        if e.enabled and files and not e.is_system() and not any(os.path.exists(rooted(p)) for p in files):
+            disable(e, "its keyring %s is gone" % ",".join(files))
+            say("%s %s: keyring %s is gone, turned off" % (LOG, e.where(), ",".join(files)))
+            return True
+    return False
+
+
 def apt_errors():
     """the errors apt reports reading its sources (no network)"""
     try:
@@ -379,6 +396,9 @@ def heal():
         if disable_duplicates(changed_files):
             continue
         break
+    for _ in range(20):
+        if not disable_keyless():
+            break
     for _ in range(20):
         errors = apt_errors()
         if not errors or not heal_reported(errors):

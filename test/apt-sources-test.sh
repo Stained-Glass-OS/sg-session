@@ -12,12 +12,15 @@
 #  4. a vendor key that expired / was rotated: update of the others still
 #     works and `problems` names the vendor and why
 #  5. a malformed third-party line: turned off, the rest read
+#  6. an entry whose keyring is gone (Edge's purge deletes its key and leaves
+#     microsoft-edge.list, qa5 2026-10-22): turned off, no keyring warning
 # Mutants: --mutant (SG_MUTANT=NO_HEAL: heal does nothing), --mutant-problems
-# (SG_MUTANT=NO_PROBLEMS: problems reports nothing) -- each must fail the gate.
+# (SG_MUTANT=NO_PROBLEMS: problems reports nothing), --mutant-keyless
+# (SG_MUTANT=NO_KEYLESS: a keyless entry stays) -- each must fail the gate.
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 TOOL="$HERE/lib/sg-apt-sources"
-case "${1:-}" in --mutant-problems) export SG_MUTANT=NO_PROBLEMS ;; --mutant) export SG_MUTANT=NO_HEAL ;; esac
+case "${1:-}" in --mutant-keyless) export SG_MUTANT=NO_KEYLESS ;; --mutant-problems) export SG_MUTANT=NO_PROBLEMS ;; --mutant) export SG_MUTANT=NO_HEAL ;; esac
 for t in apt-get apt-ftparchive gpg python3; do
     command -v $t >/dev/null 2>&1 || { echo "SKIP  $t missing"; exit 77; }
 done
@@ -142,6 +145,20 @@ read_ok && fail "case 5 setup: apt read a malformed line"
 heal >/dev/null 2>&1
 if read_ok && update >/dev/null && has_pkg vendor; then pass "case 5: a malformed line is turned off, the rest read"
 else fail "case 5: still unreadable: $(cat "$T/err")"; fi
+
+# ---- 6: an entry whose keyring is gone
+fresh_root
+echo "deb [arch=amd64 signed-by=$R/usr/share/keyrings/gone.gpg] file:$T/repo-other stable main" > "$R/etc/apt/sources.list.d/gone.list"
+echo "deb [signed-by=$K] file:$T/repo-vendor stable main" > "$R/etc/apt/sources.list.d/good.list"
+update | grep -qi "keyring" || fail "case 6 setup: apt did not warn of the missing keyring"
+out=$(heal 2>&1)
+uo=$(update)
+if ! printf '%s\n' "$uo" | grep -qi "keyring" && has_pkg vendor && ! grep -q '^deb ' "$R/etc/apt/sources.list.d/gone.list" \
+   && printf '%s\n' "$out" | grep -q "gone.list:1"; then
+    pass "case 6: an entry whose keyring is gone is turned off (logged); update has no keyring warning, the rest update"
+else fail "case 6: keyless entry kept: $out / $uo"; fi
+out2=$(heal 2>&1)
+[ -z "$out2" ] && pass "case 6: a second heal changes nothing" || fail "case 6: second heal not idempotent: $out2"
 
 # ---- the updater: heals before refreshing, publishes the problems, goes on
 fresh_root

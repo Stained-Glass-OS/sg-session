@@ -1,3 +1,15 @@
+sg-session (0.1.0-207) unstable; urgency=medium
+
+  * sg-apt-sources heal (run by the updater before every refresh) turns off
+    a third-party entry whose keyring files are all gone: it can never be
+    used, and apt warned "Failed to parse keyring" at every update -- Edge's
+    purge deletes /usr/share/keyrings/microsoft-edge.gpg and leaves
+    microsoft-edge.list (qa5 Store walk 2026-10-22). The file is backed up;
+    SG Store's adopt puts the maker's source back if the app returns. Gate
+    test/apt-sources-test.sh case 6, mutant --mutant-keyless in make check.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 05:29:25 -0700
+
 sg-session (0.1.0-206) unstable; urgency=medium
 
   * XAUTHORITY names a file in the session, as on every X desktop

@@ -325,6 +325,7 @@ lint:
 	@sh test/apt-sources-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@! sh test/apt-sources-test.sh --mutant >/dev/null 2>&1
 	@! sh test/apt-sources-test.sh --mutant-problems >/dev/null 2>&1
+	@! sh test/apt-sources-test.sh --mutant-keyless >/dev/null 2>&1
 	@sh test/prefix-current-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-snapshot
 	@sh test/restore-points-test.sh
