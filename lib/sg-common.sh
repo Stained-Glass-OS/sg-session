@@ -408,7 +408,14 @@ sg_system_access() {
 # WAYLAND_DISPLAY, which stays. SDL 3 reads SDL_VIDEO_DRIVER, SDL 2
 # SDL_VIDEODRIVER.
 #   sg_linux_app_env
-SG_LINUX_APP_ENV="GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11"
+# And Java loads no assistive technology from the home folder's
+# .accessibility.properties: the folder is the Windows profile too, and a
+# Windows Java with the Access Bridge on (NVDA's setup turns it on) names
+# com.sun.java.accessibility.AccessBridge there -- every Linux Java program
+# then failed to start, "Assistive Technology not found" (Arduino IDE, qa5
+# 2026-10-21). wine-sg 5951 keeps JAVA_TOOL_OPTIONS from Windows programs,
+# so a Windows Java still loads its Access Bridge.
+SG_LINUX_APP_ENV="GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11 JAVA_TOOL_OPTIONS=-Djavax.accessibility.assistive_technologies="
 sg_linux_app_env() {
     _names=""
     for _kv in $SG_LINUX_APP_ENV; do

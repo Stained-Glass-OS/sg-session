@@ -11,6 +11,9 @@
 # starts: the Claude desktop app came up native Wayland, over the taskbar,
 # with no button (David 2026-10-06). So the session type is x11 for them, set
 # again inside the compositor (sg-run-explorer). Mutant SESSION_TYPE: not set.
+# A Linux Java program starts although the shared home folder names the
+# Windows Access Bridge (real Java and Xvfb, when present). Mutant NO_JAVA_AT:
+# JAVA_TOOL_OPTIONS not set.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -29,7 +32,7 @@ check() { # LIB -> prints the environment the function leaves, then the calls
 }
 check "$HERE/lib/sg-common.sh"
 ok=1
-for kv in GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11; do
+for kv in GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11 JAVA_TOOL_OPTIONS=-Djavax.accessibility.assistive_technologies=; do
     grep -qx "$kv" "$T/env" || { ok=0; fail "not exported: $kv"; }
 done
 [ $ok = 1 ] && pass "GTK, Qt, SDL, Firefox and Electron are told to use X11"
@@ -63,7 +66,7 @@ explorer_env "$T/lib"
 grep -q "^systemctl --user import-environment .*XDG_SESSION_TYPE" "$T/calls" 2>/dev/null &&
     pass "and from inside the compositor, the user's systemd manager and D-Bus get it too" || fail "no import from sg-run-explorer: $(cat "$T/calls" 2>/dev/null)"
 # mutant SESSION_TYPE: the session type left out
-sed 's/ XDG_SESSION_TYPE=x11"/"/' "$HERE/lib/sg-common.sh" > "$T/lib/sg-common.sh"
+sed 's/ XDG_SESSION_TYPE=x11\([ "]\)/\1/' "$HERE/lib/sg-common.sh" > "$T/lib/sg-common.sh"
 explorer_env "$T/lib"
 [ "$(chromium_platform "$T/xenv")" = wayland ] && pass "MUTANT SESSION_TYPE: Electron would open on Wayland (test catches it)" ||
     fail "MUTANT SESSION_TYPE not detected"
@@ -71,4 +74,29 @@ explorer_env "$T/lib"
 sed '/^sg_linux_app_env() {/,/^}/c\sg_linux_app_env() { :; }' "$HERE/lib/sg-common.sh" > "$T/mut.sh"
 check "$T/mut.sh"
 grep -qx GDK_BACKEND=x11 "$T/env" && fail "MUTANT NOENV not detected" || pass "MUTANT NOENV leaves the apps on Wayland (test catches it)"
+# A Linux Java program starts although the home folder (the Windows profile
+# too) names the Windows Access Bridge, as a Windows Java or NVDA's setup
+# leaves it: with the session's environment, not without it (mutant NO_JAVA_AT).
+java_starts() { # LIB -> 0 when Java's toolkit comes up
+    mkdir -p "$T/jhome"
+    printf 'assistive_technologies=com.sun.java.accessibility.AccessBridge\nscreen_magnifier_present=true\n' > "$T/jhome/.accessibility.properties"
+    env -i PATH="$T/bin:/usr/bin:/bin" HOME="$T/jhome" DISPLAY="$JD" sh -c '. "$1"; sg_linux_app_env; java -Duser.home="$HOME" -cp "$2" T' sh "$1" "$T/j" 2>&1 | grep -q "toolkit ok"
+}
+if command -v java >/dev/null && command -v javac >/dev/null && command -v Xvfb >/dev/null; then
+    mkdir -p "$T/j"
+    printf 'public class T { public static void main(String[] a) { java.awt.Toolkit.getDefaultToolkit(); System.out.println("toolkit ok"); System.exit(0); } }\n' > "$T/j/T.java"
+    JD=:$(( 600 + $$ % 200 ))
+    Xvfb "$JD" -nolisten tcp >/dev/null 2>&1 & JX=$!
+    sleep 1
+    if javac -d "$T/j" "$T/j/T.java" 2>/dev/null; then
+        java_starts "$HERE/lib/sg-common.sh" && pass "a Linux Java program starts although the shared home names the Windows Access Bridge (Arduino IDE)" ||
+            fail "Linux Java does not start with the session's environment"
+        sed 's/ JAVA_TOOL_OPTIONS=[^ "]*//' "$HERE/lib/sg-common.sh" > "$T/lib/sg-common.sh"
+        java_starts "$T/lib/sg-common.sh" && fail "MUTANT NO_JAVA_AT not detected" ||
+            pass "MUTANT NO_JAVA_AT: \"Assistive Technology not found\" (test catches it)"
+    else echo "SKIP  javac failed"; fi
+    kill "$JX" 2>/dev/null
+else
+    echo "SKIP  the Java check: needs java, javac and Xvfb"
+fi
 exit $RC
