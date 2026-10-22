@@ -914,6 +914,7 @@ sg_mono_support_refresh() {
 # (sg_system_access). A folder an installer shared with the users (setgid, the
 # server's sg_users_group: Steam's) keeps its sharing. The whole trees once
 # (STATE stamp, cleared when Wine updates the prefix), the roots at every boot.
+# And no one but the owner and the group may write there ("others"), once.
 #   sg_program_files_protected DRIVE_C GROUP STATEDIR
 sg_program_files_protected() {
     _c=$1 _grp=$2 _st=$3
@@ -927,6 +928,17 @@ sg_program_files_protected() {
             xargs -0 -r setfacl -m g::r-X 2>/dev/null || :
     done
     : > "$_st/program-files-protected-1" 2>/dev/null || :
+    # what elevated installers put there before wine-sg 10.0-488 (5956) was
+    # 0777/0666: every account's to change, as "others" (it is SYSTEM's
+    # group's, not the Wine group's). Others lose write, once.
+    [ -e "$_st/program-files-others-1" ] && return 0
+    if [ "${SG_MUTANT_PF_OTHERS:-}" != 1 ]; then
+        for _d in "Program Files" "Program Files (x86)"; do
+            [ -d "$_c/$_d" ] || continue
+            find "$_c/$_d" ! -type l -perm -o=w -print0 2>/dev/null | xargs -0 -r chmod o-w 2>/dev/null || :
+        done
+    fi
+    : > "$_st/program-files-others-1" 2>/dev/null || :
     return 0
 }
 

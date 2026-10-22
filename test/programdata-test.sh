@@ -50,8 +50,20 @@ mkdir -p "$T/p/Program Files/Common Files/System" "$T/p/Program Files/Steam" "$T
 chmod 775 "$T/p/Program Files" "$T/p/Program Files (x86)" "$T/p/Program Files/Common Files" "$T/p/Program Files/Common Files/System"
 ( umask 002; : > "$T/p/Program Files/Common Files/System/shared.dll" )
 chmod 2775 "$T/p/Program Files/Steam"; ( umask 002; : > "$T/p/Program Files/Steam/steam.exe" )
+# an elevated installer's program before wine-sg 10.0-488: 0777/0666
+mkdir -p "$T/p/Program Files/Geany/bin"; : > "$T/p/Program Files/Geany/bin/geany.exe"; : > "$T/p/Program Files/Geany/x.dll"
+chmod 777 "$T/p/Program Files/Geany" "$T/p/Program Files/Geany/bin" "$T/p/Program Files/Geany/bin/geany.exe"; chmod 666 "$T/p/Program Files/Geany/x.dll"
+cp -a "$T/p" "$T/pm"; mkdir -p "$T/st3m"
 ( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_system_access "$T/p" "$me" "$T/st3"
   sg_program_files_protected "$T/p" "$grp" "$T/st3" )
+( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; SG_MUTANT_PF_OTHERS=1 sg_program_files_protected "$T/pm" "$grp" "$T/st3m" )
+ow() { [ -n "$(find "$1" -maxdepth 0 -perm -o=w 2>/dev/null)" ]; }
+! ow "$T/p/Program Files/Geany" && ! ow "$T/p/Program Files/Geany/bin" && ! ow "$T/p/Program Files/Geany/bin/geany.exe" && ! ow "$T/p/Program Files/Geany/x.dll" \
+    && [ -x "$T/p/Program Files/Geany/bin/geany.exe" ] \
+    && echo "PASS  a program installed 0777/0666: others may no longer change it (still runs)" \
+    || { echo "FAIL  others still write: $(stat -c '%A %n' "$T/p/Program Files/Geany" "$T/p/Program Files/Geany/bin/geany.exe" "$T/p/Program Files/Geany/x.dll" | tr '\n' ' ')"; RC=1; }
+ow "$T/pm/Program Files/Geany/bin/geany.exe" && echo "PASS  MUTANT PF_OTHERS leaves it every account's (test catches it)" \
+    || { echo "FAIL  MUTANT PF_OTHERS not detected"; RC=1; }
 gw() { getfacl -p "$1" 2>/dev/null | grep -qx "group::rw[x-]"; }
 ! gw "$T/p/Program Files" && ! gw "$T/p/Program Files (x86)" && echo "PASS  Program Files: the users' group may not write in it" \
     || { echo "FAIL  Program Files root: $(getfacl -p "$T/p/Program Files" 2>/dev/null | tr '\n' ' ')"; RC=1; }

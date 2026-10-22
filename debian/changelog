@@ -1,3 +1,15 @@
+sg-session (0.1.0-209) unstable; urgency=medium
+
+  * sg_program_files_protected (sg-prefix-init, every boot) takes others'
+    write from everything in Program Files and Program Files (x86), once:
+    what elevated installers put there before wine-sg 10.0-488 (5956) was
+    0777/0666, every account's to change, a standard user's too (qa4/qa5
+    Store walk 2026-10-22). Installed programs still run. Gate
+    test/programdata-test.sh, mutant SG_MUTANT_PF_OTHERS. Needs wine-sg
+    10.0-488, which keeps new installs from widening again.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 10:07:05 -0700
+
 sg-session (0.1.0-208) unstable; urgency=medium
 
   * Debian's fluidsynth package turns on a per-person synthesizer daemon
