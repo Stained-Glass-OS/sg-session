@@ -731,6 +731,27 @@ sg_x_admit_root() {
     xhost +SI:localuser:root >/dev/null 2>&1 || :
 }
 
+# XAUTHORITY names a file, as on every X desktop: Xwayland admits the
+# session's user by who they are (SI:localuser), so there was no cookie and
+# no XAUTHORITY -- and launchers that pass it on unquoted broke: Warzone
+# 2100's (bwrap --ro-bind-try $XAUTHORITY $XAUTHORITY) ran "/sys" and the
+# game never started (qa5 2026-10-21). An empty file holds no cookie; X
+# programs still connect as the user. Kept when the session has one.
+#   sg_x_authority
+sg_x_authority() {
+    [ -z "${XAUTHORITY:-}" ] || return 0
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] || return 0
+    [ "${SG_MUTANT:-}" = NO_XAUTHORITY ] && return 0
+    _xa="$XDG_RUNTIME_DIR/sg-xauthority"
+    [ -f "$_xa" ] || ( umask 077; : > "$_xa" ) 2>/dev/null || return 0
+    XAUTHORITY=$_xa
+    export XAUTHORITY
+    systemctl --user import-environment XAUTHORITY >/dev/null 2>&1 || true
+    if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+        dbus-update-activation-environment XAUTHORITY >/dev/null 2>&1 || true
+    fi
+}
+
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
 # Images before 2026-10-02 carried a lab-only setup in /etc, outside any
 # package: sshd started only when root had keys (the gates'), and passwords

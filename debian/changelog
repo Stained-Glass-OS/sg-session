@@ -1,3 +1,19 @@
+sg-session (0.1.0-206) unstable; urgency=medium
+
+  * XAUTHORITY names a file in the session, as on every X desktop
+    (sg-common.sh sg_x_authority, called by sg-run-explorer): Xwayland
+    admits the user as SI:localuser with no cookie, so XAUTHORITY was unset,
+    and a launcher that passes it on unquoted broke -- Warzone 2100's
+    (bwrap --ro-bind-try $XAUTHORITY $XAUTHORITY) ran "/sys" and the game
+    never started (qa5 Store walk 2026-10-21, L104). An empty file of the
+    user's own under XDG_RUNTIME_DIR, also given to the user's systemd
+    manager and D-Bus activation; one the session has is kept. Gate
+    test/x-authority-test.sh (a real X server with access control: an X
+    program connects with the empty file), mutant NO_XAUTHORITY, in make
+    lint.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 00:25:00 -0700
+
 sg-session (0.1.0-205) unstable; urgency=medium
 
   * Linux Java programs load no assistive technology from the home

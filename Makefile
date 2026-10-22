@@ -339,6 +339,8 @@ lint:
 	@sh test/display-scale-test.sh
 	@sh test/x-admit-root-test.sh >/dev/null 2>&1; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ] || { sh test/x-admit-root-test.sh; exit 1; }
 	@! sh test/x-admit-root-test.sh --mutant NO_ROOT_X >/dev/null 2>&1 || { echo "x-admit-root-test: mutant NO_ROOT_X passed"; exit 1; }
+	@sh test/x-authority-test.sh >/dev/null 2>&1 || { sh test/x-authority-test.sh; exit 1; }
+	@! sh test/x-authority-test.sh --mutant NO_XAUTHORITY >/dev/null 2>&1 || { echo "x-authority-test: mutant NO_XAUTHORITY passed"; exit 1; }
 	@sh test/lockscale-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/systemroot-temp-test.sh
 	@sh test/ssh-migrate-test.sh
