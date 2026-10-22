@@ -276,6 +276,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
 	install -D -m 0644 systemd/clamav-freshclam.service.d/50-sg-background.conf $(UNITDIR)/clamav-freshclam.service.d/50-sg-background.conf
+	install -D -m 0644 systemd/fluidsynth.service.d/50-sg-off.conf $(DESTDIR)$(PREFIX)/lib/systemd/user/fluidsynth.service.d/50-sg-off.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
 	install -m 0644 tmpfiles/sg-session.conf tmpfiles/sg-audit.conf $(TMPFILESDIR)
@@ -327,6 +328,8 @@ lint:
 	@! sh test/apt-sources-test.sh --mutant-problems >/dev/null 2>&1
 	@! sh test/apt-sources-test.sh --mutant-keyless >/dev/null 2>&1
 	@sh test/prefix-current-test.sh
+	@sh test/fluidsynth-off-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+	@! sh test/fluidsynth-off-test.sh --mutant >/dev/null 2>&1
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-snapshot
 	@sh test/restore-points-test.sh
 	@for m in NO_PIN ANY_PACKAGE UNDO_LOCKS UNDO_ONLINE PLYMOUTH_REQUIRED ONE_POOL STORE_UNDO EXPIRE_NEVER EXPIRE_EARLY; do ! sh test/restore-points-test.sh --mutant $$m >/dev/null 2>&1 || { echo "restore-points-test: mutant $$m passed"; exit 1; }; done

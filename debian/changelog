@@ -1,3 +1,17 @@
+sg-session (0.1.0-208) unstable; urgency=medium
+
+  * Debian's fluidsynth package turns on a per-person synthesizer daemon
+    (a user unit wanted by default.target) whenever a program needs
+    fluidsynth installed -- Frescobaldi from SG Store on qa5, 2026-10-22.
+    The daemon runs a command shell on TCP port 9800 on every network, and
+    the firewall asked about it at every sign-in. A drop-in keeps it off
+    unless /etc/stained-glass/fluidsynth-daemon exists; programs that play
+    MIDI load the library themselves. Gate test/fluidsynth-off-test.sh
+    (evaluates the unit's conditions with the drop-in), mutant --mutant in
+    make lint.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 08:55:35 -0700
+
 sg-session (0.1.0-207) unstable; urgency=medium
 
   * sg-apt-sources heal (run by the updater before every refresh) turns off
