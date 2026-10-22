@@ -94,4 +94,46 @@ OUT
         [ $ok = 0 ] && echo "PASS  MUTANT $mutant is caught" || { echo "FAIL  MUTANT $mutant survives"; RC=1; }
     fi
 done
+# A package that never unpacked (a full disk) leaves those that depend on it
+# unpacked: dpkg --configure -a cannot finish them; apt-get -f install
+# fetches what they lack, before PackageKit runs.
+cat > "$T/bin/dpkg-query" <<'W'
+#!/bin/sh
+case "$*" in
+*Status-Abbrev*) if [ -e "$R/fixed" ]; then printf 'ii  liblistserialsj1\n'
+                 else printf 'iU  liblistserialsj1\nii  bash\n'; fi ;;
+*) printf '1.4.0' ;;
+esac
+W
+cat > "$T/bin/apt-get" <<'W'
+#!/bin/sh
+case "$*" in
+*" -f install"*) touch "$R/fixed"; echo fix >> "$R/order" ;;
+esac
+exit 0
+W
+cat > "$T/bin/dpkg" <<'W'
+#!/bin/sh
+case "$*" in
+--compare-versions*) exit 1 ;;
+*--configure*) echo configure >> "$R/order"; echo "dpkg: dependency problems prevent configuration of liblistserialsj1" >&2; exit 1 ;;
+esac
+exit 0
+W
+chmod +x "$T"/bin/*
+for mutant in "" NO_FIXBROKEN; do
+    rm -f "$R"/*
+    out=$(R="$R" SG_MUTANT="$mutant" sh "$HERE/bin/sg-update-prepare" 2>&1); rc=$?
+    ok=0
+    [ $rc = 0 ] && [ "$(sed -n 2p "$R/order" 2>/dev/null)" = fix ] && [ "$(sed -n 3p "$R/order")" = pkcon ] &&
+        grep -q "the cut-short installation is finished" <<OUT && ok=1
+$out
+OUT
+    if [ -z "$mutant" ]; then
+        [ $ok = 1 ] && echo "PASS  a dependency that never unpacked: apt-get -f install fetches it, then updates" \
+            || { echo "FAIL  missing dependency not repaired (rc $rc): $out"; RC=1; }
+    else
+        [ $ok = 0 ] && echo "PASS  MUTANT $mutant is caught" || { echo "FAIL  MUTANT $mutant survives"; RC=1; }
+    fi
+done
 exit $RC

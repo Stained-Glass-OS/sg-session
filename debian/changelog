@@ -1,3 +1,14 @@
+sg-session (0.1.0-203) unstable; urgency=medium
+
+  * sg-update-prepare: an installation cut short by a full disk can leave
+    a package never unpacked (libserialport0, qa5 2026-10-21) and the ones
+    that depend on it unpacked; dpkg --configure -a cannot finish those, so
+    every update was refused for good. When packages are still unfinished
+    after it, apt-get -f install fetches what they lack. Unit test case and
+    mutant NO_FIXBROKEN; checked on qa5 in that state.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 21 Oct 2026 23:05:00 -0700
+
 sg-session (0.1.0-202) unstable; urgency=medium
 
   * sg-snapshot rebalance, daily (sg-snapshot-rebalance.timer): btrfs gives

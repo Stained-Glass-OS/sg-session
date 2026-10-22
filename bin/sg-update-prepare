@@ -109,6 +109,16 @@ repair_dpkg() {
     DEBIAN_FRONTEND=noninteractive timeout 1800 dpkg --force-confdef --force-confold --configure -a ||
         log "dpkg --configure -a failed"
     rm -rf "$_dl"
+    # A package whose unpacking never happened (the disk was full: qa5
+    # 2026-10-21, libserialport0) leaves the ones that depend on it unpacked
+    # for good: dpkg cannot configure them, and only apt fetches what they
+    # lack ("Unmet dependencies. Try 'apt --fix-broken install'").
+    if [ -n "$(unfinished)" ] && [ "${SG_MUTANT:-}" != NO_FIXBROKEN ]; then
+        log "fetching what the unfinished packages lack (apt-get -f install)"
+        DEBIAN_FRONTEND=noninteractive timeout 1800 apt-get -y -q -o DPkg::Lock::Timeout=600 \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -f install >/dev/null 2>&1 ||
+            log "apt-get -f install failed"
+    fi
     _left=$(unfinished)
     if [ -z "$_left" ]; then log "the cut-short installation is finished"
     else log "still unfinished: $(printf '%s' "$_left" | tr '\n' ' ')"; fi
