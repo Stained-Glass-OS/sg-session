@@ -337,6 +337,8 @@ lint:
 	@sh test/screensaver-test.sh >/dev/null 2>&1; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ] || { sh test/screensaver-test.sh; exit 1; }
 	@! sh test/screensaver-test.sh --mutant NO_HOLD >/dev/null 2>&1 || [ $$? -eq 77 ] || { echo "screensaver-test: mutant NO_HOLD passed"; exit 1; }
 	@sh test/display-scale-test.sh
+	@sh test/x-admit-root-test.sh >/dev/null 2>&1; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ] || { sh test/x-admit-root-test.sh; exit 1; }
+	@! sh test/x-admit-root-test.sh --mutant NO_ROOT_X >/dev/null 2>&1 || { echo "x-admit-root-test: mutant NO_ROOT_X passed"; exit 1; }
 	@sh test/lockscale-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/systemroot-temp-test.sh
 	@sh test/ssh-migrate-test.sh

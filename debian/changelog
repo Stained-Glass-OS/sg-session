@@ -1,3 +1,18 @@
+sg-session (0.1.0-204) unstable; urgency=medium
+
+  * The session admits root to its X display (sg-common.sh
+    sg_x_admit_root, called by sg-run-explorer): GParted and Timeshift,
+    started from Start through pkexec (polkit asks first), run as root,
+    and Xwayland admits only the user who started it -- "Authorization
+    required ... cannot open display :0", and the tool never showed
+    (qa5 Store walk 2026-10-21, L84/L89). Root can read the session's
+    memory and files anyway; no one else is let in. Gate:
+    test/x-admit-root-test.sh (a real X server with access control:
+    root refused before, admitted after, another user still refused),
+    mutant NO_ROOT_X, in make lint.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 21 Oct 2026 23:30:00 -0700
+
 sg-session (0.1.0-203) unstable; urgency=medium
 
   * sg-update-prepare: an installation cut short by a full disk can leave

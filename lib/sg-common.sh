@@ -711,6 +711,19 @@ sg_x_resources() {
     printf 'Xft.dpi: %s\nXcursor.size: %s\n' $(( 96 * _xr_p / 100 )) $(( 24 * _xr_p / 100 )) | xrdb -nocpp -merge 2>/dev/null || :
 }
 
+# root may draw on the session's X display: a Linux admin tool the user
+# started through pkexec (GParted, Timeshift; polkit asked first) runs as
+# root, and Xwayland admits only the user who started it -- "Authorization
+# required ... cannot open display", and the tool never showed (qa5
+# 2026-10-21). Root can read the session's memory and files anyway; this
+# lets in no one else.   sg_x_admit_root
+sg_x_admit_root() {
+    [ -n "${DISPLAY:-}" ] || return 0
+    command -v xhost >/dev/null 2>&1 || return 0
+    [ "${SG_MUTANT:-}" = NO_ROOT_X ] && return 0
+    xhost +SI:localuser:root >/dev/null 2>&1 || :
+}
+
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
 # Images before 2026-10-02 carried a lab-only setup in /etc, outside any
 # package: sshd started only when root had keys (the gates'), and passwords

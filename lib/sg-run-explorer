@@ -168,6 +168,8 @@ fi
 
 # The work area for Linux programs: the screen less the taskbar (sg-common.sh).
 [ "${SG_DISPLAY_PATH:-x11}" = "x11" ] && sg_x11_workarea "${GEOM%x*}" "${GEOM#*x}"
+# and root's Linux admin tools (pkexec) may show on it (sg-common.sh)
+sg_x_admit_root
 
 # Microsoft Office draws in software unless the user chose otherwise: its
 # hardware drawing shares Direct3D textures the Vulkan layer cannot share
