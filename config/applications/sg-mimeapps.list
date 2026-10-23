@@ -4,7 +4,9 @@
 # still comes first. Mail links (mailto:) open SG Mail (package sg-mail),
 # else Thunderbird -- from Linux programs and, through Wine's mailto
 # handler, from Windows programs. PDF files open in SG PDF (package sg-pdf),
-# through the Windows side's .pdf association. A downloaded AppImage opens
+# through the Windows side's .pdf association. A .zip opens in Compressed
+# (zipped) Folders (sg-shell's sg-zip), through the Windows side's .zip
+# association, to look inside or extract it. A downloaded AppImage opens
 # the Install an AppImage window (sg-shell's sg-store64.exe --appimage),
 # never runs on its own. The end of a Microsoft sign-in (ms-appx-web:, the redirect
 # Office's own application registration accepts) goes to sg-wam-redirect, which
@@ -21,3 +23,5 @@ x-scheme-handler/ms-appx-web=sg-wam-redirect.desktop;
 x-scheme-handler/mailto=sg-mail.desktop;thunderbird.desktop;
 application/pdf=sg-pdf.desktop;
 application/x-pdf=sg-pdf.desktop;
+application/zip=sg-zip.desktop;
+application/x-zip-compressed=sg-zip.desktop;

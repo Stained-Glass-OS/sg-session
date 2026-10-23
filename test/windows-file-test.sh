@@ -46,5 +46,19 @@ sed '/\[ "\$appimage" = 1 \] && exec/d' "$T/open" > "$T/open-mutant"
 sh "$T/open-mutant" --appimage '/tmp/x.AppImage'
 [ "$(cat "$T/started")" != "/usr/libexec/stained-glass/shell/sg-store64.exe --appimage /tmp/x.AppImage" ] \
     && pass "MUTANT APPIMAGE_VIA_START caught" || fail "MUTANT APPIMAGE_VIA_START not caught"
+# a .zip from a Linux program (David 2026-10-23: Linux Firefox did not know
+# how to open one): Compressed (zipped) Folders, through the .zip association
+Zd="$HERE/config/applications/sg-zip.desktop"
+if command -v desktop-file-validate >/dev/null; then
+    desktop-file-validate "$Zd" && pass "the zip entry is valid" || fail "desktop-file-validate (zip)"
+fi
+for m in application/zip application/x-zip-compressed; do
+    grep -q "^MimeType=.*$m;" "$Zd" && grep -q "^$m=sg-zip.desktop;" "$HERE/config/applications/sg-mimeapps.list" \
+        && pass "$m: claimed, the default" || fail "$m not claimed"
+done
+grep -q '^Exec=sg-open-windows-file %f$' "$Zd" && grep -q 'config/applications/sg-zip.desktop' "$HERE/Makefile" \
+    && pass "a zip opens through Wine's start (the .zip association), and the entry is installed" || fail "zip entry's Exec / install"
+sh "$T/open" 'file:///tmp/My%20Image.zip'
+[ "$(cat "$T/started")" = "start /unix /tmp/My Image.zip" ] && pass "a downloaded zip goes to Wine's start" || fail "zip: $(cat "$T/started")"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

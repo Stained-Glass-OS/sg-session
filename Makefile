@@ -229,6 +229,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	install -D -m 0644 config/applications/sg-windows-file.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-windows-file.desktop
 	@# a downloaded AppImage: the Install an AppImage window (sg-open-windows-file --appimage)
 	install -D -m 0644 config/applications/sg-appimage-install.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-appimage-install.desktop
+	@# a .zip from a Linux program: Compressed (zipped) Folders, through the .zip association
+	install -D -m 0644 config/applications/sg-zip.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-zip.desktop
 	install -D -m 0644 config/applications/sg-wam-redirect.desktop $(DESTDIR)$(PREFIX)/share/applications/sg-wam-redirect.desktop
 	install -D -m 0644 config/applications/sg-mimeapps.list $(DESTDIR)$(PREFIX)/share/applications/mimeapps.list
 	@# The registry.pol fixture for sg-policy-check's .pol clause.

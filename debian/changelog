@@ -1,3 +1,15 @@
+sg-session (0.1.0-213) unstable; urgency=medium
+
+  * A .zip opened from a Linux program (Linux Firefox's downloads) opens in
+    Compressed (zipped) Folders, through the Windows side's .zip
+    association (sg-zip.desktop, the default for application/zip and
+    application/x-zip-compressed). Firefox did not know how to open one:
+    no Linux program claimed the type (David 2026-10-23). Verified on qa4:
+    gio open of a downloaded zip shows its browse window. Gate:
+    test/windows-file-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 23 Oct 2026 15:35:38 -0700
+
 sg-session (0.1.0-212) unstable; urgency=medium
 
   * SG Defender: freshclam's daily one-shot stands aside while the

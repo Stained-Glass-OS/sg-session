@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Compressed (zipped) Folders
+Comment=Opens a .zip like a folder, to look inside or extract it
+Exec=sg-open-windows-file %f
+Icon=package-x-generic
+NoDisplay=true
+Terminal=false
+MimeType=application/zip;application/x-zip-compressed;application/x-zip;
