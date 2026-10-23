@@ -1,3 +1,17 @@
+sg-session (0.1.0-211) unstable; urgency=medium
+
+  * SG Defender: ClamAV's database and log directories are clamav's
+    (tmpfiles.d, at boot and at this upgrade). clamav-base's postinst chown
+    fails in the image build's user namespace, so every machine had them
+    root's: freshclam never wrote a definition ("Can't create temporary
+    directory"), clamd never started, and downloads were not scanned (qa4
+    and qa5 2026-10-22). Verified on qa4: definitions fetched, clamd up,
+    EICAR found. sg-defender says "starting clamd" once per outage, not
+    every 30 s. Test clamav-dirs-test.sh (the real tmpfiles lines in a
+    user namespace mapping clamav's ids), mutant SG_MUTANT_CLAMAV_ROOT.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 18:25:00 -0700
+
 sg-session (0.1.0-210) unstable; urgency=medium
 
   * Security: the all-users Start menu (its StartUp folder too) and the

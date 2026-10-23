@@ -237,15 +237,23 @@ def quarantine(path, uid, signature):
     return qid
 
 
+clamd_asked = False
+
+
 def start_clamd():
     """clamav-daemon is skipped at install, before freshclam has fetched its
     first definitions (ConditionPathExistsGlob), and nothing starts it once
-    they are here (QA VM 2026-10-03): start it when it is not answering."""
+    they are here (QA VM 2026-10-03): start it when it is not answering.
+    Said once while it stays down, not every 30 s (qa4 2026-10-22)."""
+    global clamd_asked
     if "SG_DEFENDER_SCAN" in os.environ:
         return
     if subprocess.run(["systemctl", "is-active", "-q", "clamav-daemon.service"], check=False).returncode == 0:
+        clamd_asked = False
         return
-    log("starting clamd")
+    if not clamd_asked:
+        log("starting clamd")
+    clamd_asked = True
     subprocess.run(["systemctl", "start", "--no-block", "clamav-daemon.service"], capture_output=True, check=False)
 
 

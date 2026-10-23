@@ -364,6 +364,7 @@ lint:
 	@sh test/powershell-cmd-test.sh
 	@sh test/wine-reload-test.sh
 	@sh test/defender-test.sh
+	@sh test/clamav-dirs-test.sh
 	@sh test/defender-notify-test.sh
 	@sh test/restart-notify-test.sh
 	@sh test/polimport-test.sh
