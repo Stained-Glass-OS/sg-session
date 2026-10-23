@@ -276,6 +276,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
 	install -D -m 0644 systemd/clamav-freshclam.service.d/50-sg-background.conf $(UNITDIR)/clamav-freshclam.service.d/50-sg-background.conf
+	install -D -m 0644 systemd/clamav-freshclam-once.service.d/50-sg-daemon.conf $(UNITDIR)/clamav-freshclam-once.service.d/50-sg-daemon.conf
 	install -D -m 0644 systemd/fluidsynth.service.d/50-sg-off.conf $(DESTDIR)$(PREFIX)/lib/systemd/user/fluidsynth.service.d/50-sg-off.conf
 	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system-preset
 	install -m 0644 config/preset/50-stained-glass.preset $(DESTDIR)$(PREFIX)/lib/systemd/system-preset/
@@ -365,6 +366,7 @@ lint:
 	@sh test/wine-reload-test.sh
 	@sh test/defender-test.sh
 	@sh test/clamav-dirs-test.sh
+	@sh test/freshclam-once-test.sh
 	@sh test/defender-notify-test.sh
 	@sh test/restart-notify-test.sh
 	@sh test/polimport-test.sh

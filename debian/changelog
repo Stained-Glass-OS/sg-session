@@ -1,3 +1,15 @@
+sg-session (0.1.0-212) unstable; urgency=medium
+
+  * SG Defender: freshclam's daily one-shot stands aside while the
+    freshclam daemon runs. Debian enables both; at boot they raced for
+    freshclam.log's lock and the daemon exited ("Failed to lock the log
+    file", qa4 2026-10-22), so definitions stopped updating. The daemon
+    now also retries a failed start. Verified on qa4 after reboot: the
+    one-shot is skipped, freshclam and clamd active. Gate
+    test/freshclam-once-test.sh (mutant SG_MUTANT_FRESHCLAM_RACE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 22 Oct 2026 21:22:05 -0700
+
 sg-session (0.1.0-211) unstable; urgency=medium
 
   * SG Defender: ClamAV's database and log directories are clamav's
