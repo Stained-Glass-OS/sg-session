@@ -1,3 +1,16 @@
+sg-session (0.1.0-214) unstable; urgency=medium
+
+  * The Public folders (Desktop, Documents, Downloads, Music, Pictures,
+    Videos) keep a hidden, system desktop.ini, as Windows' do, made at boot
+    when missing. An uninstaller's delete-at-reboot of its folder (Foxit
+    queued users\Public\Desktop, qa5 2026-10-22) would have removed an
+    empty Public Desktop; Wine's RemoveDirectory now finds it not empty.
+    Checked with wine-sg: attrib shows it H S, dir leaves it out, rmdir
+    says "not empty". Test programdata-test.sh, mutant
+    SG_MUTANT_PUBLIC_NO_INI.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 23 Oct 2026 18:22:51 -0700
+
 sg-session (0.1.0-213) unstable; urgency=medium
 
   * A .zip opened from a Linux program (Linux Firefox's downloads) opens in

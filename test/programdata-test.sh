@@ -102,6 +102,28 @@ has "$k/ProgramData/Epic" "group:$grp:rwx" && echo "PASS  the rest of ProgramDat
 sc "$HERE/lib/sg-common.sh" "$T/scm" SG_MUTANT_SHORTCUTS_SHARED=1
 anyw "$T/scm/c/ProgramData/Microsoft/Windows/Start Menu/Programs/NVDA/NVDA.lnk" && echo "PASS  MUTANT SHORTCUTS_SHARED leaves them every account's (test catches it)" \
     || { echo "FAIL  MUTANT SHORTCUTS_SHARED not detected"; RC=1; }
+# sg_public_desktop_ini: the Public folders keep a hidden, system desktop.ini,
+# so an installer's delete-at-reboot never removes an empty Public Desktop
+pi() {   # LIB DIR [ENV]
+    mkdir -p "$2/c/users/Public/Desktop" "$2/c/users/Public/Music"
+    printf 'mine\r\n' > "$2/c/users/Public/Music/desktop.ini"
+    ( . "$1" >/dev/null 2>&1; [ -n "${3:-}" ] && export "$3"; sg_public_desktop_ini "$2/c" )
+}
+pi "$HERE/lib/sg-common.sh" "$T/pi"
+f=$T/pi/c/users/Public/Desktop/desktop.ini
+a=$(python3 -c 'import os,sys; print(os.getxattr(sys.argv[1], "user.DOSATTRIB").decode())' "$f" 2>/dev/null)
+if [ -z "$a" ] && [ ! -e "$f" ]; then
+    echo "SKIP  no user xattrs under $T (the file is left out, so it never shows)"
+else
+    [ "$a" = 0x6 ] && grep -q '^\[\.ShellClassInfo\]' "$f" && [ "$(stat -c %a "$f")" = 644 ] \
+        && echo "PASS  the Public Desktop keeps a hidden, system desktop.ini (an empty one is never deleted at reboot)" \
+        || { echo "FAIL  Public desktop.ini: attr '$a' $(ls -la "$f" 2>&1)"; RC=1; }
+fi
+[ "$(cat "$T/pi/c/users/Public/Music/desktop.ini")" = "$(printf 'mine\r')" ] \
+    && echo "PASS  a desktop.ini already there is left as it is" || { echo "FAIL  existing desktop.ini rewritten"; RC=1; }
+pi "$HERE/lib/sg-common.sh" "$T/pim" SG_MUTANT_PUBLIC_NO_INI=1
+[ ! -e "$T/pim/c/users/Public/Desktop/desktop.ini" ] && echo "PASS  MUTANT PUBLIC_NO_INI leaves it empty (test catches it)" \
+    || { echo "FAIL  MUTANT PUBLIC_NO_INI not detected"; RC=1; }
 # sg_systemroot_temp: %SystemRoot%\SystemTemp, only the SYSTEM account may enter
 mkdir -p "$T/s/windows"; setfacl -d -m g::rwx "$T/s/windows" 2>/dev/null
 ( . "$HERE/lib/sg-common.sh" >/dev/null 2>&1; sg_systemroot_temp "$T/s" "$me" )

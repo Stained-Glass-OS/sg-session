@@ -968,6 +968,27 @@ sg_shared_shortcuts_protected() {
     return 0
 }
 
+# The Public folders keep a hidden, system desktop.ini, as Windows' do, so an
+# installer's delete-at-reboot of its own shortcut's folder never takes the
+# folder itself: wineboot's PendingFileRenameOperations removes a directory
+# that is empty, and ours were (Foxit's uninstall queued users\Public\Desktop,
+# qa5 2026-10-22). Wine reads the attributes from user.DOSATTRIB. Every boot;
+# one already there is left as it is.
+#   sg_public_desktop_ini DRIVE_C
+sg_public_desktop_ini() {
+    [ "${SG_MUTANT_PUBLIC_NO_INI:-}" = 1 ] && return 0
+    for _d in Desktop Documents Downloads Music Pictures Videos; do
+        _f="$1/users/Public/$_d/desktop.ini"
+        if [ ! -d "$1/users/Public/$_d" ] || [ -L "$1/users/Public/$_d" ]; then continue; fi
+        if [ -e "$_f" ] || [ -L "$_f" ]; then continue; fi
+        printf '[.ShellClassInfo]\r\n' > "$_f" 2>/dev/null || continue
+        chmod 644 "$_f" 2>/dev/null || :
+        # not hidden (no user xattrs there) it would show on every desktop
+        python3 -c 'import os,sys; os.setxattr(sys.argv[1], "user.DOSATTRIB", b"0x6")' "$_f" 2>/dev/null || rm -f "$_f"
+    done
+    return 0
+}
+
 # The shared folders' own entries are the system's (2026-10-07, found
 # looking at debt D13). Every person is in the Wine group, and the folders were
 # group-writable without the sticky bit: anyone could rename the prefix
