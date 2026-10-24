@@ -20,6 +20,11 @@
 #   sg-settingsctl sound step up|down [--chime]   the default output 5 points
 #       up or down (up unmutes), as the volume keys do: VOLUME <percent>
 #   sg-settingsctl sound mute-toggle   the default output: MUTED yes|no
+#   sg-settingsctl media           the session's media players (MPRIS)
+#       PLAYER <name>\t<Playing|Paused|Stopped>\t<title>\t<artist>
+#   sg-settingsctl media play-pause|next|previous|stop|play|pause
+#       the media keys: to the one playing, else the one last controlled,
+#       else one paused: PLAYER <name>
 #   sg-settingsctl bluetooth
 #       BLUETOOTH yes|no, POWERED yes|no,
 #       DEVICE <mac>\t<connected yes|no>\t<paired yes|no>\t<name>
@@ -1287,7 +1292,93 @@ def printers(args):
     return out
 
 
-COMMANDS = {"sound": sound, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
+MPRIS = "org.mpris.MediaPlayer2."
+MEDIA_VERBS = {"play-pause": "PlayPause", "next": "Next", "previous": "Previous",
+               "stop": "Stop", "play": "Play", "pause": "Pause"}
+
+
+def busctl(*args):
+    """busctl on the user's session bus, its answer as JSON"""
+    r = subprocess.run(["busctl", "--user", "--json=short", "--timeout=2"] + list(args),
+                       capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        raise Fail("failed", r.stderr.strip() or "busctl failed")
+    try:
+        return json.loads(r.stdout) if r.stdout.strip() else None
+    except ValueError:
+        raise Fail("failed", "busctl gave an answer that is not JSON")
+
+
+def media_players():
+    """The session's media players (MPRIS: Linux programs, and Windows ones
+    through wine-sg's transport-controls bridge): [(name, status, title, artist)]."""
+    names = busctl("call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                   "ListNames")["data"][0]
+    out = []
+    for name in sorted(n for n in names if n.startswith(MPRIS)):
+        try:
+            props = busctl("call", name, "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties",
+                           "GetAll", "s", "org.mpris.MediaPlayer2.Player")["data"][0]
+        except (Fail, KeyError, IndexError, TypeError):
+            continue        # gone, or not answering: not one to send keys to
+        status = (props.get("PlaybackStatus") or {}).get("data", "Stopped")
+        meta = (props.get("Metadata") or {}).get("data") or {}
+        title = (meta.get("xesam:title") or {}).get("data", "")
+        artist = (meta.get("xesam:artist") or {}).get("data") or []
+        out.append((name, status, str(title), ", ".join(artist) if isinstance(artist, list) else str(artist)))
+    return out
+
+
+def media_last_file():
+    return os.path.join(runtime_dir(), "sg-media-last")
+
+
+def media_target(players):
+    """The player the media keys mean, as Windows picks the session: the one
+    playing; else the one last controlled, if it is still here; else one paused;
+    else the first."""
+    playing = [p for p in players if p[1] == "Playing"]
+    if playing:
+        return playing[0][0]
+    try:
+        with open(media_last_file()) as f:
+            last = f.read().strip()
+    except OSError:
+        last = ""
+    if os.environ.get("SG_MUTANT_MEDIA_FIRST") != "1":
+        if any(p[0] == last for p in players):
+            return last
+        paused = [p for p in players if p[1] == "Paused"]
+        if paused:
+            return paused[0][0]
+    return players[0][0] if players else None
+
+
+def media(args):
+    """The media keys: Play/Pause, Next, Previous and Stop for the session's
+    player (sg-volume hears them from the shell hook)."""
+    if not shutil.which("busctl") or not (os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+                                          or os.path.exists(os.path.join(runtime_dir(), "bus"))):
+        raise Fail("unsupported", "no session bus")
+    players = media_players()
+    if not args:
+        return ["PLAYER %s\t%s\t%s\t%s" % (clean(n[len(MPRIS):]), s, clean(t), clean(a))
+                for n, s, t, a in players]
+    if len(args) != 1 or args[0] not in MEDIA_VERBS:
+        raise Fail("invalid", "usage: media [" + "|".join(MEDIA_VERBS) + "]")
+    target = media_target(players)
+    if target is None:
+        raise Fail("notfound", "no media player")
+    busctl("call", target, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", MEDIA_VERBS[args[0]])
+    try:
+        with open(media_last_file(), "w") as f:
+            f.write(target + "\n")
+    except OSError:
+        pass
+    return ["PLAYER %s" % clean(target[len(MPRIS):])]
+
+
+COMMANDS = {"sound": sound, "media": media, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen, "look": look, "display-scale": display_scale,

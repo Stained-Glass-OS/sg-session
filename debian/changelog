@@ -1,3 +1,16 @@
+sg-session (0.1.0-215) unstable; urgency=medium
+
+  * The media keys: "sg-settingsctl media" lists the session's media
+    players (MPRIS: Linux programs, and Windows ones through wine-sg's
+    transport-controls bridge, 10.0-563) and sends Play/Pause, Next,
+    Previous, Stop, Play or Pause to the one playing, else the one last
+    controlled, else one paused. sg-shell's sg-volume calls it for the
+    media keys no program took. busctl's JSON, so no new dependency.
+    Gate test/media-keys-test.py (stand-in players on a bus of its own),
+    mutant SG_MUTANT_MEDIA_FIRST.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 23 Oct 2026 22:59:54 -0700
+
 sg-session (0.1.0-214) unstable; urgency=medium
 
   * The Public folders (Desktop, Documents, Downloads, Music, Pictures,

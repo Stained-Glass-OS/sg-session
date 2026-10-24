@@ -409,6 +409,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
+	@python3 test/media-keys-test.py || [ $$? -eq 77 ]   # 77: skipped (no dbus-daemon, busctl or cc)
+	@! SG_MUTANT_MEDIA_FIRST=1 python3 test/media-keys-test.py >/dev/null
 	@sh test/vdagent-test.sh
 	@sh test/windows-file-test.sh
 	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
