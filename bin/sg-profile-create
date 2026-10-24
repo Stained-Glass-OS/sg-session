@@ -103,6 +103,11 @@ if command -v setfacl >/dev/null 2>&1; then
         mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile" "$SG_SYSTEM_USER" 2>/dev/null ||
         sg_log "WARNING: could not give the SYSTEM account access to $user's profile"
 fi
+# The settings a program installed for the whole machine needs in the
+# person's own profile before they first use it (Everything's folder index):
+# as the user, the profile is theirs.
+runuser -u "$user" -- env SG_LIB="$SG_LIB" "${SG_APP_DEFAULTS:-/usr/libexec/stained-glass/sg-app-defaults}" "$profile" 2>/dev/null ||
+    sg_log "WARNING: could not apply the program defaults in $user's profile"
 # One home for Linux and Windows programs: a new account's /home/<user> is
 # made a link to this profile now; a home already in use waits for the next
 # boot (sg-shared-home.service).

@@ -1,3 +1,18 @@
+sg-session (0.1.0-216) unstable; urgency=medium
+
+  * Everything (voidtools, from SG Store) lists files out of the box: it
+    finds them from the NTFS change journal, which a Linux filesystem has
+    not, so it indexed nothing until told to index folders. New
+    sg-app-defaults, run by sg-profile-create at each sign-in as the user,
+    seeds its per-user ini (the machine-wide one, app_data=1, cannot carry
+    defaults) with a watched folder index of C:\, once per profile: a
+    profile where it ran before gets the index with every other line kept,
+    folders the person chose stay, and never while their Everything runs (it
+    rewrites the ini at exit). Gate test/app-defaults-test.sh in lint;
+    mutant SG_MUTANT_APPDEFAULTS_WHILE_RUNNING.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 24 Oct 2026 02:27:22 -0700
+
 sg-session (0.1.0-215) unstable; urgency=medium
 
   * The media keys: "sg-settingsctl media" lists the session's media

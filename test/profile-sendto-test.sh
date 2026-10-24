@@ -22,7 +22,7 @@ mkdir -p "$T/prefix/drive_c/users"
 chown -R nobody "$T/prefix/drive_c/users"
 run() {
     env SG_LIB="$HERE/lib" SG_PREFIX="$T/prefix" SG_SYSTEM_USER=nobody SG_WINE_GROUP="$group" SG_LOG_DIR="$T" \
-        PAM_TYPE=open_session PAM_USER="$user" sh "${SG_PROFILE_CREATE:-$HERE/bin/sg-profile-create}"
+        SG_APP_DEFAULTS="$HERE/bin/sg-app-defaults" PAM_TYPE=open_session PAM_USER="$user" sh "${SG_PROFILE_CREATE:-$HERE/bin/sg-profile-create}"
 }
 D="$T/prefix/drive_c/users/$user/AppData/Roaming/Microsoft/Windows/SendTo"
 

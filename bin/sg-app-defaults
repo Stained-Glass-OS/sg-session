@@ -1,0 +1,57 @@
+#!/bin/sh
+# sg-app-defaults PROFILE -- the settings a Windows program installed for the
+# whole machine needs in a person's own profile before their first use of it,
+# where its installer can only reach the person who ran it. Run as the
+# profile's owner: sg-profile-create calls it at every sign-in. Each program
+# once per profile (a marker in AppData\Local\Stained Glass), so what the
+# person changes afterwards is theirs. Always exits 0.
+#
+# Everything (voidtools): it finds files from the NTFS change journal, which a
+# Linux filesystem has not, so out of the box it lists nothing; told to index
+# folders, it works and follows changes as they happen. Its machine-wide ini
+# (app_data=1) sends every setting to %APPDATA%\Everything\Everything.ini and
+# cannot carry defaults itself, so the folder index is seeded there: C:\, the
+# whole drive, as Windows' Everything indexes the whole volume. Its ini quotes
+# paths with doubled backslashes; it rewrites the file at exit, so never while
+# the person's Everything runs (the next sign-in does it).
+set -u
+
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+# shellcheck source=lib/sg-common.sh
+. "$SG_LIB/sg-common.sh"
+
+cd "${1:?usage: sg-app-defaults PROFILE}" 2>/dev/null || exit 0
+umask 077
+CR=$(printf '\r')
+marks="AppData/Local/Stained Glass"
+
+everything() {
+    mark="$marks/everything-defaults"
+    [ -e "$mark" ] && return 0
+    sys="$SG_PREFIX/drive_c/Program Files/Everything/Everything.ini"
+    [ -f "$sys" ] && tr -d '\r' < "$sys" | grep -qx 'app_data=1' || return 0
+    if [ "${SG_MUTANT_APPDEFAULTS_WHILE_RUNNING:-}" != 1 ]; then
+        # SG_TEST_PS: a file standing in for the person's process list (gate)
+        if [ -n "${SG_TEST_PS:-}" ]; then cat "$SG_TEST_PS"; else ps -u "$(id -u)" -o args= 2>/dev/null; fi |
+            grep -qi 'everything\.exe' && return 0
+    fi
+    ini=AppData/Roaming/Everything/Everything.ini
+    if [ ! -e "$ini" ]; then
+        mkdir -p AppData/Roaming/Everything &&
+            printf '[Everything]\r\nfolders="C:\\\\"\r\nfolder_monitor_changes=1\r\n' > "$ini" || return 0
+    elif ! tr -d '\r' < "$ini" | grep -q '^folders=.'; then
+        # it ran before (an empty folders= of its own) or the file has none:
+        # the folder index goes in, every other line stays as it was
+        awk -v cr="$CR" '
+            /^folders=\r?$/                { print "folders=\"C:\\\\\"" cr; f = 1; next }
+            /^folder_monitor_changes=\r?$/ { print "folder_monitor_changes=1" cr; m = 1; next }
+            { print }
+            END { if (!f) print "folders=\"C:\\\\\"" cr; if (!f || !m) print "folder_monitor_changes=1" cr }
+        ' "$ini" > "$ini.sg-new" || { rm -f "$ini.sg-new"; return 0; }
+        mv -f "$ini.sg-new" "$ini" || return 0
+    fi
+    mkdir -p "$marks" && : > "$mark"
+}
+
+everything
+exit 0

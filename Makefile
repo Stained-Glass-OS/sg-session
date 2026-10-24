@@ -187,7 +187,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	@# The profile service (sg-profile-create), run at login by pam_exec;
 	@# the deb's postinst registers it with pam-auth-update.
 	install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass $(DESTDIR)$(PREFIX)/share/pam-configs
-	install -m 0755 bin/sg-profile-create $(DESTDIR)$(PREFIX)/libexec/stained-glass/
+	install -m 0755 bin/sg-profile-create bin/sg-app-defaults $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	@# One home: /home/<user> is a link to the Windows profile (sg-shared-home.service, and at sign-in).
 	install -m 0755 bin/sg-shared-home $(DESTDIR)$(PREFIX)/libexec/stained-glass/
 	install -m 0644 config/pam-configs/stained-glass-profile $(DESTDIR)$(PREFIX)/share/pam-configs/
@@ -318,7 +318,7 @@ lint:
 	@for f in $$(grep -lE 'WINEPREFIX|wineboot' test/*.sh); do \
 	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
-	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon \
+	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-app-defaults test/app-defaults-test.sh bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon \
 	    convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/smooth-glyphs-test.sh
@@ -409,6 +409,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate
 	@python3 test/dictate-test.py
 	@python3 test/settingsctl-test.py
+	@sh test/app-defaults-test.sh >/dev/null || sh test/app-defaults-test.sh
+	@! SG_MUTANT_APPDEFAULTS_WHILE_RUNNING=1 sh test/app-defaults-test.sh >/dev/null
 	@python3 test/media-keys-test.py || [ $$? -eq 77 ]   # 77: skipped (no dbus-daemon, busctl or cc)
 	@! SG_MUTANT_MEDIA_FIRST=1 python3 test/media-keys-test.py >/dev/null
 	@sh test/vdagent-test.sh
@@ -449,7 +451,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-app-defaults bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \
