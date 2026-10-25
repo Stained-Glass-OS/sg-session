@@ -1,3 +1,12 @@
+sg-session (0.1.0-218) unstable; urgency=medium
+
+  * Recommends speech-dispatcher and its espeak-ng voice: Firefox's
+    speech synthesis (web pages that read aloud) needs libspeechd, and
+    without it Firefox put up "You can't use speech synthesis because the
+    Speech Dispatcher library is missing" (GOM Player's page, qa4).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 25 Oct 2026 13:42:37 -0700
+
 sg-session (0.1.0-217) unstable; urgency=medium
 
   * polkit asks the administrators (sg-admins) when a program needs one:
