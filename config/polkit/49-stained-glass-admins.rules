@@ -1,0 +1,14 @@
+// Stained Glass OS -- who polkit asks when a program needs an administrator
+// (sg-session).
+//
+// Administrators here are the sg-admins group (Settings > Accounts), which
+// sudo already trusts (/etc/sudoers.d/sg-admins). Debian's 50-default.rules
+// names only unix-group:sudo, so pkexec -- GParted, GSmartControl, any
+// program that asks polkit to run as root -- asked nobody the person could
+// answer as, and their Yes on the consent screen was refused (qa4 walk
+// 2026-10-25). The consent itself is still the broker's secure prompt
+// (sg-polkit-agent). polkit takes the first admin rule that answers, so this
+// file sorts before 50-default.rules; sudo stays for machines that use it.
+polkit.addAdminRule(function(action, subject) {
+    return ["unix-group:sg-admins", "unix-group:sudo"];
+});

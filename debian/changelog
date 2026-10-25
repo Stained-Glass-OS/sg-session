@@ -1,3 +1,14 @@
+sg-session (0.1.0-217) unstable; urgency=medium
+
+  * polkit asks the administrators (sg-admins) when a program needs one:
+    49-stained-glass-admins.rules, before Debian's 50-default.rules
+    (unix-group:sudo only). GParted and GSmartControl (pkexec) never
+    started -- the person's Yes on the consent screen was refused, as
+    polkit had not asked them (qa4 walk). sudo's members still count.
+    Gate test/polkit-admins-test.sh (node), mutant LATE.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 25 Oct 2026 09:17:14 -0700
+
 sg-session (0.1.0-216) unstable; urgency=medium
 
   * Everything (voidtools, from SG Store) lists files out of the box: it
