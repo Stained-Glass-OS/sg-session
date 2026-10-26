@@ -56,6 +56,12 @@ case "$1" in
             . /usr/lib/stained-glass/sg-common.sh >/dev/null 2>&1 && sg_ssh_migrate /
         ) || true
         fi
+        # folders under ProgramData that lost their shared group before
+        # wine-sg 10.0-618 (Epic's update loop): once, when this version arrives
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.1.0-219 && [ -r /usr/lib/stained-glass/sg-common.sh ]; then (
+            . /usr/lib/stained-glass/sg-common.sh >/dev/null 2>&1 && sg_programdata_repair /
+        ) || true
+        fi
         if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.1.0-86; then
             if [ -d /run/systemd/system ]; then
                 systemctl daemon-reload >/dev/null 2>&1 || true

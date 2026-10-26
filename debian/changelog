@@ -1,3 +1,15 @@
+sg-session (0.1.0-219) unstable; urgency=medium
+
+  * Folders under the system prefix's ProgramData that a person's program
+    made before wine-sg 10.0-618 get the shared group and setgid back, once
+    on upgrade (sg_programdata_repair): Wine's chmod after the create had
+    dropped the setgid bit, everything below got the person's own group,
+    and Epic's elevated update could overwrite nothing and stopped on
+    EC-PRM, again on every try (qa4). Modes are kept. Test
+    programdata-repair-test, mutant NOGROUP.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 25 Oct 2026 18:05:44 -0700
+
 sg-session (0.1.0-218) unstable; urgency=medium
 
   * Recommends speech-dispatcher and its espeak-ng voice: Firefox's

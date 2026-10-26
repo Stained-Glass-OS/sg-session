@@ -754,6 +754,22 @@ sg_x_authority() {
     fi
 }
 
+# Folders a person's program made under the system prefix's ProgramData
+# before wine-sg 10.0-618 lost the setgid bit they inherited (Wine's chmod
+# after the create), so everything below them got that person's own group:
+# Epic's launcher made Data\Update as bob, the elevated (SYSTEM) update could
+# overwrite nothing there and stopped on EC-PRM, again on every try (qa4).
+# They get ProgramData's group and setgid back -- what a folder made now
+# gets. Modes are left alone: a file only its owner may read stays so.
+#   sg_programdata_repair ROOT     (/ on a machine)
+sg_programdata_repair() {
+    _pd="${1%/}${SG_PROGRAMDATA:-/var/lib/stained-glass/prefix/drive_c/ProgramData}"
+    [ -d "$_pd" ] && [ -g "$_pd" ] || return 0      # only a shared ProgramData
+    _g=$(stat -c %G "$_pd") || return 0
+    find "$_pd" -xdev -mindepth 1 ! -type l ! -group "$_g" -exec chgrp "$_g" {} + 2>/dev/null || :
+    find "$_pd" -xdev -mindepth 1 -type d ! -perm -2000 -exec chmod g+s {} + 2>/dev/null || :
+}
+
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
 # Images before 2026-10-02 carried a lab-only setup in /etc, outside any
 # package: sshd started only when root had keys (the gates'), and passwords
