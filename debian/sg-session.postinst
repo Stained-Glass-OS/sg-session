@@ -62,6 +62,12 @@ case "$1" in
             . /usr/lib/stained-glass/sg-common.sh >/dev/null 2>&1 && sg_programdata_repair /
         ) || true
         fi
+        # program folders an installer's DACL closed to everyone but their
+        # owner before wine-sg 10.0-640 (CCleaner 7): once
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.1.0-220 && [ -r /usr/lib/stained-glass/sg-common.sh ]; then (
+            . /usr/lib/stained-glass/sg-common.sh >/dev/null 2>&1 && sg_programfiles_repair /
+        ) || true
+        fi
         if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.1.0-86; then
             if [ -d /run/systemd/system ]; then
                 systemctl daemon-reload >/dev/null 2>&1 || true

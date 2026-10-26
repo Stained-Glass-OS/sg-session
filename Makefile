@@ -453,10 +453,12 @@ lint:
 	@! SG_MUTANT=LATE sh test/polkit-admins-test.sh >/dev/null 2>&1 || ! command -v node >/dev/null || { echo "polkit-admins-test: mutant LATE passed"; exit 1; }
 	@sh test/programdata-repair-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@! SG_MUTANT=NOGROUP sh test/programdata-repair-test.sh >/dev/null 2>&1 || { echo "programdata-repair-test: mutant NOGROUP passed"; exit 1; }
+	@sh test/programfiles-repair-test.sh
+	@! SG_MUTANT=NOX86 sh test/programfiles-repair-test.sh >/dev/null 2>&1 || { echo "programfiles-repair-test: mutant NOX86 passed"; exit 1; }
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-app-defaults bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/polkit-admins-test.sh test/programdata-repair-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-app-defaults bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/polkit-admins-test.sh test/programdata-repair-test.sh test/programfiles-repair-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

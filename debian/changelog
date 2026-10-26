@@ -1,3 +1,14 @@
+sg-session (0.1.0-220) unstable; urgency=medium
+
+  * Program folders under Program Files that an installer's DACL closed to
+    everyone but their owner before wine-sg 10.0-640 get others' read and
+    traverse back, once on upgrade (sg_programfiles_repair): CCleaner 7's
+    Piriform folders were sgsystem's alone, and people could neither run
+    it nor its uninstaller (qa4). Write bits and files are left as they
+    are. Test programfiles-repair-test, mutant NOX86.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 26 Oct 2026 09:24:24 -0700
+
 sg-session (0.1.0-219) unstable; urgency=medium
 
   * Folders under the system prefix's ProgramData that a person's program

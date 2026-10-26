@@ -770,6 +770,22 @@ sg_programdata_repair() {
     find "$_pd" -xdev -mindepth 1 -type d ! -perm -2000 -exec chmod g+s {} + 2>/dev/null || :
 }
 
+# Program folders whose installer set a DACL giving Users read and execute
+# (CCleaner 7's Piriform folders) were left closed to everyone but their
+# owner before wine-sg 10.0-640: such an ACE set only the group bits, and the
+# group was the installer's own. People could not run the program or its
+# uninstaller (qa4). Folders under Program Files that keep others out get
+# read and traverse back -- what Windows gives Users there; write stays as it
+# was, and nothing outside Program Files is touched.
+#   sg_programfiles_repair ROOT     (/ on a machine)
+sg_programfiles_repair() {
+    _c="${1%/}${SG_PREFIX_C:-/var/lib/stained-glass/prefix/drive_c}"
+    for _pf in "$_c/Program Files" "$_c/Program Files (x86)"; do
+        [ -d "$_pf" ] || continue
+        find "$_pf" -xdev -mindepth 1 -type d ! -perm -o=rx -exec chmod o+rx {} + 2>/dev/null || :
+    done
+}
+
 # SSH is on for everyone now (sg-session's sshd_config.d/05-stained-glass.conf).
 # Images before 2026-10-02 carried a lab-only setup in /etc, outside any
 # package: sshd started only when root had keys (the gates'), and passwords
