@@ -18,6 +18,10 @@
 # captures through the portal only for a desktop it knows (GNOME, KDE, sway),
 # else the X root, all black under rootless Xwayland. Mutant: SG_SESSION_START
 # naming a copy whose default is StainedGlass alone.
+# Screen recorders record the Wayland screen through the portal's PipeWire
+# stream with GStreamer's pipewiresrc: vokoscreenNG opened only "Please install
+# the package gstreamer-plugin-pipewire" (Debian's package does not ask for it).
+# sg-session depends on it. Mutant: SG_CONTROL naming a control without it.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -110,4 +114,8 @@ if command -v java >/dev/null && command -v javac >/dev/null && command -v Xvfb 
 else
     echo "SKIP  the Java check: needs java, javac and Xvfb"
 fi
+CONTROL=${SG_CONTROL:-$HERE/debian/control}
+sed -n '/^Package: sg-session$/,/^$/p' "$CONTROL" | grep -q 'gstreamer1.0-pipewire' \
+    && pass "sg-session depends on gstreamer1.0-pipewire (screen recorders: vokoscreenNG)" \
+    || fail "no gstreamer1.0-pipewire dependency: vokoscreenNG asks for it and records nothing"
 exit $RC
