@@ -1,3 +1,15 @@
+sg-session (0.1.0-222) unstable; urgency=medium
+
+  * The desktop's name (XDG_CURRENT_DESKTOP) is StainedGlass:sway. Flameshot
+    captures through the screenshot portal only for a desktop it knows
+    (GNOME, KDE, sway); for ours it grabbed the X root, all black under
+    rootless Xwayland, and its tray's Take Screenshot showed nothing. The
+    portal still reads stainedglass-portals.conf, the first name it finds a
+    file for. test/linux-app-env-test.sh checks the name (mutant: a copy
+    naming StainedGlass alone).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 27 Oct 2026 05:06:09 -0700
+
 sg-session (0.1.0-221) unstable; urgency=medium
 
   * sg-sni-bridge: the session's StatusNotifierWatcher and host. Linux

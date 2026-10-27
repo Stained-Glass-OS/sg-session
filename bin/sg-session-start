@@ -38,8 +38,12 @@ fi
 # chooses its backends by it (stainedglass-portals.conf: GTK's), and through
 # it GTK 4, Qt 6 and browsers learn the user's light or dark mode and accent
 # (sg-settingsctl look). The portal is started by D-Bus in the user's
-# manager, so the name goes there too.
-: "${XDG_CURRENT_DESKTOP:=StainedGlass}"
+# manager, so the name goes there too. ":sway" after ours: screenshot tools
+# go to the portal only for a desktop they know -- Flameshot for GNOME, KDE or
+# sway, else it grabs the X root, all black under rootless Xwayland. Ours is a
+# wlroots compositor with sway's protocols; the portal still takes our
+# stainedglass-portals.conf, the first name it finds a file for.
+: "${XDG_CURRENT_DESKTOP:=StainedGlass:sway}"
 : "${XDG_SESSION_DESKTOP:=stained-glass}"
 export XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
 systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true

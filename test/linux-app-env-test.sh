@@ -14,6 +14,10 @@
 # A Linux Java program starts although the shared home folder names the
 # Windows Access Bridge (real Java and Xvfb, when present). Mutant NO_JAVA_AT:
 # JAVA_TOOL_OPTIONS not set.
+# The desktop's name (XDG_CURRENT_DESKTOP) is ours and then sway's: Flameshot
+# captures through the portal only for a desktop it knows (GNOME, KDE, sway),
+# else the X root, all black under rootless Xwayland. Mutant: SG_SESSION_START
+# naming a copy whose default is StainedGlass alone.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
@@ -31,6 +35,13 @@ check() { # LIB -> prints the environment the function leaves, then the calls
     env -i PATH="$T/bin:/usr/bin:/bin" HOME="$T" SG_LIB="$HERE/lib" sh -c '. "$1"; sg_linux_app_env; env' sh "$1" > "$T/env" 2>/dev/null
 }
 check "$HERE/lib/sg-common.sh"
+# the desktop's name sg-session-start gives when none is set
+START=${SG_SESSION_START:-$HERE/bin/sg-session-start}
+name=$(grep -E '^: "\$\{XDG_CURRENT_DESKTOP:=' "$START" | head -1 | sed 's/^: "\${XDG_CURRENT_DESKTOP:=\(.*\)}"$/\1/')
+case "$name" in
+    StainedGlass:*sway*) pass "the desktop's name is ours, then sway's ($name): screenshot tools use the portal" ;;
+    *) fail "the desktop's name is '$name': Flameshot finds no desktop it knows and captures black" ;;
+esac
 ok=1
 for kv in GDK_BACKEND=x11 QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11 SDL_VIDEO_DRIVER=x11 MOZ_ENABLE_WAYLAND=0 ELECTRON_OZONE_PLATFORM_HINT=x11 XDG_SESSION_TYPE=x11 JAVA_TOOL_OPTIONS=-Djavax.accessibility.assistive_technologies=; do
     grep -qx "$kv" "$T/env" || { ok=0; fail "not exported: $kv"; }
