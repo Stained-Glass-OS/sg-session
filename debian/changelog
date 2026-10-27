@@ -1,3 +1,18 @@
+sg-session (0.1.0-221) unstable; urgency=medium
+
+  * sg-sni-bridge: the session's StatusNotifierWatcher and host. Linux
+    programs' tray icons (Qt, Electron, libayatana-appindicator) appear in
+    the taskbar's notification area through sg-shell's sg-sni64.exe, with
+    their menus; a left click is Activate, a middle click
+    SecondaryActivate, a menu item its dbusmenu event. Started with the
+    shell's other icons, and again when the shell comes back. Without a
+    watcher Qt and Electron drew their icons in an X tray nothing showed:
+    Flameshot could not be reached at all. Depends python3-gi,
+    gir1.2-gdkpixbuf-2.0, librsvg2-common. Gate test-sni, mutant
+    SNI_NO_HOST.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 27 Oct 2026 03:30:00 -0700
+
 sg-session (0.1.0-220) unstable; urgency=medium
 
   * Program folders under Program Files that an installer's DACL closed to

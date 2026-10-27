@@ -1,0 +1,452 @@
+#!/usr/bin/python3
+"""sg-sni-bridge -- Linux programs' tray icons in the Stained Glass taskbar.
+
+A Linux program shows its notification-area icon as a StatusNotifierItem
+(Qt, Electron, libayatana-appindicator: Flameshot, KeePassXC, Nextcloud,
+Telegram, qBittorrent). Without a StatusNotifierWatcher on the session bus
+Qt and Electron fall back to the old X tray, which nothing here hosts, and
+the icon -- for Flameshot the only way into the program -- was nowhere.
+
+This is the session's watcher (org.kde.StatusNotifierWatcher and
+org.freedesktop.StatusNotifierWatcher) and its one host. Each item's icon
+(its pixmap, or its icon name looked up in the icon themes), tooltip and menu
+(com.canonical.dbusmenu) go to sg-shell's sg-sni64.exe on its standard input,
+which shows them in the taskbar's notification area; a click comes back:
+left Activate, middle SecondaryActivate, right the item's menu (ContextMenu
+for an item without one), a menu item its dbusmenu "clicked" event.
+
+  sg-sni-bridge [EXE]   EXE defaults to sg-shell's sg-sni64.exe, run by wine
+
+It ends when the icon program does (sg-run-explorer starts both again).
+SG_SNI_BRIDGE_LOG=<file> logs what it did, for gates; SG_SNI_BRIDGE_INJECT=<fifo>
+passes the lines written to it to the icon program (its CLICK and PICK: the
+gate's clicks).
+
+Copyright (C) 2026 Stained Glass OS contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
+"""
+import os
+import re
+import subprocess
+import sys
+import glob
+
+import gi
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gio, GLib, GdkPixbuf  # noqa: E402
+
+WATCHER_XML = """
+<node>
+  <interface name="%s">
+    <method name="RegisterStatusNotifierItem"><arg type="s" direction="in"/></method>
+    <method name="RegisterStatusNotifierHost"><arg type="s" direction="in"/></method>
+    <property name="RegisteredStatusNotifierItems" type="as" access="read"/>
+    <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
+    <property name="ProtocolVersion" type="i" access="read"/>
+    <signal name="StatusNotifierItemRegistered"><arg type="s"/></signal>
+    <signal name="StatusNotifierItemUnregistered"><arg type="s"/></signal>
+    <signal name="StatusNotifierHostRegistered"/>
+  </interface>
+</node>"""
+WATCHER_NAMES = ('org.kde.StatusNotifierWatcher', 'org.freedesktop.StatusNotifierWatcher')
+ITEM_IFACES = ('org.kde.StatusNotifierItem', 'org.freedesktop.StatusNotifierItem')
+ICON_PX = 32
+
+LOG = os.environ.get('SG_SNI_BRIDGE_LOG')
+
+
+def log(msg):
+    if LOG:
+        with open(LOG, 'a') as f:
+            f.write(msg + '\n')
+
+
+def cache_dirs():
+    """the PNGs' folder, as this program and as Wine sees it"""
+    user = os.environ.get('USER') or os.environ.get('LOGNAME') or 'user'
+    prefix = os.environ.get('WINEPREFIX', os.path.expanduser('~/.wine'))
+    unix = os.path.join(prefix, 'drive_c', 'users', user, 'AppData', 'Local', 'Temp', 'sg-sni')
+    win = 'C:\\users\\%s\\AppData\\Local\\Temp\\sg-sni' % user
+    os.makedirs(unix, mode=0o700, exist_ok=True)
+    return unix, win
+
+
+def find_icon(name, theme_path=''):
+    """an icon name, as the icon themes give it: the theme path the item
+    names first, then the user's and the system's themes, then pixmaps"""
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return name if os.path.exists(name) else None
+    roots = [p for p in (theme_path or '').split(':') if p]
+    data = [os.path.expanduser('~/.local/share')] + (os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share').split(':')
+    roots += [os.path.expanduser('~/.icons')] + [os.path.join(d, 'icons') for d in data]
+    themes = ('hicolor', 'Adwaita', 'breeze', 'breeze-dark', 'Papirus', 'gnome', 'locolor')
+    best = None
+    for root in roots:
+        for cand in (os.path.join(root, name + '.png'), os.path.join(root, name + '.svg')):
+            if os.path.exists(cand):
+                return cand
+        for theme in themes:
+            for path in glob.glob(os.path.join(root, theme, '*', '*', name + '.*')) + \
+                    glob.glob(os.path.join(root, theme, '*', name + '.*')):
+                if not path.endswith(('.png', '.svg', '.xpm')):
+                    continue
+                m = re.search(r'/(\d+)x\d+/', path)
+                size = 1000 if 'scalable' in path else (int(m.group(1)) if m else 0)
+                score = (size >= ICON_PX, -abs(size - ICON_PX) if size != 1000 else -1)
+                if best is None or score > best[0]:
+                    best = (score, path)
+        if best:
+            return best[1]
+    for d in data:
+        for ext in ('.png', '.svg', '.xpm'):
+            cand = os.path.join(d, 'pixmaps', name + ext)
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
+def pixmap_png(pixmaps, dest):
+    """the item's own pixels (a(iiay): ARGB32, network order), the size
+    nearest the tray's, as a PNG"""
+    best = None
+    for w, h, data in pixmaps:
+        if w <= 0 or h <= 0 or len(data) < w * h * 4:
+            continue
+        score = (w >= ICON_PX, -abs(w - ICON_PX))
+        if best is None or score > best[0]:
+            best = (score, w, h, bytes(data))
+    if not best:
+        return False
+    _, w, h, argb = best
+    rgba = bytearray(w * h * 4)
+    rgba[0::4] = argb[1::4]
+    rgba[1::4] = argb[2::4]
+    rgba[2::4] = argb[3::4]
+    rgba[3::4] = argb[0::4]
+    pb = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(bytes(rgba)), GdkPixbuf.Colorspace.RGB, True, 8, w, h, w * 4)
+    pb.savev(dest, 'png', [], [])
+    return True
+
+
+def file_png(path, dest):
+    try:
+        pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, ICON_PX, ICON_PX, True)
+        pb.savev(dest, 'png', [], [])
+        return True
+    except GLib.Error as e:
+        log('icon %s: %s' % (path, e.message))
+        return False
+
+
+def menu_label(s):
+    """dbusmenu's mnemonic underscores as Windows' ampersands"""
+    out, i = [], 0
+    while i < len(s):
+        c = s[i]
+        if c == '_':
+            if i + 1 < len(s) and s[i + 1] == '_':
+                out.append('_')
+                i += 2
+                continue
+            out.append('&')
+        elif c == '&':
+            out.append('&&')
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def clean(s):
+    return re.sub(r'[\t\n\r\x1e\x1f]', ' ', s or '')
+
+
+class Item:
+    def __init__(self, bridge, key, bus_name, path):
+        self.bridge, self.key, self.bus_name, self.path = bridge, key, bus_name, path
+        self.iface = ITEM_IFACES[0]
+        self.menu_path = None
+        self.item_is_menu = False
+        self.subs = []
+        self.menu_subs = []
+        self.shown = False
+        self.serial = 0
+        con = bridge.con
+        for sig in ('NewIcon', 'NewAttentionIcon', 'NewOverlayIcon', 'NewTitle', 'NewToolTip', 'NewStatus'):
+            self.subs.append(con.signal_subscribe(bus_name, None, sig, path, None, Gio.DBusSignalFlags.NONE,
+                                                  lambda *a: self.refresh()))
+        self.watch = Gio.bus_watch_name_on_connection(con, bus_name, Gio.BusNameWatcherFlags.NONE, None,
+                                                      lambda *a: bridge.remove(self.key))
+        self.refresh()
+
+    def props(self):
+        for iface in ITEM_IFACES:
+            try:
+                r = self.bridge.con.call_sync(self.bus_name, self.path, 'org.freedesktop.DBus.Properties', 'GetAll',
+                                              GLib.Variant('(s)', (iface,)), GLib.VariantType('(a{sv})'),
+                                              Gio.DBusCallFlags.NONE, 3000, None)
+                p = r.unpack()[0]
+                if p:
+                    self.iface = iface
+                    return p
+            except GLib.Error as e:
+                last = e.message
+        log('props %s: %s' % (self.key, last))
+        return None
+
+    def refresh(self):
+        p = self.props()
+        if p is None:
+            return
+        status = p.get('Status', 'Active')
+        if status == 'Passive':
+            self.hide()
+            return
+        unix, win = self.bridge.cache
+        self.serial += 1
+        fname = 'i%d-%d.png' % (abs(hash(self.key)) % 100000000, self.serial)
+        dest = os.path.join(unix, fname)
+        attention = status == 'NeedsAttention'
+        ok = False
+        theme = p.get('IconThemePath', '')
+        if attention:
+            ok = pixmap_png(p.get('AttentionIconPixmap') or [], dest) or \
+                (find_icon(p.get('AttentionIconName'), theme) and file_png(find_icon(p.get('AttentionIconName'), theme), dest))
+        if not ok:
+            ok = pixmap_png(p.get('IconPixmap') or [], dest)
+        if not ok:
+            path = find_icon(p.get('IconName'), theme)
+            ok = bool(path) and file_png(path, dest)
+        tip = p.get('Title') or ''
+        tt = p.get('ToolTip')
+        if tt and len(tt) >= 4 and (tt[2] or tt[3]):
+            tip = tt[2] or tip
+            if tt[3] and tt[3] != tt[2]:
+                tip = '%s: %s' % (tip, re.sub(r'<[^>]*>', '', tt[3])) if tip else tt[3]
+        self.item_is_menu = bool(p.get('ItemIsMenu', False))
+        self.bridge.send('ADD %s\t%s\t%s' % (self.key, clean(tip)[:120], (win + '\\' + fname) if ok else ''))
+        self.shown = True
+        for old in glob.glob(os.path.join(unix, 'i%d-*.png' % (abs(hash(self.key)) % 100000000))):
+            if not old.endswith('-%d.png' % self.serial):
+                try:
+                    os.unlink(old)
+                except OSError:
+                    pass
+        menu = p.get('Menu')
+        if menu and menu != self.menu_path:
+            self.menu_path = menu
+            for s in self.menu_subs:
+                self.bridge.con.signal_unsubscribe(s)
+            self.menu_subs = [self.bridge.con.signal_subscribe(self.bus_name, 'com.canonical.dbusmenu', sig, menu, None,
+                                                               Gio.DBusSignalFlags.NONE, lambda *a: self.load_menu())
+                              for sig in ('LayoutUpdated', 'ItemsPropertiesUpdated')]
+        self.load_menu()
+        log('item %s tip=%r icon=%s menu=%s' % (self.key, tip, ok, self.menu_path))
+
+    def load_menu(self):
+        if not self.menu_path or not self.shown:
+            return
+        try:
+            r = self.bridge.con.call_sync(self.bus_name, self.menu_path, 'com.canonical.dbusmenu', 'GetLayout',
+                                          GLib.Variant('(iias)', (0, -1, [])), None, Gio.DBusCallFlags.NONE, 3000, None)
+        except GLib.Error as e:
+            log('menu %s: %s' % (self.key, e.message))
+            return
+        _rev, root = r.unpack()
+        recs = []
+
+        def walk(node, depth):
+            for child in node[2]:
+                cid, cp, _kids = child
+                if cp.get('visible', True) is False:
+                    continue
+                flags = ''
+                if cp.get('type') == 'separator':
+                    flags += 's'
+                if cp.get('enabled', True) is False:
+                    flags += 'd'
+                if cp.get('toggle-state', 0) == 1:
+                    flags += 'c'
+                if cp.get('toggle-type') == 'radio':
+                    flags += 'r'
+                if cp.get('children-display') == 'submenu' or child[2]:
+                    flags += 'm'
+                recs.append('%d\x1f%d\x1f%s\x1f%s' % (depth, cid, flags or '-', clean(menu_label(cp.get('label', '')))))
+                if child[2]:
+                    walk(child, depth + 1)
+        walk(root, 0)
+        self.bridge.send('MENU %s\t%s' % (self.key, '\x1e'.join(recs)))
+        log('menu %s: %d items' % (self.key, len(recs)))
+
+    def call(self, method, x, y):
+        def done(con, res):
+            try:
+                con.call_finish(res)
+                log('%s %s' % (method, self.key))
+            except GLib.Error as e:
+                log('%s %s failed: %s' % (method, self.key, e.message))
+                if method == 'Activate' and self.menu_path:
+                    self.bridge.send('SHOWMENU %s' % self.key)
+        self.bridge.con.call(self.bus_name, self.path, self.iface, method, GLib.Variant('(ii)', (x, y)),
+                             None, Gio.DBusCallFlags.NONE, 5000, None, done)
+
+    def activate(self, x, y):
+        if self.item_is_menu and self.menu_path:
+            self.bridge.send('SHOWMENU %s' % self.key)
+        else:
+            self.call('Activate', x, y)
+
+    def pick(self, item_id):
+        if not self.menu_path:
+            return
+        self.bridge.con.call(self.bus_name, self.menu_path, 'com.canonical.dbusmenu', 'Event',
+                             GLib.Variant('(isvu)', (item_id, 'clicked', GLib.Variant('i', 0), 0)),
+                             None, Gio.DBusCallFlags.NONE, 5000, None, None)
+        log('Event clicked %s %d' % (self.key, item_id))
+
+    def hide(self):
+        if self.shown:
+            self.bridge.send('DEL %s' % self.key)
+            self.shown = False
+
+    def close(self):
+        self.hide()
+        for s in self.subs + self.menu_subs:
+            self.bridge.con.signal_unsubscribe(s)
+        Gio.bus_unwatch_name(self.watch)
+
+
+class Bridge:
+    def __init__(self, exe_cmd):
+        self.loop = GLib.MainLoop()
+        self.items = {}
+        self.cache = cache_dirs()
+        self.proc = subprocess.Popen(exe_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        GLib.io_add_watch(self.proc.stdout.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, self.from_exe)
+        self.buf = b''
+        inject = os.environ.get('SG_SNI_BRIDGE_INJECT')
+        if inject:
+            self.inj_fd = os.open(inject, os.O_RDWR | os.O_NONBLOCK)
+            self.inj_buf = b''
+            GLib.io_add_watch(self.inj_fd, GLib.IO_IN, self.injected)
+        self.con = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.regs = []
+        for name in WATCHER_NAMES:
+            info = Gio.DBusNodeInfo.new_for_xml(WATCHER_XML % name).interfaces[0]
+            self.regs.append(self.con.register_object('/StatusNotifierWatcher', info, self.method, self.get_prop, None))
+            Gio.bus_own_name_on_connection(self.con, name, Gio.BusNameOwnerFlags.NONE,
+                                           lambda c, n: log('own %s' % n), lambda c, n: log('lost %s' % n))
+
+    def send(self, line):
+        try:
+            self.proc.stdin.write((line + '\n').encode('utf-8', 'replace'))
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            self.loop.quit()
+
+    def method(self, con, sender, path, iface, method, params, inv):
+        if method == 'RegisterStatusNotifierItem':
+            service = params.unpack()[0]
+            if service.startswith('/'):
+                bus_name, obj = sender, service
+            else:
+                bus_name, obj = service, '/StatusNotifierItem'
+            key = '%s%s' % (bus_name, obj)
+            inv.return_value(None)
+            if key not in self.items:
+                self.items[key] = Item(self, key, bus_name, obj)
+                for name in WATCHER_NAMES:
+                    con.emit_signal(None, '/StatusNotifierWatcher', name, 'StatusNotifierItemRegistered',
+                                    GLib.Variant('(s)', (key,)))
+            log('register %s (from %s)' % (key, sender))
+        elif method == 'RegisterStatusNotifierHost':
+            inv.return_value(None)
+        else:
+            inv.return_dbus_error('org.freedesktop.DBus.Error.UnknownMethod', method)
+
+    def get_prop(self, con, sender, path, iface, prop):
+        if prop == 'RegisteredStatusNotifierItems':
+            return GLib.Variant('as', list(self.items))
+        if prop == 'IsStatusNotifierHostRegistered':
+            # SG_MUTANT_SNI_NO_HOST: no host -- Qt then draws its icon in the X tray nothing shows
+            return GLib.Variant('b', not os.environ.get('SG_MUTANT_SNI_NO_HOST'))
+        if prop == 'ProtocolVersion':
+            return GLib.Variant('i', 0)
+        return None
+
+    def remove(self, key):
+        it = self.items.pop(key, None)
+        if it:
+            it.close()
+            for name in WATCHER_NAMES:
+                self.con.emit_signal(None, '/StatusNotifierWatcher', name, 'StatusNotifierItemUnregistered',
+                                     GLib.Variant('(s)', (key,)))
+            log('gone %s' % key)
+
+    def from_exe(self, fd, cond):
+        data = os.read(fd, 4096) if cond & GLib.IO_IN else b''
+        if not data:
+            log('icon program ended')
+            self.loop.quit()
+            return False
+        self.buf += data
+        while b'\n' in self.buf:
+            line, self.buf = self.buf.split(b'\n', 1)
+            self.command(line.decode('utf-8', 'replace').strip())
+        return True
+
+    def injected(self, fd, cond):
+        try:
+            self.inj_buf += os.read(fd, 4096)
+        except BlockingIOError:
+            return True
+        while b'\n' in self.inj_buf:
+            line, self.inj_buf = self.inj_buf.split(b'\n', 1)
+            self.send(line.decode('utf-8', 'replace'))
+        return True
+
+    def command(self, line):
+        parts = line.split(' ')
+        if parts[0] == 'READY':
+            log('icon program ready')
+            return
+        if len(parts) < 3:
+            return
+        it = self.items.get(parts[1])
+        if not it:
+            return
+        try:
+            if parts[0] == 'ACT':
+                it.activate(int(parts[2]), int(parts[3]))
+            elif parts[0] == 'SEC':
+                it.call('SecondaryActivate', int(parts[2]), int(parts[3]))
+            elif parts[0] == 'CTX':
+                it.call('ContextMenu', int(parts[2]), int(parts[3]))
+            elif parts[0] == 'PICK':
+                it.pick(int(parts[2]))
+        except (ValueError, IndexError):
+            pass
+
+    def run(self):
+        self.loop.run()
+        for it in list(self.items.values()):
+            it.close()
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+
+
+def main():
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1:]
+    else:
+        exe = os.path.join(os.environ.get('SG_SHELL_DIR', '/usr/libexec/stained-glass/shell'), 'sg-sni64.exe')
+        cmd = ['wine', exe]
+    Bridge(cmd).run()
+
+
+if __name__ == '__main__':
+    main()

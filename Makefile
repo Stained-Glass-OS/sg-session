@@ -223,6 +223,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	install -m 0755 lib/sg-apt-sources $(LIBDIR)
 	@# the kiosk app (Settings > Accounts > Kiosk): Python, so not in LIBS
 	install -m 0755 lib/sg-kiosk $(LIBDIR)
+	install -m 0755 lib/sg-sni-bridge $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# Windows programs opened from Linux programs (Firefox's downloads): sg-open-windows-file
@@ -363,6 +364,8 @@ lint:
 	@sh test/backdrop-first-test.sh
 	@sh test/keep-running-test.sh
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-kiosk
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-sni-bridge
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' test/sni-item.py
 	@sh test/kiosk-test.sh
 	@sh test/wineserver-wait-test.sh
 	@sh test/powershell-cmd-test.sh
@@ -476,6 +479,11 @@ test-polkit: procagent polkitagent
 
 # The session starts the desktop's compositor (sg_start_deskcomp), and the
 # test fails without the launch (its --mutant).
+# Linux programs' tray icons: sg-sni-bridge (the session's StatusNotifierWatcher and host) with
+# sg-shell's sg-sni64.exe (SG_SNI_EXE; SG_SNI_MUT its SNI_NO_MENU mutant) in a scratch prefix.
+test-sni:
+	@sh test/sni-test.sh
+
 test-deskcomp-start:
 	@sh test/deskcomp-start-test.sh
 	@! sh test/deskcomp-start-test.sh --mutant >/dev/null
