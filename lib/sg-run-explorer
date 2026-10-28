@@ -246,6 +246,7 @@ _sgstart="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-start64.exe"
 _sgnet="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-netflyout64.exe"
 _sgdictate="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-dictate64.exe"
 _sgbattery="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-battery64.exe"
+_sgcalendar="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-calendar64.exe"
 _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
 _sgnotify="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-notify64.exe"
 _sgsni="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-sni64.exe"
@@ -318,6 +319,9 @@ sg_shell_helpers() {
                 sg_helper sg-volume64.exe _n_vol wine "$_sgvolume"
             fi
             [ -f "$_sgnotify" ] && sg_helper sg-notify64.exe _n_ntf wine "$_sgnotify"
+            # the taskbar clock's calendar, hidden until the clock is clicked:
+            # running already, it opens at once (David 2026-10-28)
+            [ -f "$_sgcalendar" ] && sg_helper sg-calendar64.exe _n_cal wine "$_sgcalendar" --background
             # the session's polkit agent (sg-session-start starts it): gone,
             # a Linux program that asks for an administrator (GSmartControl,
             # GParted) was refused without a prompt until the next sign-in

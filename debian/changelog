@@ -1,3 +1,10 @@
+sg-session (0.1.0-228) unstable; urgency=medium
+
+  * The taskbar clock's calendar (sg-shell's sg-calendar) kept running,
+    hidden, so a click on the clock opens it at once. test-calendar-keeper.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 15:47:19 -0700
+
 sg-session (0.1.0-227) unstable; urgency=medium
 
   * At boot the machine's Root store gets Windows' code signing and time

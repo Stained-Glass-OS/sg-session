@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -530,6 +530,12 @@ test-notify-helper:
 .PHONY: test-codesign-roots-hook
 test-codesign-roots-hook:
 	@sh test/codesign-roots-hook-test.sh
+
+# The taskbar clock's calendar is kept running, hidden (sg-calendar).
+.PHONY: test-calendar-keeper
+test-calendar-keeper:
+	@sh test/calendar-keeper-test.sh
+	@! sh test/calendar-keeper-test.sh --mutant NOKEEP >/dev/null && echo "PASS  mutant NOKEEP caught"
 
 .PHONY: test-polkit-keeper
 test-polkit-keeper:
