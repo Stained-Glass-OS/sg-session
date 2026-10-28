@@ -71,6 +71,21 @@ sg_system_temp() {
 }
 sg_system_temp
 
+# Windows' code signing and time stamping roots (David 2026-10-28: "like
+# Windows"): the roots Microsoft's root program trusts for those uses, as CCADB
+# publishes them, that the host's store lacks -- VeriSign Class 3 G5, which GOM
+# Player's signatures chain to, DigiCert's and Actalis' code signing roots.
+# sg-shell's sg-roots puts them into the machine's Root store, each marked with
+# its uses only (wine-sg 7602 honours that: never a web server's), removes the
+# ones the bundle dropped, and leaves alone what it did not add. In the
+# background: the login screen does not wait for it.
+_roots_tool="${SG_LIBEXEC:-/usr/libexec/stained-glass}/shell/sg-roots64.exe"
+_roots_pem="${SG_CODESIGN_ROOTS:-/usr/share/stained-glass/codesign-roots.pem}"
+if [ -f "$_roots_tool" ] && [ -s "$_roots_pem" ]; then
+    sg_log "the machine's code signing roots"
+    ( timeout 300 wine "$_roots_tool" --sync "Z:$_roots_pem" 2>/dev/null | while IFS= read -r _l; do sg_log "$_l"; done ) &
+fi
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this

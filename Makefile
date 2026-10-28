@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -526,6 +526,11 @@ test-notify-helper:
 
 # The session's polkit agent is kept running with the shell's helpers
 # (mutant: the keeper without it).
+# Boot syncs the code signing roots into the machine store (sg-roots), when installed.
+.PHONY: test-codesign-roots-hook
+test-codesign-roots-hook:
+	@sh test/codesign-roots-hook-test.sh
+
 .PHONY: test-polkit-keeper
 test-polkit-keeper:
 	@sh test/polkit-keeper-test.sh
