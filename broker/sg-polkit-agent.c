@@ -13,7 +13,8 @@
  * agent of this process's session. The request it sends the broker: the
  * working directory "@polkit", then POLKIT_COOKIE, POLKIT_ACTION and
  * POLKIT_IDENTITIES (the uids polkit would accept), then what to show as the
- * program: the program pkexec runs and its arguments, or polkit's message.
+ * program: the program pkexec runs and its arguments, the program its action
+ * names (exec.path), or polkit's message.
  *
  * Copyright (C) 2026 Stained Glass OS contributors
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -55,6 +56,7 @@ struct request {
 
 static GMutex g_lock;
 static GList *g_requests;
+static GDBusConnection *g_bus;
 static const char *g_sock = "/run/stained-glass-broker/broker.sock";
 
 static size_t put(char *blob, size_t off, size_t max, const char *s)
@@ -73,6 +75,44 @@ static int write_full(int fd, const void *buf, size_t len)
         p += n; len -= (size_t)n;
     }
     return 0;
+}
+
+/* The program a pkexec action runs, from its policy's
+ * org.freedesktop.policykit.exec.path annotation. A program with its own
+ * action (GSmartControl, "Authentication is required to run GSmartControl")
+ * gets neither pkexec's details nor a quoted path in its message, and the
+ * prompt showed the message's first word as the program. */
+static int action_exec_path(const char *action, char *out, size_t size)
+{
+#ifdef SG_MUTANT_POLKIT_NO_EXEC_PATH
+    (void)action; (void)out; (void)size;
+    return 0;
+#else
+    GVariant *ret, *annotations;
+    GVariantIter *iter;
+    const char *id, *path;
+    int found = 0;
+
+    if (!g_bus || !action) return 0;
+    ret = g_dbus_connection_call_sync(g_bus, "org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority",
+                                      "org.freedesktop.PolicyKit1.Authority", "EnumerateActions",
+                                      g_variant_new("(s)", ""), G_VARIANT_TYPE("(a(ssssssuuua{ss}))"),
+                                      G_DBUS_CALL_FLAGS_NONE, 10000, NULL, NULL);
+    if (!ret) return 0;
+    g_variant_get(ret, "(a(ssssssuuua{ss}))", &iter);
+    while (!found && g_variant_iter_next(iter, "(&s&s&s&s&s&suuu@a{ss})", &id, NULL, NULL, NULL, NULL, NULL,
+                                         NULL, NULL, NULL, &annotations)) {
+        if (!strcmp(id, action) && g_variant_lookup(annotations, "org.freedesktop.policykit.exec.path", "&s", &path)
+            && *path == '/' && strlen(path) < size) {
+            memcpy(out, path, strlen(path) + 1);
+            found = 1;
+        }
+        g_variant_unref(annotations);
+    }
+    g_variant_iter_free(iter);
+    g_variant_unref(ret);
+    return found;
+#endif
 }
 
 /* Asks the broker; 0 = authorised (polkitd has the answer), 1 = declined,
@@ -101,6 +141,8 @@ static int ask_broker(struct request *req, const char *action, const char *messa
         if (n && n < sizeof(quoted)) { memcpy(quoted, program + 1, n); quoted[n] = 0; program = quoted; }
         else program = NULL;
     }
+    char exec_path[1024];
+    if (!program && action_exec_path(action, exec_path, sizeof(exec_path))) program = exec_path;
 
     /* the uids polkit would take */
     g_variant_iter_init(&iter, identities);
@@ -240,6 +282,7 @@ int main(void)
         fprintf(stderr, "sg-polkit-agent: %s\n", error->message);
         return 1;
     }
+    g_bus = bus;
     node = g_dbus_node_info_new_for_xml(introspection, NULL);
     if (!g_dbus_connection_register_object(bus, AGENT_PATH, node->interfaces[0], &vtable, NULL, NULL, &error)) {
         fprintf(stderr, "sg-polkit-agent: %s\n", error->message);

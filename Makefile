@@ -475,7 +475,8 @@ test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session
 # broker or the monitor checks skipped).
 .PHONY: test-polkit
 test-polkit: procagent polkitagent
-	@sh test/polkit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+	@sh test/polkit-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -ne 0 ] && exit $$rc; \
+	if SG_MUTANT=NO_EXEC_PATH sh test/polkit-test.sh >/dev/null 2>&1; then echo "polkit-test: mutant NO_EXEC_PATH survived"; exit 1; fi
 
 # The session starts the desktop's compositor (sg_start_deskcomp), and the
 # test fails without the launch (its --mutant).

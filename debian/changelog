@@ -1,3 +1,13 @@
+sg-session (0.1.0-224) unstable; urgency=medium
+
+  * Polkit agent: a program with its own polkit action (GSmartControl)
+    showed as "Authentication" in the administrator prompt, with polkit's
+    message as its location. The agent now takes the program from the
+    action's org.freedesktop.policykit.exec.path annotation
+    (EnumerateActions). Gate test/polkit-test.sh, mutant NO_EXEC_PATH.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 04:00:14 -0700
+
 sg-session (0.1.0-223) unstable; urgency=medium
 
   * Depends on gstreamer1.0-pipewire: screen recorders record the Wayland

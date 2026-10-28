@@ -9,10 +9,18 @@
 #   2. No: no answer, the agent says Cancelled
 #   3. Yes from someone polkit did not ask for: no answer, Failed
 #   4. the agent is the SYSTEM account's: the monitor gives no answer
-#   and the prompt names the program from pkexec's message.
+#   and the prompt names the program from pkexec's message, or, for a
+#   program's own action (GSmartControl's), from its policy's exec.path.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 B=${SG_BROKER_BUILD:-$HERE/build}
+# the mutant: an agent that does not read the action's exec.path
+if [ -n "${SG_MUTANT:-}" ]; then
+    MB=$(mktemp -d); cp "$B"/sg-brokerd "$B"/sg-polkit-respond "$MB"/
+    cc -O2 -DSG_MUTANT_POLKIT_$SG_MUTANT -o "$MB/sg-polkit-agent" "$HERE/broker/sg-polkit-agent.c" \
+        $(pkg-config --cflags --libs gio-2.0) || exit 2
+    B=$MB
+fi
 for f in sg-brokerd sg-polkit-agent sg-polkit-respond; do
     [ -x "$B/$f" ] || { echo "SKIP: build $f first (make procagent polkitagent)"; exit 77; }
 done
@@ -40,10 +48,13 @@ export DBUS_SYSTEM_BUS_ADDRESS
 [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ] || { fail "no private bus"; exit 1; }
 
 # one pkexec-like request: $1 case name, $2 consent (yes/no), $3 the uids
-# polkit asks for, $4 the SYSTEM account
+# polkit asks for, $4 the SYSTEM account; FIXTURE_MSG and FIXTURE_ACTION
+# (action and exec.path) for a program's own action
 ask() {
     log="$T/$1.log"; rm -f "$T/sock"
-    "$T/fixture" "$log" "cookie-$1" "$3" "Authentication is needed to run \`/usr/sbin/gparted' as the super user" &
+    # shellcheck disable=SC2086
+    "$T/fixture" "$log" "cookie-$1" "$3" \
+        "${FIXTURE_MSG:-Authentication is needed to run \`/usr/sbin/gparted' as the super user}" ${FIXTURE_ACTION:-} &
     echo $! >> "$T/pids"
     for _ in $(seq 20); do grep -q READY "$log" 2>/dev/null && break; sleep 0.2; done
     SG_BROKER_TEST=1 SG_BROKER_TEST_CONSENT="$2" SG_BROKER_FOREGROUND=1 SG_BROKER_ONCE=1 \
@@ -76,5 +87,13 @@ ask system yes "$uid" "$me"
 ! grep -q '^RESPONSE' "$T/system.log" && grep -qx 'BEGIN org.freedesktop.PolicyKit1.Error.Failed' "$T/system.log" \
     && pass "an agent of the SYSTEM account's: the monitor gives polkitd no answer" || fail "system: $(tr '\n' ' ' < "$T/system.log")"
 
+: > "$T/brokerd.log"
+FIXTURE_MSG="Authentication is required to run GSmartControl" \
+FIXTURE_ACTION="org.gsmartcontrol /usr/sbin/gsmartcontrol" ask own yes "$uid" nobody
+grep -q 'polkit request from .*org.gsmartcontrol (/usr/sbin/gsmartcontrol)' "$T/brokerd.log" && grep -qx 'BEGIN ok' "$T/own.log" \
+    && pass "a program's own action: the prompt names the program from its exec.path, not polkit's message" \
+    || fail "own action: $(grep polkit "$T/brokerd.log" | head -2)"
+
 grep -q '^REGISTERED' "$T/yes.log" && pass "the agent registers with polkit" || fail "no registration"
+[ -n "${MB:-}" ] && rm -rf "$MB"
 exit $RC

@@ -1,12 +1,15 @@
 /* A stand-in polkitd for test/polkit-test.sh, on a private bus.
  *
- *   polkit-fixture LOG COOKIE IDENTITY_UIDS MESSAGE
+ *   polkit-fixture LOG COOKIE IDENTITY_UIDS MESSAGE [ACTION EXEC_PATH]
  *
  * Owns org.freedesktop.PolicyKit1 and serves its Authority's
- * RegisterAuthenticationAgent and AuthenticationAgentResponse2. When an agent
- * registers, asks it BeginAuthentication for org.freedesktop.policykit.exec
- * with COOKIE, MESSAGE and the unix-user identities IDENTITY_UIDS
- * (comma-separated), as polkitd does for pkexec. Appends to LOG:
+ * RegisterAuthenticationAgent, AuthenticationAgentResponse2 and
+ * EnumerateActions (one action: ACTION, with EXEC_PATH as its
+ * org.freedesktop.policykit.exec.path annotation). When an agent registers,
+ * asks it BeginAuthentication for ACTION (default
+ * org.freedesktop.policykit.exec) with COOKIE, MESSAGE and the unix-user
+ * identities IDENTITY_UIDS (comma-separated), as polkitd does for pkexec.
+ * Appends to LOG:
  *   REGISTERED <subject kind>
  *   RESPONSE <agent uid> <cookie> <identity uid>   (from root, in real life)
  *   BEGIN ok | BEGIN <D-Bus error name>
@@ -29,11 +32,15 @@ static const char introspection[] =
     "    <method name='AuthenticationAgentResponse2'>"
     "      <arg type='u' direction='in'/><arg type='s' direction='in'/><arg type='(sa{sv})' direction='in'/>"
     "    </method>"
+    "    <method name='EnumerateActions'>"
+    "      <arg type='s' direction='in'/><arg type='a(ssssssuuua{ss})' direction='out'/>"
+    "    </method>"
     "  </interface>"
     "</node>";
 
 static FILE *log_file;
 static const char *g_cookie, *g_ids, *g_message;
+static const char *g_action = "org.freedesktop.policykit.exec", *g_exec_path = "";
 static GMainLoop *g_loop;
 
 static void begin_done(GObject *source, GAsyncResult *res, gpointer data)
@@ -67,7 +74,7 @@ static void begin(GDBusConnection *bus, const char *agent, const char *path)
     g_variant_builder_init(&details, G_VARIANT_TYPE("a{ss}"));
     g_variant_builder_add(&details, "{ss}", "polkit.message", g_message);
     g_dbus_connection_call(bus, agent, path, "org.freedesktop.PolicyKit1.AuthenticationAgent", "BeginAuthentication",
-                           g_variant_new("(sssa{ss}sa(sa{sv}))", "org.freedesktop.policykit.exec", g_message,
+                           g_variant_new("(sssa{ss}sa(sa{sv}))", g_action, g_message,
                                          "", &details, g_cookie, &ids),
                            NULL, G_DBUS_CALL_FLAGS_NONE, 60000, NULL, begin_done, NULL);
 }
@@ -95,6 +102,15 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *pa
         fflush(log_file);
         g_variant_unref(details);
         g_dbus_method_invocation_return_value(invocation, NULL);
+    } else if (!strcmp(method, "EnumerateActions")) {
+        GVariantBuilder actions, annotations;
+        g_variant_builder_init(&annotations, G_VARIANT_TYPE("a{ss}"));
+        if (*g_exec_path)
+            g_variant_builder_add(&annotations, "{ss}", "org.freedesktop.policykit.exec.path", g_exec_path);
+        g_variant_builder_init(&actions, G_VARIANT_TYPE("a(ssssssuuua{ss})"));
+        g_variant_builder_add(&actions, "(ssssssuuua{ss})", g_action, "Run a program", g_message, "fixture", "",
+                              "", 2u, 2u, 2u, &annotations);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(a(ssssssuuua{ss}))", &actions));
     } else
         g_dbus_method_invocation_return_dbus_error(invocation, "org.freedesktop.DBus.Error.UnknownMethod", method);
 }
@@ -113,8 +129,9 @@ static void acquired(GDBusConnection *bus, const char *name, gpointer data)
 
 int main(int argc, char **argv)
 {
-    if (argc != 5 || !(log_file = fopen(argv[1], "a"))) return 2;
+    if ((argc != 5 && argc != 7) || !(log_file = fopen(argv[1], "a"))) return 2;
     g_cookie = argv[2]; g_ids = argv[3]; g_message = argv[4];
+    if (argc == 7) { g_action = argv[5]; g_exec_path = argv[6]; }
     g_bus_own_name(G_BUS_TYPE_SYSTEM, "org.freedesktop.PolicyKit1", G_BUS_NAME_OWNER_FLAGS_NONE, NULL, acquired,
                    NULL, NULL, NULL);
     g_loop = g_main_loop_new(NULL, FALSE);
