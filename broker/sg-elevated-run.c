@@ -209,25 +209,32 @@ static void rm_dir(const char *dir, const char *cookie)
     rmdir(dir);
 }
 
-/* The requester's light or dark modes and accent colour (sg-elevate reads them
- * from the user's settings): on Windows an elevated program runs as the same
- * user and looks like the user's other programs; here it runs as the SYSTEM
- * account, so the choices are copied into that account's settings before it
- * starts. Only exact values are taken -- 0 or 1, eight hex digits -- and they
- * reach Wine through a file of this account's own, never a command line or a
- * shell. */
-static int valid_bit(const char *v) { return v && (!strcmp(v, "0") || !strcmp(v, "1")); }
-static int valid_hex8(const char *v)
+/* The elevated program is the person who asked, elevated, as on Windows
+ * (wine-sg 7601): their SID, HKCU and profile, Administrators -- not the SYSTEM
+ * account's, though it runs as that account on disk. What an installer starts
+ * when done (MediaMonkey, Dropbox) is then the person's too. */
+static void elevated_identity(uid_t uid)
 {
-    int i;
-    if (!v || strlen(v) != 8) return 0;
-    for (i = 0; i < 8; i++) if (!strchr("0123456789abcdefABCDEF", v[i])) return 0;
-    return 1;
+    struct passwd *rpw;
+#ifdef SG_MUTANT_ELEVATED_AS_SYSTEM
+    return;
+#endif
+    setenv("SG_ELEVATED_IDENTITY", "1", 1);
+    /* the person's name: USERNAME and USERPROFILE (C:\users\<name>) */
+    if ((rpw = getpwuid(uid)) && rpw->pw_name && rpw->pw_name[0]) {
+        setenv("USER", rpw->pw_name, 1);
+        setenv("LOGNAME", rpw->pw_name, 1);
+    }
 }
 
-static void apply_user_look(void)
+/* This display has no taskbar: Wine's stand-in tray, a small untitled window
+ * at the top left, appeared once the program added a notification icon
+ * (Microsoft 365 setup's) -- no tray here, as on a secure desktop. Its own
+ * desktop's setting only: the HKCU it is written to is the person's (7601),
+ * whose taskbar keeps its tray. The person's light or dark modes and accent
+ * colour are theirs already; sg-elevate's copies are dropped. */
+static void apply_user_look(const char *desktop)
 {
-    const char *apps = getenv("SG_USER_APPS_LIGHT"), *sys = getenv("SG_USER_SYSTEM_LIGHT"), *accent = getenv("SG_USER_ACCENT");
     char path[] = "/tmp/sg-elevated-look-XXXXXX";
     FILE *f;
     int fd, st;
@@ -235,18 +242,7 @@ static void apply_user_look(void)
 
     if ((fd = mkstemp(path)) < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) { close(fd); unlink(path); } goto done; }
     fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n");
-    /* This display has no taskbar: Wine's stand-in tray, a small untitled
-     * window at the top left, appeared once the program added a notification
-     * icon (Microsoft 365 setup's) -- no tray here, as on a secure desktop. */
-    fprintf(f, "[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\r\n\"ShowSystray\"=dword:00000000\r\n\r\n");
-    if (valid_bit(apps) || valid_bit(sys)) {
-        fprintf(f, "[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize]\r\n");
-        if (valid_bit(apps)) fprintf(f, "\"AppsUseLightTheme\"=dword:0000000%s\r\n", apps);
-        if (valid_bit(sys)) fprintf(f, "\"SystemUsesLightTheme\"=dword:0000000%s\r\n", sys);
-        fprintf(f, "\r\n");
-    }
-    if (valid_hex8(accent))
-        fprintf(f, "[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\DWM]\r\n\"AccentColor\"=dword:%s\r\n\r\n", accent);
+    fprintf(f, "[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops\\%s]\r\n\"ShowSystray\"=dword:00000000\r\n\r\n", desktop);
     fclose(f);
     if ((pid = fork()) == 0) {
         char unixpath[64];
@@ -456,7 +452,8 @@ int main(int argc, char **argv)
         char sess[24];
         snprintf(sess, sizeof(sess), "%ld", uid_arg);
         setenv("SG_SESSION_UID", sess, 1);
-        apply_user_look();
+        elevated_identity((uid_t)uid_arg);
+        apply_user_look(desk + strlen("WinSta0\\"));
     }
 
     {

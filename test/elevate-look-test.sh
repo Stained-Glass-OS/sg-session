@@ -1,9 +1,11 @@
 #!/bin/sh
-# An elevated program looks like the user's others (light or dark, accent):
-# sg-elevate reads the user's choices and the broker passes them on;
-# sg-elevated-run takes only exact values -- 0 or 1, eight hex digits -- and
-# writes them into the SYSTEM account's settings through a file of its own,
-# before the program starts. A stand-in wine records what it was given.
+# An elevated program is the person who asked, elevated (wine-sg 7601): sg-elevated-run
+# asks Wine for the person's elevated identity (SG_ELEVATED_IDENTITY=1, USER and LOGNAME
+# the person's), so it has their HKCU -- and with it their light or dark modes and accent,
+# which are no longer copied anywhere. What it still writes, into that HKCU, is its own
+# display's no-tray setting: under the elevated desktop's own key, never Explorer's global
+# one, which would take the tray off the person's taskbar. A stand-in wine records the
+# .reg it was given. Mutant SG_MUTANT_ELEVATED_AS_SYSTEM must fail the identity check.
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT INT TERM
@@ -13,9 +15,18 @@ cat > "$T/driver.c" <<EOC
 #define main elevated_run_main
 #include "$HERE/broker/sg-elevated-run.c"
 #undef main
-int main(void) { apply_user_look(); printf("left %s\n", getenv("SG_USER_ACCENT") ? "set" : "unset"); return 0; }
+int main(void)
+{
+    elevated_identity(getuid());
+    apply_user_look("sg-elevated-7");
+    printf("identity %s\nuser %s\nlogname %s\nleft %s\n", getenv("SG_ELEVATED_IDENTITY") ? getenv("SG_ELEVATED_IDENTITY") : "-",
+           getenv("USER") ? getenv("USER") : "-", getenv("LOGNAME") ? getenv("LOGNAME") : "-",
+           getenv("SG_USER_ACCENT") ? "set" : "unset");
+    return 0;
+}
 EOC
 cc -O1 -o "$T/driver" "$T/driver.c" 2>"$T/cc.log" || { echo "SKIP: cannot build the driver"; cat "$T/cc.log"; exit 77; }
+cc -O1 -DSG_MUTANT_ELEVATED_AS_SYSTEM -o "$T/driver-mut" "$T/driver.c" 2>>"$T/cc.log" || { echo "FAIL  the mutant does not build"; exit 1; }
 mkdir "$T/bin"
 cat > "$T/bin/wine" <<EOW
 #!/bin/sh
@@ -23,29 +34,25 @@ cat > "$T/bin/wine" <<EOW
 cp "\${3#Z:}" "$T/imported.reg"
 EOW
 chmod 755 "$T/bin/wine"
-run() { rm -f "$T/imported.reg"; env PATH="$T/bin:$PATH" "$@" "$T/driver"; }
+me=$(id -un)
+run() { d=$1; shift; rm -f "$T/imported.reg"; env PATH="$T/bin:$PATH" USER=sgsystem LOGNAME=sgsystem "$@" "$T/$d"; }
+v() { printf '%s\n' "$1" | sed -n "s/^$2 //p" | head -1; }
 
-out=$(run env SG_USER_APPS_LIGHT=0 SG_USER_SYSTEM_LIGHT=0 SG_USER_ACCENT=ff3e8910)
+out=$(run driver env SG_USER_APPS_LIGHT=0 SG_USER_SYSTEM_LIGHT=0 SG_USER_ACCENT=ff3e8910)
+[ "$(v "$out" identity)" = 1 ] && pass "it asks Wine for the person's elevated identity (SG_ELEVATED_IDENTITY=1)" || fail "identity: $out"
+[ "$(v "$out" user)" = "$me" ] && [ "$(v "$out" logname)" = "$me" ] \
+    && pass "...under the person's name ($me), not the SYSTEM account's" || fail "name: $(v "$out" user) $(v "$out" logname)"
 r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
-echo "$r" | grep -qx '"AppsUseLightTheme"=dword:00000000' && echo "$r" | grep -qx '"SystemUsesLightTheme"=dword:00000000' \
-    && echo "$r" | grep -qx '"AccentColor"=dword:ff3e8910' && echo "$r" | grep -q 'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\DWM' \
-    && pass "the user's dark modes and green accent go into the SYSTEM account's settings" || fail "imported: $r"
-[ "$out" = "left unset" ] && pass "and the variables do not reach the program" || fail "left: $out"
-run env SG_USER_APPS_LIGHT='1"
-[HKEY_LOCAL_MACHINE\Evil]' SG_USER_ACCENT='ff3e8910"=x' >/dev/null
-# the file is written whatever was given (ShowSystray=0: no stand-in tray on
-# the elevated display, b737bb8) -- but nothing hostile gets into it
-r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
-! echo "$r" | grep -q 'Evil\|=x\|AppsUseLightTheme\|AccentColor' \
-    && pass "anything but 0, 1 or eight hex digits is ignored (no injection into the .reg)" \
-    || fail "a hostile value was written: $r"
-run env SG_USER_APPS_LIGHT=1 >/dev/null
-r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
-echo "$r" | grep -qx '"AppsUseLightTheme"=dword:00000001' && ! echo "$r" | grep -q AccentColor \
-    && pass "only what was given is written" || fail "partial: $r"
-run env >/dev/null
-r=$(tr -d '\r' < "$T/imported.reg" 2>/dev/null)
-echo "$r" | grep -qx '"ShowSystray"=dword:00000000' && ! echo "$r" | grep -q 'LightTheme\|AccentColor' \
-    && pass "nothing given: only the elevated display's no-tray setting is written" || fail "nothing given: $r"
+echo "$r" | grep -qx '\[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops\\sg-elevated-7\]' && echo "$r" | grep -qx '"ShowSystray"=dword:00000000' \
+    && pass "its own display (sg-elevated-7) has no stand-in tray" || fail "imported: $r"
+! echo "$r" | grep -qx '\[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\]' \
+    && pass "...and the person's taskbar keeps its tray (Explorer's global setting untouched)" || fail "the global ShowSystray was written: $r"
+! echo "$r" | grep -q 'AppsUseLightTheme\|SystemUsesLightTheme\|AccentColor' \
+    && pass "the person's own modes and accent are not overwritten with copies" || fail "look copied: $r"
+[ "$(v "$out" left)" = unset ] && pass "and sg-elevate's copies do not reach the program" || fail "left: $out"
+
+out=$(run driver-mut env)
+[ "$(v "$out" identity)" != 1 ] && [ "$(v "$out" user)" = sgsystem ] \
+    && pass "MUTANT ELEVATED_AS_SYSTEM: the program stays the SYSTEM account (gate catches it)" || fail "mutant: $out"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

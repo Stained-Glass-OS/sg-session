@@ -50,6 +50,23 @@ if command -v setfacl >/dev/null 2>&1; then
         || fail "SYSTEM cannot read Downloads/setup.exe: $(getfacl -p "$P/Downloads" 2>&1 | tr '\n' ' ')"
     runuser -u nobody -- sh -c 'printf y > "$1/Downloads/by-system.txt"' sh "$P" && pass "and write in the profile" \
         || fail "SYSTEM cannot write in Downloads"
+    # an elevated program is the person (wine-sg 7601): what it makes in the
+    # profile, as SYSTEM on disk, stays theirs -- a file, and a folder of
+    # settings with a file in it, as an installer's AppData
+    runuser -u nobody -- sh -c 'umask 077; mkdir -p "$1/AppData/Roaming/Prog" && printf z > "$1/AppData/Roaming/Prog/settings.ini"' sh "$P"
+    runuser -u "$user" -- sh -c 'cat "$1/Downloads/by-system.txt" >/dev/null && printf w >> "$1/Downloads/by-system.txt" &&
+        printf v >> "$1/AppData/Roaming/Prog/settings.ini" && mkdir "$1/AppData/Roaming/Prog/more" &&
+        rm "$1/AppData/Roaming/Prog/settings.ini"' sh "$P" \
+        && pass "what SYSTEM made in the profile the person reads, changes and deletes" \
+        || fail "the person cannot use SYSTEM's files: $(getfacl -p "$P/AppData/Roaming/Prog" 2>&1 | tr '\n' ' ')"
+    # a profile from before (marker -2): its next sign-in gives the person's entry
+    rm -f "$P/AppData/Local/Stained Glass/system-access-3"
+    setfacl -R -x "d:u:$user" -x "u:$user" "$P" 2>/dev/null
+    : > "$P/AppData/Local/Stained Glass/system-access-2"
+    run
+    runuser -u nobody -- sh -c 'umask 077; mkdir -p "$1/AppData/Roaming/Old" && printf z > "$1/AppData/Roaming/Old/a.ini"' sh "$P"
+    runuser -u "$user" -- sh -c 'printf v >> "$1/AppData/Roaming/Old/a.ini"' sh "$P" \
+        && pass "...in a profile from before too, after its next sign-in" || fail "older profile: $(getfacl -p "$P/AppData/Roaming" 2>&1 | tr '\n' ' ')"
     other=$(getent passwd | awk -F: -v u="$user" '$3 >= 1000 && $3 < 60000 && $1 != u {print $1; exit}')
     if [ -n "$other" ]; then
         runuser -u "$other" -- test -r "$P/Downloads/setup.exe" 2>/dev/null && fail "another user ($other) can read it" \

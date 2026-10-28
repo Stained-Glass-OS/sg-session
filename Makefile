@@ -851,6 +851,10 @@ test-login: greeter
 .PHONY: test-profile
 test-profile:
 	sudo sh test/profile-sendto-test.sh
+	@# mutant: no entry for the person -- what SYSTEM makes in the profile is not theirs (must fail)
+	@sed 's/ -m "u:\$$3:rwX" -m "d:u:\$$3:rwX"//g' bin/sg-profile-create > /var/tmp/sg-profile-create.mut
+	@! sudo env SG_PROFILE_CREATE=/var/tmp/sg-profile-create.mut sh test/profile-sendto-test.sh > /var/tmp/profile-mut.log 2>&1 \
+	    && echo "PASS  mutant PROFILE_NO_OWNER_ENTRY caught" || { echo "FAIL  mutant PROFILE_NO_OWNER_ENTRY passed"; exit 1; }
 
 # Disk Management's partition changes for real, on a loop device only (needs sudo).
 # Restore points, going back, and converting an ext4 system drive, for real on

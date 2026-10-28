@@ -1,3 +1,13 @@
+sg-session (0.1.0-226) unstable; urgency=medium
+
+  * Elevation as on Windows: an elevated program is the person who asked,
+    elevated -- their SID, HKCU and profile (wine-sg 7601) -- not the
+    SYSTEM account. Its display's no-tray setting under its own desktop's
+    key; the person's profile ACL names them, so what an elevated program
+    makes there stays theirs. Needs wine-sg 10.0-702.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 12:26:43 -0700
+
 sg-session (0.1.0-225) unstable; urgency=medium
 
   * The session keeps its polkit agent running with the shell's helpers
