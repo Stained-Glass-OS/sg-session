@@ -318,6 +318,12 @@ sg_shell_helpers() {
                 sg_helper sg-volume64.exe _n_vol wine "$_sgvolume"
             fi
             [ -f "$_sgnotify" ] && sg_helper sg-notify64.exe _n_ntf wine "$_sgnotify"
+            # the session's polkit agent (sg-session-start starts it): gone,
+            # a Linux program that asks for an administrator (GSmartControl,
+            # GParted) was refused without a prompt until the next sign-in
+            if [ -x "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-polkit-agent" ]; then
+                sg_helper sg-polkit-agent _n_pk "${SG_LIBEXEC:-/usr/libexec/stained-glass}/sg-polkit-agent"
+            fi
             if [ -f "$_sgsni" ] && [ -x "$SG_LIB/sg-sni-bridge" ]; then
                 SG_SHELL_DIR="$_sgshelldir" sg_helper sg-sni-bridge _n_sni "$SG_LIB/sg-sni-bridge"
             fi

@@ -1,3 +1,12 @@
+sg-session (0.1.0-225) unstable; urgency=medium
+
+  * The session keeps its polkit agent running with the shell's helpers
+    (sg-run-explorer): when it died, Linux programs asking for an
+    administrator (GSmartControl, GParted) were refused without a prompt
+    until the next sign-in. Gate test/polkit-keeper-test.sh, mutant NOKEEP.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 04:15:31 -0700
+
 sg-session (0.1.0-224) unstable; urgency=medium
 
   * Polkit agent: a program with its own polkit action (GSmartControl)

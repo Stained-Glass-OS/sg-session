@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -523,6 +523,13 @@ test-kiosk-e2e:
 # the notification centre's icon among the shell's helpers
 test-notify-helper:
 	@sh test/notify-helper-test.sh
+
+# The session's polkit agent is kept running with the shell's helpers
+# (mutant: the keeper without it).
+.PHONY: test-polkit-keeper
+test-polkit-keeper:
+	@sh test/polkit-keeper-test.sh
+	@! sh test/polkit-keeper-test.sh --mutant NOKEEP >/dev/null || { echo "polkit-keeper-test: mutant NOKEEP passed"; exit 1; }
 
 # The S2 gate. Expected to fail until S2 lands -- see bin/sg-multiuser-check.
 # Deliberately not part of 'make test': a known-red gate wired into CI would
