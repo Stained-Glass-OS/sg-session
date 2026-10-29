@@ -228,10 +228,22 @@ static void prepare_picture( void )
 static void format_clock( char *time_text, int tcch, char *date_text, int dcch )
 {
     SYSTEMTIME st;
+    char picture[64], monthday[32];
+
     GetLocalTime( &st );
     if (!GetTimeFormatA( LOCALE_USER_DEFAULT, TIME_NOSECONDS | TIME_NOTIMEMARKER, &st, NULL, time_text, tcch ))
         snprintf( time_text, tcch, "%d:%02d", st.wHour, st.wMinute );
-    if (!GetDateFormatA( LOCALE_USER_DEFAULT, 0, &st, "dddd, MMMM d", date_text, dcch ))
+    /* the weekday, then the day and month in the region's order: "Thursday,
+     * October 29" (en-US), "Thursday 29 October" (en-GB) */
+#ifndef SG_MUTANT_GREETER_US_DATE
+    if (GetLocaleInfoA( LOCALE_USER_DEFAULT, LOCALE_SMONTHDAY, monthday, sizeof(monthday) ) > 1)
+#else
+    if ((monthday[0] = 0))
+#endif
+        snprintf( picture, sizeof(picture), monthday[0] == 'M' ? "dddd, %s" : "dddd %s", monthday );
+    else
+        lstrcpyA( picture, "dddd, MMMM d" );
+    if (!GetDateFormatA( LOCALE_USER_DEFAULT, 0, &st, picture, date_text, dcch ))
         snprintf( date_text, dcch, "%04d-%02d-%02d", st.wYear, st.wMonth, st.wDay );
 }
 

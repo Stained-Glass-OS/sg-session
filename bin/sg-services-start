@@ -86,6 +86,20 @@ if [ -f "$_roots_tool" ] && [ -s "$_roots_pem" ]; then
     ( timeout 300 wine "$_roots_tool" --sync "Z:$_roots_pem" 2>/dev/null | while IFS= read -r _l; do sg_log "$_l"; done ) &
 fi
 
+# The first-run setup's region and keyboards for the accounts that draw the
+# sign-in screen (sggreet) and the lock screen (the SYSTEM account), as
+# Windows' setup copies them to the welcome screen: the lock screen's clock
+# was in US English on an en-GB machine. Once per setup (sg-oobe-user's stamp).
+_oobe_user="$SG_LIB/sg-oobe-user"
+if [ -x "$_oobe_user" ] && [ -r "${SG_OOBE_CONF:-/etc/stained-glass/oobe.conf}" ]; then
+    for _acct in "$SG_SYSTEM_USER" sggreet; do
+        getent passwd "$_acct" >/dev/null 2>&1 || continue
+        timeout 120 runuser -u "$_acct" -- env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_RUNTIME_DIR \
+            SG_WINSTATION='__wineservice_winstation\Default' "$_oobe_user" --welcome >/dev/null 2>&1 ||
+            sg_log "WARNING: the first-run setup's region was not applied to $_acct"
+    done
+fi
+
 sg_log "starting services.exe as SYSTEM"
 
 # Launched detached: services.exe is a long-running Windows process, and this

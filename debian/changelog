@@ -1,3 +1,16 @@
+sg-session (0.1.0-232) unstable; urgency=medium
+
+  * The sign-in and lock screens follow the first-run setup's region, as
+    Windows' welcome screen does: sg-oobe-user --welcome gives the system
+    accounts that draw them (sgsystem, sggreet) the region and keyboards,
+    from sg-oobed at once and from sg-services-start at boot (once per
+    setup). The lock screen said 11:13 for 23:13 on an en-GB machine.
+  * Their date has the day and month in the region's order ("Thursday
+    29 October", "Thursday, October 29"). test-greeter-clock,
+    oobe-user-test (--welcome; mutant OOBE_NO_WELCOME).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 29 Oct 2026 00:15:41 -0700
+
 sg-session (0.1.0-231) unstable; urgency=medium
 
   * The permission prompt says who made the program, as Windows' does:

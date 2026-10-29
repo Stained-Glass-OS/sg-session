@@ -178,6 +178,17 @@ finish() {
         echo "BROWSER=$browser"
         echo "STAMP=$(date +%s)"
     } > "$CONF.new" && chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
+    # ...and the region and keyboards for the sign-in and lock screens' own
+    # accounts at once, as Windows' setup does for the welcome screen (each
+    # boot's sg-services-start does it too, once per setup)
+    if [ -x "$SG_LIB/sg-oobe-user" ]; then
+        for _acct in "${SG_SYSTEM_USER:-sgsystem}" sggreet; do
+            getent passwd "$_acct" >/dev/null 2>&1 || continue
+            ( timeout 120 runuser -u "$_acct" -- env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_RUNTIME_DIR \
+                SG_WINSTATION='__wineservice_winstation\Default' "$SG_LIB/sg-oobe-user" --welcome >/dev/null 2>&1 ||
+                log "the region was not applied to $_acct" ) &
+        done
+    fi
 
     if [ "$browser" != none ]; then
         mkdir -p "$(dirname "$BROWSER_REQ")"

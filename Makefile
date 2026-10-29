@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start test-consent-describe
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start test-consent-describe test-greeter-clock
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -751,6 +751,11 @@ test-rdp-stream: rdp
 .PHONY: test-elevate-look
 test-elevate-look:
 	@sh test/elevate-look-test.sh
+
+# The sign-in and lock screens' clock in the region's own way (en-GB, en-US).
+.PHONY: test-greeter-clock
+test-greeter-clock:
+	@sh test/greeter-clock-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 
 # What the permission prompt says about a program: a signed one's description
 # and verified publisher, an unsigned one's file name (sg-consent /describe).
