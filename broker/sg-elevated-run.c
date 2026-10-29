@@ -243,6 +243,14 @@ static void apply_user_look(const char *desktop)
     if ((fd = mkstemp(path)) < 0 || !(f = fdopen(fd, "w"))) { if (fd >= 0) { close(fd); unlink(path); } goto done; }
     fprintf(f, "Windows Registry Editor Version 5.00\r\n\r\n");
     fprintf(f, "[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops\\%s]\r\n\"ShowSystray\"=dword:00000000\r\n\r\n", desktop);
+#ifndef SG_MUTANT_ELEVATED_NO_CAPTION
+    /* sg-compositor draws no title bars on this display, so Wine draws its own
+     * -- the same caption as everywhere. sg-prefix-init sets this for the
+     * SYSTEM account's HKCU; the HKCU is now the person's (7601), whose
+     * programs otherwise live inside the shell's desktop, where it changes
+     * nothing. Without it Inno Setup's wizard had no title bar (qa5, 613). */
+    fprintf(f, "[HKEY_CURRENT_USER\\Software\\Wine\\X11 Driver]\r\n\"Decorated\"=\"N\"\r\n\r\n");
+#endif
     fclose(f);
     if ((pid = fork()) == 0) {
         char unixpath[64];

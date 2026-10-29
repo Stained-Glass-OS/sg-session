@@ -1,3 +1,12 @@
+sg-session (0.1.0-230) unstable; urgency=medium
+
+  * An elevated program's windows have title bars again: sg-elevated-run
+    sets Decorated=N in the HKCU it now uses -- the person's (7601) --
+    as sg-prefix-init does for the SYSTEM account's. Inno Setup's wizard
+    had none on 613 (qa5). test-elevate-look (mutant ELEVATED_NO_CAPTION).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 23:03:11 -0700
+
 sg-session (0.1.0-229) unstable; urgency=medium
 
   * sg-wineserver waits for a left-over server to be gone (wineserver -w)
