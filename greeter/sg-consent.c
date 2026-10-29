@@ -36,6 +36,11 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <wintrust.h>
+#include <softpub.h>
+#include <wincrypt.h>
+#include <stdlib.h>
+#include <shlwapi.h>
 #include "sg-ease.h"
 
 #define ID_YES    201
@@ -46,8 +51,8 @@
 #define ID_EASE   206
 
 #define PANEL_W 560
-#define PANEL_H_ADMIN 310
-#define PANEL_H_CRED  420
+#define PANEL_H_ADMIN 334
+#define PANEL_H_CRED  444
 
 static HANDLE g_in, g_out;
 static HWND g_main, g_user, g_pass, g_status, g_yes, g_no;
@@ -259,6 +264,188 @@ static void program_name( char *out, size_t size )
     out[n] = 0;
 }
 
+/* The file the request would run, from the command: a quoted first word, else
+ * the shortest run of words that names a file (C:\Program Files\x.exe -a, as
+ * CreateProcess reads it), else a bare name on the search path. For msiexec,
+ * the package it installs: that is what the person is asked about. */
+static BOOL program_file( WCHAR *out, DWORD cch )
+{
+    WCHAR cmd[1024], *p, *end, save, *base;
+    DWORD attr;
+
+    if (!MultiByteToWideChar( CP_ACP, 0, g_program, -1, cmd, ARRAYSIZE(cmd) )) return FALSE;
+    p = cmd;
+    if (*p == '"')
+    {
+        if (!(end = wcschr( ++p, '"' ))) return FALSE;
+        *end++ = 0;
+        lstrcpynW( out, p, cch );
+    }
+    else
+    {
+        for (end = p;; end++)
+        {
+            if (*end && *end != ' ') continue;
+            save = *end; *end = 0;
+            attr = GetFileAttributesW( p );
+            if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) { lstrcpynW( out, p, cch ); *end = save; break; }
+            *end = save;
+            if (!*end)
+            {
+                /* no file by that name: a bare name on the search path */
+                if ((end = wcschr( p, ' ' ))) *end++ = 0;
+                else end = p + lstrlenW( p );
+                if (!SearchPathW( NULL, p, L".exe", cch, out, NULL )) return FALSE;
+                break;
+            }
+        }
+        if (*end == ' ') end++;
+    }
+    for (base = out, p = out; *p; p++) if (*p == '\\' || *p == '/') base = p + 1;
+    if (!lstrcmpiW( base, L"msiexec.exe" ) || !lstrcmpiW( base, L"msiexec" ))
+    {
+        /* /i, /package (or -i), then the package, quoted or one word */
+        for (p = end; *p; p++)
+        {
+            int n;
+            if ((*p != '/' && *p != '-') || (p > end && p[-1] != ' ')) continue;
+            n = !_wcsnicmp( p + 1, L"package ", 8 ) ? 9 : !_wcsnicmp( p + 1, L"i ", 2 ) ? 3 : 0;
+            if (!n) continue;
+            p += n;
+            while (*p == ' ') p++;
+            if (*p == '"') { if ((end = wcschr( ++p, '"' ))) *end = 0; }
+            else if ((end = wcschr( p, ' ' ))) *end = 0;
+            lstrcpynW( out, p, cch );
+            break;
+        }
+    }
+    attr = GetFileAttributesW( out );
+    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+/* Is the file one of the system's own programs: in the system folders, or
+ * directly in the Windows folder (not in its Temp)? Only an administrator
+ * can put a file there. */
+static BOOL is_system_file( const WCHAR *path )
+{
+    WCHAR full[MAX_PATH], dir[MAX_PATH], *base = NULL;
+    UINT n;
+
+    if (!GetFullPathNameW( path, MAX_PATH, full, &base ) || !base) return FALSE;
+    base[-1] = 0;   /* full is now the folder */
+    if ((n = GetSystemDirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
+    if ((n = GetSystemWow64DirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
+    if ((n = GetWindowsDirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
+    return FALSE;
+}
+
+/* The file's own description (its version information's FileDescription). */
+static BOOL file_description( const WCHAR *path, char *out, size_t size )
+{
+    DWORD handle, len = GetFileVersionInfoSizeW( path, &handle );
+    WORD *lang;
+    WCHAR key[64], *desc;
+    UINT n;
+    BYTE *info;
+    BOOL ok = FALSE;
+
+    if (!len || !(info = malloc( len ))) return FALSE;
+    if (GetFileVersionInfoW( path, 0, len, info ))
+    {
+        if (VerQueryValueW( info, L"\\VarFileInfo\\Translation", (void **)&lang, &n ) && n >= 4)
+            swprintf( key, ARRAYSIZE(key), L"\\StringFileInfo\\%04x%04x\\FileDescription", lang[0], lang[1] );
+        else
+            lstrcpyW( key, L"\\StringFileInfo\\040904b0\\FileDescription" );
+        if (VerQueryValueW( info, key, (void **)&desc, &n ) && n > 1 && desc[0])
+            ok = WideCharToMultiByte( CP_ACP, 0, desc, -1, out, (int)size, NULL, NULL ) > 1;
+    }
+    free( info );
+    return ok;
+}
+
+/* Who signed the file, if its signature is valid and its chain ends in a
+ * root trusted for code signing (WinVerifyTrust, as Windows asks it). No
+ * revocation or download: the prompt must not wait on the network. */
+static BOOL verified_publisher( const WCHAR *path, char *out, size_t size )
+{
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_FILE_INFO file = { sizeof(file) };
+    WINTRUST_DATA data = { sizeof(data) };
+    CRYPT_PROVIDER_DATA *prov;
+    CRYPT_PROVIDER_SGNR *signer;
+    CRYPT_PROVIDER_CERT *cert;
+    BOOL ok = FALSE;
+
+    file.pcwszFilePath = path;
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &file;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE;
+    if (!WinVerifyTrust( (HWND)INVALID_HANDLE_VALUE, &action, &data ) &&
+        (prov = WTHelperProvDataFromStateData( data.hWVTStateData )) &&
+        (signer = WTHelperGetProvSignerFromChain( prov, 0, FALSE, 0 )) &&
+        (cert = WTHelperGetProvCertFromChain( signer, 0 )))
+        ok = CertGetNameStringA( cert->pCert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL, out, (DWORD)size ) > 1;
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust( (HWND)INVALID_HANDLE_VALUE, &action, &data );
+    return ok;
+}
+
+/* The name in bold and the publisher line, as Windows' prompt shows them: a
+ * signed program by its own description and its verified publisher; an
+ * unsigned one by its file name -- what it says about itself is not
+ * trusted -- and "Publisher: Unknown"; the system's own programs as the
+ * system's. A Linux program (pkexec) has no publisher line. */
+struct description { char name[260], publisher[300]; };
+static struct description g_desc;
+
+/* fills its own copy: one that times out keeps writing only there */
+static DWORD WINAPI describe_thread( void *arg )
+{
+    struct description *d = arg;
+    WCHAR path[MAX_PATH];
+    char who[256];
+
+    if (!program_file( path, MAX_PATH )) return 0;
+    WideCharToMultiByte( CP_ACP, 0, PathFindFileNameW( path ), -1, d->name, sizeof(d->name), NULL, NULL );
+    if (is_system_file( path ))
+        snprintf( d->publisher, sizeof(d->publisher), "Publisher: Stained Glass (part of the system)" );
+#ifndef SG_MUTANT_CONSENT_TRUSTS_UNSIGNED
+    else if (verified_publisher( path, who, sizeof(who) ))
+#else
+    else if (lstrcpyA( who, "anyone" ))
+#endif
+    {
+        snprintf( d->publisher, sizeof(d->publisher), "Verified publisher: %s", who );
+        file_description( path, d->name, sizeof(d->name) );
+    }
+    else
+        snprintf( d->publisher, sizeof(d->publisher), "Publisher: Unknown" );
+    return 0;
+}
+
+static void describe_program( void )
+{
+    struct description *d;
+    HANDLE thread;
+
+    program_name( g_desc.name, sizeof(g_desc.name) );
+    g_desc.publisher[0] = 0;
+    if (g_program[0] == '/') return;   /* a Linux program */
+    if (!(d = calloc( 1, sizeof(*d) ))) return;
+    lstrcpyA( d->name, g_desc.name );
+    /* a few seconds at most: the prompt shows either way */
+    if ((thread = CreateThread( NULL, 0, describe_thread, d, 0, NULL )))
+    {
+        if (WaitForSingleObject( thread, 4000 ) == WAIT_OBJECT_0) { g_desc = *d; free( d ); }
+        else snprintf( g_desc.publisher, sizeof(g_desc.publisher), "Publisher: Unknown" );   /* d stays the thread's */
+        CloseHandle( thread );
+    }
+    else free( d );
+}
+
 /* Parse "/consent admin|cred <requester> <program...>". */
 static BOOL parse_cmdline( const char *cmd )
 {
@@ -294,13 +481,29 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     MSG msg;
     int sw, sh;
     int ph, px, py, y;
-    char line[1200], name[260];
+    char line[1200];
     HWND first, wnd;
     HDESK desk;
 
     (void)prev; (void)show;
     g_in = GetStdHandle( STD_INPUT_HANDLE );
     g_out = GetStdHandle( STD_OUTPUT_HANDLE );
+    /* "/describe <program...>": what the prompt would say about it (the gate) */
+    if (cmdline && !strncmp( cmdline, "/describe ", 10 ))
+    {
+        size_t n;
+        snprintf( g_program, sizeof(g_program), "%s", cmdline + 10 );
+        n = strlen( g_program );
+        if (n >= 2 && g_program[0] == '"' && g_program[n - 1] == '"')   /* as parse_cmdline */
+        {
+            memmove( g_program, g_program + 1, n - 2 );
+            g_program[n - 2] = 0;
+        }
+        describe_program();
+        send_line( "name %s", g_desc.name );
+        send_line( "publisher %s", g_desc.publisher );
+        return 0;
+    }
     if (!parse_cmdline( cmdline ))
     {
         send_line( "DENY" );
@@ -369,9 +572,14 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
         /* the program's name in bold, and the whole command below it, as
          * Windows' "Program location": a long one ("msiexec.exe /i C:\...\x.msi")
          * was cut to its first words */
-        program_name( name, sizeof(name) );
-        make_label( g_main, name, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
+        describe_program();
+        make_label( g_main, g_desc.name, px + 24, y, PANEL_W - 48, 22, g_font_bold, 0 );
         y += 26;
+        if (g_desc.publisher[0])
+        {
+            make_label( g_main, g_desc.publisher, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+            y += 24;
+        }
         snprintf( line, sizeof(line), "Program location: %s", g_program );
         wnd = make_label( g_main, line, px + 24, y, PANEL_W - 48, 56, g_font, 0x7ff );
         SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL );

@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start test-consent-describe
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -626,7 +626,7 @@ greeter:
 	@mkdir -p build
 	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
-	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32
+	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi
 	python3 setup/make-icon.py build/sg-setup.ico
 	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
 	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c build/sg-setup-res.o -lcomctl32 -lgdi32 -luser32
@@ -751,6 +751,12 @@ test-rdp-stream: rdp
 .PHONY: test-elevate-look
 test-elevate-look:
 	@sh test/elevate-look-test.sh
+
+# What the permission prompt says about a program: a signed one's description
+# and verified publisher, an unsigned one's file name (sg-consent /describe).
+.PHONY: test-consent-describe
+test-consent-describe:
+	@sh test/consent-describe-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 
 # Elevated console programs (PowerShell, cmd) get a console window.
 .PHONY: test-elevate-console

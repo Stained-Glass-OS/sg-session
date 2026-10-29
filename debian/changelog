@@ -1,3 +1,15 @@
+sg-session (0.1.0-231) unstable; urgency=medium
+
+  * The permission prompt says who made the program, as Windows' does:
+    a signed one by its own description and "Verified publisher: <the
+    signer>" (WinVerifyTrust, roots trusted for code signing, no
+    network); an unsigned one by its file name and "Publisher: Unknown";
+    the system's own programs as the system's; msiexec /i by its
+    package. The Store's GOG GALAXY prompt said "download.exe".
+    test-consent-describe.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 29 Oct 2026 00:01:35 -0700
+
 sg-session (0.1.0-230) unstable; urgency=medium
 
   * An elevated program's windows have title bars again: sg-elevated-run
