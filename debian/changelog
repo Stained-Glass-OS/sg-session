@@ -1,3 +1,13 @@
+sg-session (0.1.0-233) unstable; urgency=medium
+
+  * The permission prompt waits up to 30 s (was 4) for a program's
+    signature check, as Windows' prompt waits for it: Dropbox's signed
+    300 MB installer showed "Publisher: Unknown" (5.5 s to hash on its first
+    read). consent-describe-test: a 6 s check still ends verified (mutant
+    CONSENT_SHORT_WAIT).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 29 Oct 2026 07:02:52 -0700
+
 sg-session (0.1.0-232) unstable; urgency=medium
 
   * The sign-in and lock screens follow the first-run setup's region, as

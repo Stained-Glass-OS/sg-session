@@ -399,6 +399,11 @@ static BOOL verified_publisher( const WCHAR *path, char *out, size_t size )
  * trusted -- and "Publisher: Unknown"; the system's own programs as the
  * system's. A Linux program (pkexec) has no publisher line. */
 struct description { char name[260], publisher[300]; };
+#ifndef SG_MUTANT_CONSENT_SHORT_WAIT
+#define DESCRIBE_WAIT_MS 30000
+#else
+#define DESCRIBE_WAIT_MS 4000
+#endif
 static struct description g_desc;
 
 /* fills its own copy: one that times out keeps writing only there */
@@ -410,6 +415,10 @@ static DWORD WINAPI describe_thread( void *arg )
 
     if (!program_file( path, MAX_PATH )) return 0;
     WideCharToMultiByte( CP_ACP, 0, PathFindFileNameW( path ), -1, d->name, sizeof(d->name), NULL, NULL );
+    {   /* the gate: a verification as slow as a large installer's first read */
+        char delay[16];
+        if (GetEnvironmentVariableA( "SG_CONSENT_TEST_VERIFY_DELAY_MS", delay, sizeof(delay) )) Sleep( atoi( delay ) );
+    }
     if (is_system_file( path ))
         snprintf( d->publisher, sizeof(d->publisher), "Publisher: Stained Glass (part of the system)" );
 #ifndef SG_MUTANT_CONSENT_TRUSTS_UNSIGNED
@@ -436,10 +445,13 @@ static void describe_program( void )
     if (g_program[0] == '/') return;   /* a Linux program */
     if (!(d = calloc( 1, sizeof(*d) ))) return;
     lstrcpyA( d->name, g_desc.name );
-    /* a few seconds at most: the prompt shows either way */
+    /* Windows' prompt waits for the check. Hashing a large installer just
+     * downloaded reads it all from disk: Dropbox's 300 MB one took 5.5 s on
+     * qa5 (1.4 s once cached), and a 4 s limit called it "Publisher: Unknown".
+     * Half a minute at most; the prompt shows either way. */
     if ((thread = CreateThread( NULL, 0, describe_thread, d, 0, NULL )))
     {
-        if (WaitForSingleObject( thread, 4000 ) == WAIT_OBJECT_0) { g_desc = *d; free( d ); }
+        if (WaitForSingleObject( thread, DESCRIBE_WAIT_MS ) == WAIT_OBJECT_0) { g_desc = *d; free( d ); }
         else snprintf( g_desc.publisher, sizeof(g_desc.publisher), "Publisher: Unknown" );   /* d stays the thread's */
         CloseHandle( thread );
     }

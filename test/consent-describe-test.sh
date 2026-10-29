@@ -11,6 +11,8 @@
 #  6. msiexec /i <package>: the package is what is checked
 #  7. a Linux program (pkexec): no publisher line
 # Mutant SG_MUTANT_CONSENT_TRUSTS_UNSIGNED (an unsigned program shown as verified) must fail 2.
+# A check that takes 6 s (SG_CONSENT_TEST_VERIFY_DELAY_MS) still ends verified; mutant
+# SG_MUTANT_CONSENT_SHORT_WAIT (the old 4 s limit) must not.
 #   SG_WINE_DIR=/opt/wine-sg sh test/consent-describe-test.sh
 set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -33,6 +35,7 @@ cd "$T" || exit 1
 L="-lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi"
 "$MINGW" -O2 -mwindows -Wall -o consent.exe "$HERE/greeter/sg-consent.c" $L || { echo "FAIL  build"; exit 1; }
 "$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_TRUSTS_UNSIGNED -o mutant.exe "$HERE/greeter/sg-consent.c" $L || exit 1
+"$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_SHORT_WAIT -o mutant-wait.exe "$HERE/greeter/sg-consent.c" $L || exit 1
 
 # a small program that says it is "SG Gate Tool"
 printf 'int main(void){return 0;}\n' > tool.c
@@ -118,6 +121,15 @@ out=$(desc consent.exe 'msiexec.exe /i C:\gate\pkg.msi /qn')
 out=$(desc consent.exe '/usr/sbin/gsmartcontrol')
 [ "$(v "$out" name)" = "gsmartcontrol" ] && [ -z "$(v "$out" publisher)" ] \
     && pass "a Linux program: no publisher line" || fail "linux: $out"
+# a slow check (a large installer's first read: Dropbox's 300 MB, 5.5 s on
+# qa5) still ends "Verified publisher", as Windows' prompt waits for it
+slow() { env SG_CONSENT_TEST_VERIFY_DELAY_MS=6000 timeout -s KILL 60 "$WINE" "$1" /describe "$2" 2>/dev/null | tr -d '\r'; }
+out=$(slow consent.exe 'C:\gate\signed.exe')
+[ "$(v "$out" publisher)" = "Verified publisher: SG Gate Publisher" ] \
+    && pass "a check that takes 6 s: still \"Verified publisher\"" || fail "slow: $out"
+out=$(slow mutant-wait.exe 'C:\gate\signed.exe')
+[ "$(v "$out" publisher)" = "Publisher: Unknown" ] \
+    && pass "MUTANT CONSENT_SHORT_WAIT: 4 s, \"Publisher: Unknown\" (gate catches it)" || fail "mutant-wait: $out"
 out=$(desc mutant.exe 'C:\gate\unsigned.exe')
 [ "$(v "$out" publisher)" != "Publisher: Unknown" ] \
     && pass "MUTANT CONSENT_TRUSTS_UNSIGNED: unsigned shown as verified (gate catches it)" || fail "mutant: $out"
