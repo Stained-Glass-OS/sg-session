@@ -1,3 +1,11 @@
+sg-session (0.1.0-229) unstable; urgency=medium
+
+  * sg-wineserver waits for a left-over server to be gone (wineserver -w)
+    before starting the machine's: it exited, and the login screen came
+    up with no machine server (release 612's boot gate). test-wineserver-start.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 28 Oct 2026 17:27:10 -0700
+
 sg-session (0.1.0-228) unstable; urgency=medium
 
   * The taskbar clock's calendar (sg-shell's sg-calendar) kept running,

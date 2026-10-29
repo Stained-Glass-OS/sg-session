@@ -52,6 +52,11 @@ export SG_WINSTATION
 # they keep that server alive: this one then found the prefix taken, exited,
 # and the machine came up on the wrong server. Stop any server first.
 timeout 30 wineserver -k 2>/dev/null || true
+# ...and wait until it is gone: -k only asks. Started at once, this server
+# found the old one still there and exited (status 2); the login screen then
+# came up against no machine server and nobody could sign in (release 612's
+# boot gate). -w returns when the prefix has no server.
+timeout 30 wineserver -w 2>/dev/null || true
 
 sg_log "starting the machine-level wineserver (prefix: $SG_PREFIX)"
 

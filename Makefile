@@ -468,7 +468,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -536,6 +536,12 @@ test-codesign-roots-hook:
 test-calendar-keeper:
 	@sh test/calendar-keeper-test.sh
 	@! sh test/calendar-keeper-test.sh --mutant NOKEEP >/dev/null && echo "PASS  mutant NOKEEP caught"
+
+# The machine's wineserver starts only once a left-over server is gone.
+.PHONY: test-wineserver-start
+test-wineserver-start:
+	@sh test/wineserver-start-test.sh
+	@! sh test/wineserver-start-test.sh --mutant NOWAIT >/dev/null && echo "PASS  mutant NOWAIT caught"
 
 .PHONY: test-polkit-keeper
 test-polkit-keeper:
