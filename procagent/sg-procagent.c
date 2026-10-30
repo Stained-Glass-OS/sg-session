@@ -63,13 +63,31 @@ static int io_all(int fd, void *buf, size_t len, int writing)
     return 1;
 }
 
-/* stop the target with ptrace so /proc/pid/mem is coherent; returns 1 if attached */
+/* stop the target with ptrace so /proc/pid/mem is coherent; returns 1 if attached.
+ * PTRACE_ATTACH stops it with a SIGSTOP, but a signal that reaches the thread
+ * first is reported first (a signal-delivery stop) -- Wine signals its threads
+ * all the time. That one is handed back (PTRACE_CONT with it) and the wait goes
+ * on for our SIGSTOP. Taking it for ours dropped it at the detach and left the
+ * SIGSTOP pending, which stopped the whole process once we let go: Opera's
+ * window froze in state T (test/procagent-stop-test.c). */
 static int attach(pid_t pid)
 {
     int st;
     if (ptrace(PTRACE_ATTACH, pid, 0, 0) == -1) return 0;
-    while (waitpid(pid, &st, __WALL) == -1 && errno == EINTR) {}
-    return 1;
+    for (;;) {
+        if (waitpid(pid, &st, __WALL) == -1) {
+            if (errno == EINTR) continue;
+            return 0;
+        }
+        if (!WIFSTOPPED(st)) return 0;              /* it exited or was killed */
+#ifndef SG_MUTANT_FIRST_STOP
+        if (WSTOPSIG(st) != SIGSTOP) {
+            ptrace(PTRACE_CONT, pid, 0, (void *)(long)WSTOPSIG(st));
+            continue;
+        }
+#endif
+        return 1;
+    }
 }
 static void detach(pid_t pid) { ptrace(PTRACE_DETACH, pid, 0, 0); }
 

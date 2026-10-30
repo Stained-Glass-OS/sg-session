@@ -1,3 +1,16 @@
+sg-session (0.1.0-234) unstable; urgency=medium
+
+  * sg-procagent never leaves a program stopped. Its memory reads for the
+    machine's wineserver attach with ptrace, whose SIGSTOP it waited for --
+    but it took the first stop reported, and when another signal reached
+    the thread first (Wine signals its threads all the time) that signal
+    was dropped at the detach and the SIGSTOP, still pending, stopped the
+    whole program afterwards: Opera's window froze in state T on qa5. It
+    now hands other signals back and waits for its own. Gate
+    test/procagent-stop-test.sh (in make lint; mutant FIRST_STOP).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 29 Oct 2026 23:38:31 -0700
+
 sg-session (0.1.0-233) unstable; urgency=medium
 
   * The permission prompt waits up to 30 s (was 4) for a program's
