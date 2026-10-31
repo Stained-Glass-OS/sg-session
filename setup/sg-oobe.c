@@ -1273,9 +1273,16 @@ static BOOL handle_key( MSG *m )
     if (m->message == WM_KEYDOWN || m->message == WM_SYSKEYDOWN)
     {
         if (!(m->lParam & (1 << 30))) g_armed = m->wParam;
+        /* what arrives, for the gates: an Enter "not taken" (the release ISO
+         * gate, twice on the privacy page, once on the network page) is
+         * either never seen here or seen and refused below */
+        log_line( "sg-oobe: key %s down%s", m->wParam == VK_RETURN ? "enter" : "escape",
+                  (m->lParam & (1 << 30)) ? " (repeat)" : "" );
         return TRUE;
     }
     if (m->message != WM_KEYUP && m->message != WM_SYSKEYUP) return FALSE;
+    log_line( "sg-oobe: key %s up%s", m->wParam == VK_RETURN ? "enter" : "escape",
+              g_armed != m->wParam ? " (not armed: ignored)" : "" );
     if (g_armed != m->wParam) return TRUE;
     g_armed = 0;
     if (m->wParam == VK_ESCAPE) { go_back(); return TRUE; }
@@ -1288,6 +1295,7 @@ static BOOL handle_key( MSG *m )
         return TRUE;
     }
     if (IsWindowVisible( g_primary ) && IsWindowEnabled( g_primary )) go_next();
+    else log_line( "sg-oobe: enter ignored: the page's button is %s", IsWindowVisible( g_primary ) ? "disabled" : "hidden" );
     return TRUE;
 }
 

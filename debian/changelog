@@ -1,3 +1,13 @@
+sg-session (0.1.0-235) unstable; urgency=medium
+
+  * First-run setup (sg-oobe): logs each Enter/Escape it receives, and
+    why it ignored one. The release ISO gate failed three times with an
+    Enter "not taken" (twice on the privacy page, once on the network
+    page) and passed on reruns; the log now says whether the key ever
+    arrived. No behaviour change.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 31 Oct 2026 08:11:46 -0700
+
 sg-session (0.1.0-234) unstable; urgency=medium
 
   * sg-procagent never leaves a program stopped. Its memory reads for the
