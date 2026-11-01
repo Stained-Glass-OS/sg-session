@@ -6,6 +6,14 @@
 # The cache is the gate's too (Disk Cleanup and Storage Sense empty it); a
 # gate that keeps downloads across runs names "$SG_REAL_HOME/.cache" itself.
 # Python's user packages stay the real home's.
+# Gates leave their scratch behind when they are killed, and the gate HOME
+# below is never removed (each gate sets its own EXIT trap): 6000 of them,
+# 161 GB, in /var/tmp by 2026-11-01. Every gate start takes away what is
+# more than a day old -- a gate's HOME and a gate's mktemp directory
+# (sg-<name>.XXXXXX) -- so the host never fills up with them.
+find "${TMPDIR:-/var/tmp}" -maxdepth 1 -mindepth 1 -type d -mtime +0 \
+    \( -name 'sg-gate-home.??????' -o -name 'sg-*.??????' \) ! -name 'sg-lint-tree-*' \
+    -exec sh -c 'chmod -R u+w "$1" 2>/dev/null; rm -rf "$1"' _ {} \; 2>/dev/null
 if [ -z "${SG_GATE_HOME:-}" ]; then
     SG_REAL_HOME=${HOME:-/nonexistent}
     export SG_REAL_HOME

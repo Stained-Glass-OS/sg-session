@@ -1,3 +1,11 @@
+sg-session (0.1.0-236) unstable; urgency=medium
+
+  * Gates: test/scratch-home.sh takes away gate scratch more than a day
+    old (its gate HOME, never removed, and killed gates' mktemp
+    directories) at every gate start: 161 GB had piled up in /var/tmp.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 01 Nov 2026 08:18:19 -0800
+
 sg-session (0.1.0-235) unstable; urgency=medium
 
   * First-run setup (sg-oobe): logs each Enter/Escape it receives, and
