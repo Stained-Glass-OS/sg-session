@@ -56,6 +56,7 @@ static const char *const page_names[] = { "region", "keyboard", "second-keyboard
 #define TIMER_CLOSE    1
 #define TIMER_RESCAN   2
 #define TIMER_READY    3
+#define TIMER_FG       4
 
 /* Input only once the first page is on the screen and the window has the
  * keyboard: on a slow first boot keys and clicks came before it was shown
@@ -1184,6 +1185,10 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         return 0;
     case WM_ACTIVATE:
         if (LOWORD(wp) != WA_INACTIVE) { g_active = TRUE; check_ready( hwnd, FALSE ); }
+        /* for the gates: an Enter "not taken" never reached this thread, so
+         * say when the wizard stops being the active window, and who is */
+        if (g_ready) log_line( "sg-oobe: %s", LOWORD(wp) == WA_INACTIVE ? "inactive" : "active" );
+        if (g_ready && LOWORD(wp) == WA_INACTIVE) SetTimer( hwnd, TIMER_FG, 500, NULL );
         break;
     case WM_ERASEBKGND: return 1;
     case WM_MEASUREITEM:
@@ -1225,6 +1230,17 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         return 0;
     case WM_TIMER:
         if (wp == TIMER_CLOSE) { KillTimer( hwnd, TIMER_CLOSE ); DestroyWindow( hwnd ); }
+        else if (wp == TIMER_FG)
+        {
+            HWND fg = GetForegroundWindow();
+            char cls[64] = "", title[64] = "";
+            DWORD pid = 0;
+
+            KillTimer( hwnd, TIMER_FG );
+            if (fg) { GetClassNameA( fg, cls, sizeof(cls) ); GetWindowTextA( fg, title, sizeof(title) );
+                      GetWindowThreadProcessId( fg, &pid ); }
+            log_line( "sg-oobe: foreground %p pid %04lx [%s] %s", fg, pid, cls, title );
+        }
         else if (wp == TIMER_READY) check_ready( hwnd, g_active || GetTickCount() - g_painted_at >= 5000 );
         else if (wp == TIMER_RESCAN && g_page == P_NETWORK && !g_busy && !g_listing_nets && !g_online) request_networks();
         return 0;
