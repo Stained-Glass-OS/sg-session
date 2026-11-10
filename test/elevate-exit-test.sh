@@ -89,5 +89,30 @@ check ""
 [ $ok2 = 1 ] && pass "the broker answers with the told status at once, else with the process's own exit" || fail "broker: $b"
 check -mut
 [ $ok1 = 0 ] && [ $ok2 = 0 ] && pass "MUTANT EXIT_AT_TREE_END: told only at the end (gate catches it)" || fail "mutant not caught: $out / $b"
+# the full Windows code (wine-sg writes it to SG_EXIT_CODE_FILE): REAPER's
+# installer ended with 1223 (a listed success) and Unix saw 199
+cat > "$T/full.c" <<EOC
+#define main elevated_run_main
+#include "$HERE/broker/sg-elevated-run.c"
+#undef main
+int main(int argc, char **argv)
+{
+    int p[2], fd; pid_t prog, xpid = -1; uint32_t told = 0;
+    (void)argc;
+    signal(SIGCHLD, SIG_DFL);
+    if (pipe(p)) return 1;
+    fd = p[1];
+    snprintf(g_code_file, sizeof(g_code_file), "%s", argv[1]);
+    if (!(prog = fork())) { execl("/bin/sh", "sh", "-c", "printf '1223\\n' > \"\$0\"; exit 199", argv[1], (char *)NULL); _exit(127); }
+    wait_program(prog, &xpid, &fd);
+    if (read(p[0], &told, 4) != 4) told = 0;
+    printf("told %u\n", told);
+    return 0;
+}
+EOC
+build full "" ; MUT=SG_MUTANT_EIGHT_BIT_CODE build full -mut
+f=$("$T/full" "$T/code"); m=$("$T/full-mut" "$T/code")
+[ "$f" = "told 1223" ] && pass "the program's full Windows code (1223, Unix saw 199) is what the broker is told" || fail "full code: $f"
+[ "$m" = "told 199" ] && pass "MUTANT EIGHT_BIT_CODE tells 199 (gate catches it)" || fail "EIGHT_BIT_CODE not caught: $m"
 [ $RC = 0 ] && echo "elevate-exit: all passed" || echo "elevate-exit: FAILED"
 exit $RC

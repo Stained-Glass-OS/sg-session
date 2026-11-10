@@ -175,6 +175,38 @@ static void tell_exit(int *status_fd, int code)
     *status_fd = -1;
 }
 
+/* The program's full Windows exit code. A Unix exit status has eight bits:
+ * REAPER's installer ends with 1223 (a success its manifest lists), waitpid
+ * said 199, and the Store reported a failure. wine-sg writes the whole code,
+ * in decimal, to the file SG_EXIT_CODE_FILE names (and keeps that from the
+ * program's children); a Wine without that leaves the file empty, and the
+ * eight bits are all there is. */
+static char g_code_file[4200];
+
+
+static int full_code(int unix_code)
+{
+    char buf[32];
+    ssize_t n;
+    int fd;
+#ifdef SG_MUTANT_EIGHT_BIT_CODE
+    return unix_code;
+#endif
+    if (!g_code_file[0] || (fd = open(g_code_file, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)) < 0) return unix_code;
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return unix_code;
+    buf[n] = 0;
+    {
+        char *end;
+        unsigned long v = strtoul(buf, &end, 10);
+        if (end == buf || (*end && *end != '\n')) return unix_code;
+        /* the code a Windows program ended with: its low eight bits are what Unix saw */
+        if ((v & 0xff) != (unsigned long)(unix_code & 0xff)) return unix_code;
+        return (int)(uint32_t)v;
+    }
+}
+
 /* Wait for the program PID, then for everything it left running (and the X
  * server XPID, -1 once it has ended). Returns the program's exit status. */
 static int wait_program(pid_t pid, pid_t *xpid, int *status_fd)
@@ -185,7 +217,7 @@ static int wait_program(pid_t pid, pid_t *xpid, int *status_fd)
         pid_t w;
         while ((w = waitpid(-1, &status, WNOHANG)) > 0) {
             if (w == pid) {
-                program_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+                program_status = WIFEXITED(status) ? full_code(WEXITSTATUS(status)) : 128 + WTERMSIG(status);
 #ifndef SG_MUTANT_EXIT_AT_TREE_END
                 tell_exit(status_fd, program_status);
 #endif
@@ -206,6 +238,7 @@ static int wait_program(pid_t pid, pid_t *xpid, int *status_fd)
 static void rm_dir(const char *dir, const char *cookie)
 {
     unlink(cookie);
+    if (g_code_file[0]) unlink(g_code_file);
     rmdir(dir);
 }
 
@@ -485,6 +518,16 @@ int main(int argc, char **argv)
          * there: Firefox's installer runs setup.exe where it unpacked it, and
          * moved to system32 it installed nothing. */
         snprintf(sys32, sizeof(sys32), "%s/drive_c/windows/system32", prefix_dir());
+        /* where Wine leaves the program's full exit code: in this run's own
+         * directory, made now and given to the account the program runs as */
+        if (!strcmp(args[0], "wine")) {
+            int cf;
+            snprintf(g_code_file, sizeof(g_code_file), "%s/exitcode", dir);
+            if ((cf = open(g_code_file, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600)) >= 0) {
+                if (as_pw && fchown(cf, as_pw->pw_uid, as_pw->pw_gid)) { /* the eight bits, then */ }
+                close(cf);
+            } else g_code_file[0] = 0;
+        }
         pid = fork();
         if (pid < 0) { kill(xpid, SIGTERM); rm_dir(dir, cookie); return 125; }
         if (!pid) {
@@ -498,6 +541,7 @@ int main(int argc, char **argv)
                 char here[16];
                 if (getcwd(here, sizeof(here)) && !strcmp(here, "/") && chdir(sys32) < 0) { /* stays */ }
             }
+            if (g_code_file[0]) setenv("SG_EXIT_CODE_FILE", g_code_file, 1);
             execvp(args[0], args);
             _exit(127);
         }
