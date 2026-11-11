@@ -1,3 +1,11 @@
+sg-session (0.1.0-239) unstable; urgency=medium
+
+  * Tests: fluidsynth-off-test gives systemd-analyze --user a runtime
+    directory of its own. CI containers have none, so the test failed
+    there ("Failed to lookup RuntimeDirectory path") and broke sg-image CI.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 11 Nov 2026 14:05:00 -0800
+
 sg-session (0.1.0-238) unstable; urgency=medium
 
   * Elevation: an elevated program's full Windows exit code reaches the

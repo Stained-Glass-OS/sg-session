@@ -7,6 +7,8 @@ set -u
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 command -v systemd-analyze >/dev/null || { echo "SKIP  no systemd-analyze"; exit 77; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# systemd-analyze --user needs a runtime directory; CI containers have none
+mkdir -m 700 "$T/run"; export XDG_RUNTIME_DIR="$T/run"
 RC=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
