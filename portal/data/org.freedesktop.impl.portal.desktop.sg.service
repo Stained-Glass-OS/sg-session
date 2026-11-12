@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.sg
+Exec=/usr/libexec/xdg-desktop-portal-sg
+SystemdService=xdg-desktop-portal-sg.service

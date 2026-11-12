@@ -1,3 +1,16 @@
+sg-session (0.1.0-241) unstable; urgency=medium
+
+  * Remote control for Linux programs: xdg-desktop-portal-sg (a fork of
+    xdg-desktop-portal-wlr) gives the portal's RemoteDesktop beside its
+    ScreenCast. The keyboard and pointer go through a connection the person
+    allowed on the secure surface ("A program wants to control your
+    keyboard and mouse"): sg-brokerd's new "@capture" request hands it to
+    the session's compositor as a controlling shadow, framed while it
+    lasts, ended by Ctrl+Alt+Del. Screen sharing works without GPU buffers
+    (a virtual machine). test-portal (mutant CAPTURE_NO_CONSENT).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 14:30:14 -0800
+
 sg-session (0.1.0-240) unstable; urgency=medium
 
   * Tests: fluidsynth-off-test's stand-in unit leaves out Debian's

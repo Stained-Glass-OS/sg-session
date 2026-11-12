@@ -33,7 +33,7 @@ all:
 # probe built by the deb target is deleted again before install runs. The
 # image has no cross-compiler, so if the .deb does not carry the probe then
 # nothing in the guest can create a D3D device and the gate proves much less.
-install: d3d-probe greeter token-probe procagent polkitagent rdp power
+install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -d $(BINDIR) $(LIBDIR) $(SHAREDIR) $(UNITDIR) $(TMPFILESDIR) $(UDEVDIR)
 	install -m 0755 $(BINS) $(BINDIR)
 	@# Python, so not in BINS (which lint checks as sh).
@@ -120,6 +120,13 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power
 	    install -d $(DESTDIR)$(PREFIX)/libexec/stained-glass; \
 	    install -m 0755 build/sg-rdp-authd bin/sg-rdp-cert $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
+	@# Screen sharing and remote control for Linux programs: the portal's
+	@# backend (a fork of xdg-desktop-portal-wlr), its D-Bus and user units.
+	install -D -m 0755 portal/xdg-desktop-portal-sg $(DESTDIR)$(PREFIX)/libexec/xdg-desktop-portal-sg
+	install -D -m 0644 portal/data/sg.portal $(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/portals/sg.portal
+	install -D -m 0644 portal/data/org.freedesktop.impl.portal.desktop.sg.service \
+	    $(DESTDIR)$(PREFIX)/share/dbus-1/services/org.freedesktop.impl.portal.desktop.sg.service
+	install -D -m 0644 portal/data/xdg-desktop-portal-sg.service $(DESTDIR)$(PREFIX)/lib/systemd/user/xdg-desktop-portal-sg.service
 	@# Setup (live boots only): the wizard, its bridge, and the root service
 	@# that runs sg-install, behind a socket only the login screen and the
 	@# live session may use; and the live session's setup.
@@ -565,6 +572,7 @@ clean:
 	rm -f build/d3d-probe32.exe build/d3d-probe64.exe
 	rm -f build/sg-greeter32.exe build/sg-greeter64.exe build/sg-consent64.exe build/sg-greet-bridge build/greetd-stub build/sg-xtype
 	rm -f build/sg-setup64.exe build/sg-setup-bridge build/sg-setup.ico build/sg-setup-res.o build/sg-oobe64.exe
+	$(MAKE) -C portal clean
 
 # --- the D3D probe ---------------------------------------------------------
 #
@@ -706,6 +714,14 @@ test-security: security
 	@SG_LIB=$(CURDIR)/lib SG_LIBEXEC=$(CURDIR)/build \
 	 SG_PREFIX=$(CURDIR)/test/tmp/state/prefix $(CURDIR)/bin/sg-lock-security-check; \
 	    rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# --- screen sharing and remote control (xdg-desktop-portal-sg) --------------
+.PHONY: portal test-portal
+portal:
+	$(MAKE) -C portal
+
+test-portal: portal procagent vkbd
+	@sh test/portal-rd-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # --- remote login over RDP (ADR 0010, pattern B) ---------------------------
 #

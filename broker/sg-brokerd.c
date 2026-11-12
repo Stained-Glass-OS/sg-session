@@ -684,6 +684,34 @@ static int surface_command(const struct surface *sf, const char *cmd, char *repl
     return 0;
 }
 
+/* As surface_command, with a descriptor alongside (SCM_RIGHTS): the
+ * compositor's "SHADOW" takes a connection that way. The descriptor is
+ * closed here whatever happens. */
+static int surface_command_fd(const struct surface *sf, const char *cmd, int pass, char *reply, size_t max)
+{
+    char cbuf[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = { .iov_base = (void *)cmd, .iov_len = strlen(cmd) };
+    struct msghdr mh = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = cbuf, .msg_controllen = sizeof(cbuf) };
+    struct cmsghdr *cm;
+    int fd = surface_connect(sf);
+    ssize_t n;
+
+    if (fd < 0) { close(pass); return -1; }
+    memset(cbuf, 0, sizeof(cbuf));
+    cm = CMSG_FIRSTHDR(&mh);
+    cm->cmsg_level = SOL_SOCKET;
+    cm->cmsg_type = SCM_RIGHTS;
+    cm->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cm), &pass, sizeof(int));
+    n = sendmsg(fd, &mh, MSG_NOSIGNAL);
+    close(pass);
+    if (n < 0 || (n = read(fd, reply, max - 1)) <= 0) { close(fd); return -1; }
+    close(fd);
+    reply[n] = 0;
+    reply[strcspn(reply, "\r\n")] = 0;
+    return 0;
+}
+
 /* The requester's own compositor: <seat>/<uid>/control.sock, served -- by
  * SO_PEERCRED -- by the requester's uid. Anyone in sgwine can make a directory
  * in the seat dir, so the path alone proves nothing. The gate names the
@@ -954,6 +982,46 @@ out:
     consent_ui_stop(&ui);
     if (surface_command(&sf, "RELEASE\n", reply, sizeof(reply)))
         logmsg("shadow: RELEASE failed; the compositor keeps its state");
+    return allowed;
+}
+
+/* Screen sharing's remote control (xdg-desktop-portal-sg): the person at the
+ * console says whether a program may use their keyboard and pointer, on the
+ * secure surface -- where no program in the session can see, click or type,
+ * so the program asking cannot answer for them. */
+static int obtain_capture_consent(uid_t uid, const char *app, const char *mode)
+{
+    const char *test = getenv("SG_BROKER_TEST"), *env;
+    struct surface sf;
+    struct consent_ui ui = { 0, -1, -1 };
+    char reply[64], line[256];
+    int timeout = 60, allowed = 0;
+    time_t deadline;
+
+    if (test) {
+        const char *d = getenv("SG_BROKER_TEST_CONSENT");
+        return d && (!strcmp(d, "yes") || !strcmp(d, "y"));
+    }
+    if ((env = getenv("SG_CAPTURE_CONSENT_TIMEOUT")) && atoi(env) > 0) timeout = atoi(env);
+    if (!find_surface_in(uid, &sf, 1)) { logmsg("capture: uid %u has no console session; refusing", (unsigned)uid); return 0; }
+    if (surface_command(&sf, "SECURE\n", reply, sizeof(reply)) || strcmp(reply, "OK secure")) {
+        logmsg("capture: the compositor refused SECURE (%s); refusing", reply);
+        return 0;
+    }
+    if (consent_ui_start(&ui, &sf, "capture", app, mode) < 0) {
+        logmsg("capture: cannot start the prompt; refusing");
+        goto out;
+    }
+    deadline = time(NULL) + timeout;
+    if (consent_read_line(ui.from, line, sizeof(line), deadline) == 0) {
+        if (!strcmp(line, "ALLOW")) allowed = 1;
+        else if (!strcmp(line, "DENY")) logmsg("capture: declined");
+        else logmsg("capture: unexpected reply from the prompt; refusing");
+    } else logmsg("capture: no answer in %ds; refusing", timeout);
+out:
+    consent_ui_stop(&ui);
+    if (surface_command(&sf, "RELEASE\n", reply, sizeof(reply)))
+        logmsg("capture: RELEASE failed; the compositor keeps its state");
     return allowed;
 }
 
@@ -1298,6 +1366,59 @@ int main(void)
                     ok = obtain_shadow_consent(who_asks, (uid_t)target, mode);
                     logmsg("shadow: %s", ok ? "accepted at the console" : "not accepted");
                 }
+            }
+            status = ok ? 0 : 1;
+            write_full(conn, &status, 1);
+            close(conn);
+            if (errfd >= 0) close(errfd);
+            if (getenv("SG_BROKER_ONCE")) break;
+            continue;
+        }
+
+        /* Screen sharing's remote control (xdg-desktop-portal-sg): cwd
+         * "@capture", CAPTURE_APP (the asking program, as the portal knows
+         * it: maybe nothing), CAPTURE_MODE (control), and the portal's
+         * connection for the compositor as the passed descriptor. The person
+         * asks about their own console session only; once they allow it on
+         * the secure surface, the broker -- the SYSTEM account, which the
+         * compositor lets do so -- hands the connection over as a controlling
+         * shadow (SHADOW control): privileged, framed, ended by Ctrl+Alt+Del.
+         * The answer grants nothing else. */
+        if (!strcmp(cwd, "@capture")) {
+            const char *app = "", *mode = NULL;
+            struct surface sf;
+            char reply[96] = "";
+            int i, ok = 0;
+
+            for (i = 0; i < envc; i++) {
+                if (!strncmp(envp[i], "CAPTURE_APP=", 12)) app = envp[i] + 12;
+                else if (!strncmp(envp[i], "CAPTURE_MODE=", 13)) mode = envp[i] + 13;
+            }
+            if (errfd < 0 || !mode || strcmp(mode, "control")) {
+                logmsg("capture: a malformed request from %s; refused", rpw->pw_name);
+            } else if (app[0] && !plain_name(app)) {
+                logmsg("capture: %s named the program oddly; refused", rpw->pw_name);
+            } else {
+                logmsg("capture: %s asks to let %s use the keyboard and pointer", rpw->pw_name, app[0] ? app : "a program");
+#ifndef SG_MUTANT_CAPTURE_NO_CONSENT
+                ok = obtain_capture_consent(cred.uid, app[0] ? app : "-", mode);
+#else
+                ok = 1;
+#endif
+                if (ok && find_surface_in(cred.uid, &sf, 1)) {
+                    /* the descriptor goes, taken or not */
+                    if (surface_command_fd(&sf, "SHADOW control\n", errfd, reply, sizeof(reply)) ||
+                        strncmp(reply, "OK shadow", 9)) {
+                        logmsg("capture: the compositor did not take the connection (%s)", reply[0] ? reply : "no answer");
+                        ok = 0;
+                    }
+                } else {
+                    if (ok) logmsg("capture: no console session to hand the connection to");
+                    ok = 0;
+                    close(errfd);
+                }
+                errfd = -1;
+                logmsg("capture: %s", ok ? "allowed: the program has the keyboard and pointer" : "not allowed");
             }
             status = ok ? 0 : 1;
             write_full(conn, &status, 1);

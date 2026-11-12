@@ -1,0 +1,11 @@
+[Unit]
+Description=Portal service (Stained Glass: screen sharing and remote control)
+PartOf=graphical-session.target
+After=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.sg
+ExecStart=/usr/libexec/xdg-desktop-portal-sg
+Restart=on-failure

@@ -10,6 +10,10 @@
  *       An administrator asked: Yes / No.
  *   sg-consent.exe /consent cred <requester> <program...>
  *       A standard user asked: an administrator's name and password.
+ *   sg-consent.exe /consent capture <program>|- control
+ *       Screen sharing's remote control (xdg-desktop-portal-sg): a program
+ *       in this session asks to use the keyboard and pointer, with the
+ *       screen -- remote support, a remote desktop server: Yes / No.
  *   sg-consent.exe /consent shadow <requester> view|control
  *       Over Remote Desktop, <requester> (an administrator) asks to see --
  *       or see and control -- this session, which stays at the console
@@ -58,7 +62,7 @@ static HANDLE g_in, g_out;
 static HWND g_main, g_user, g_pass, g_status, g_yes, g_no;
 static HFONT g_font_big, g_font, g_font_bold;
 static HBRUSH g_bg, g_panel, g_accent_br;
-static BOOL g_cred_mode, g_shadow_mode, g_done, g_waiting;
+static BOOL g_cred_mode, g_shadow_mode, g_capture_mode, g_done, g_waiting;
 static char g_requester[128], g_program[1024];
 static RECT g_panel_rc;
 static WPARAM g_armed;       /* the answer key whose press we saw */
@@ -469,6 +473,7 @@ static BOOL parse_cmdline( const char *cmd )
     if (!strncmp( p, "admin ", 6 )) { g_cred_mode = FALSE; p += 6; }
     else if (!strncmp( p, "cred ", 5 )) { g_cred_mode = TRUE; p += 5; }
     else if (!strncmp( p, "shadow ", 7 )) { g_cred_mode = FALSE; g_shadow_mode = TRUE; p += 7; }
+    else if (!strncmp( p, "capture ", 8 )) { g_cred_mode = FALSE; g_capture_mode = TRUE; p += 8; }
     else return FALSE;
     n = strcspn( p, " " );
     if (!n || n >= sizeof(g_requester)) return FALSE;
@@ -550,11 +555,31 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     py = (sh - ph) / 2;
     SetRect( &g_panel_rc, px, py, px + PANEL_W, py + ph );
 
-    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", g_shadow_mode ? "Remote Desktop request" : "Permission required",
+    g_main = CreateWindowExA( WS_EX_TOPMOST, "SgConsent", g_shadow_mode ? "Remote Desktop request" :
+                              g_capture_mode ? "Remote control request" : "Permission required",
                               WS_POPUP | WS_VISIBLE, 0, 0, sw, sh, NULL, NULL, inst, NULL );
 
     y = py + 22;
-    if (g_shadow_mode)
+    if (g_capture_mode)
+    {
+        /* A program in this session -- remote support, a remote desktop
+         * server -- asks for the keyboard and pointer (it can already see
+         * the screen, as any program may). Its name is what the portal knew
+         * of it, if anything. */
+        if (!strcmp( g_requester, "-" )) snprintf( g_requester, sizeof(g_requester), "A program" );
+        make_label( g_main, "Remote control", px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 28;
+        snprintf( line, sizeof(line), "%s wants to control your keyboard and mouse. Do you allow it?", g_requester );
+        make_label( g_main, line, px + 24, y, PANEL_W - 48, 84, g_font_big, 0 );
+        y += 90;
+        make_label( g_main, "It will see your screen and can type and click along with you, as remote support does.",
+                    px + 24, y, PANEL_W - 48, 40, g_font, 0x7ff );
+        y += 44;
+        make_label( g_main, "A coloured frame shows while it lasts. Ctrl+Alt+Del ends it.",
+                    px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
+        y += 30;
+    }
+    else if (g_shadow_mode)
     {
         /* Someone asks, over Remote Desktop, to watch (or work in) this
          * session while its user stays here. The requester's name is the
