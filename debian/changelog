@@ -1,3 +1,12 @@
+sg-session (0.1.0-240) unstable; urgency=medium
+
+  * Tests: fluidsynth-off-test's stand-in unit leaves out Debian's
+    ConditionUser=!@system when run as a system user: CI builds as root,
+    where that condition fails whatever our drop-in says (sg-image CI red
+    since 2026-11-12).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 12:56:16 -0800
+
 sg-session (0.1.0-239) unstable; urgency=medium
 
   * Tests: fluidsynth-off-test gives systemd-analyze --user a runtime

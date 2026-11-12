@@ -14,8 +14,13 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
 DROP="$HERE/../systemd/fluidsynth.service.d/50-sg-off.conf"
 mkdir -p "$T/off/fluidsynth.service.d" "$T/on/fluidsynth.service.d"
+# Debian's ConditionUser=!@system holds for a person; run as root or another
+# system user (CI builds as root) it fails whatever our drop-in says, so the
+# stand-in leaves it out there: what is tested is our own condition
+USERCOND='ConditionUser=!@system\n'
+[ "$(id -u)" -lt 1000 ] && USERCOND=
 for d in off on; do
-    printf '[Unit]\nDescription=FluidSynth Daemon\nConditionUser=!@system\n[Service]\nType=notify\nExecStart=/usr/bin/fluidsynth -is\n[Install]\nWantedBy=default.target\n' \
+    printf "[Unit]\nDescription=FluidSynth Daemon\n${USERCOND}[Service]\nType=notify\nExecStart=/usr/bin/fluidsynth -is\n[Install]\nWantedBy=default.target\n" \
         > "$T/$d/fluidsynth.service"
 done
 [ "${1:-}" = --mutant ] || cp "$DROP" "$T/off/fluidsynth.service.d/"
