@@ -30,6 +30,11 @@
 #       DEVICE <mac>\t<connected yes|no>\t<paired yes|no>\t<name>
 #   sg-settingsctl bluetooth power on|off
 #   sg-settingsctl bluetooth connect|disconnect|remove|pair MAC
+#       pair answers the device's questions as Windows does: a PIN to type on
+#       a keyboard is published while it waits (bluetooth pairing)
+#   sg-settingsctl bluetooth pairing
+#       PAIRING <mac> while a pair runs, then PIN <digits> when the device
+#       wants it typed on it, or CONFIRM <digits> when it shows it too
 #   sg-settingsctl bluetooth scan [SECONDS]            (then lists, as above)
 #   sg-settingsctl display
 #       OUTPUT <name>\t<WxH@Hz>\t<scale>\t<description>
@@ -407,6 +412,120 @@ def bt_adapters():
         return []
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x01|\x02|\r")
+
+
+def bt_pair_status_path():
+    return os.path.join(runtime_dir(), "sg-bt-pair")
+
+
+def bt_pair_status(*lines):
+    path = bt_pair_status_path()
+    if not lines:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        return
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("".join(l + "\n" for l in lines))
+    os.replace(tmp, path)
+
+
+def bt_pair(mac):
+    """Pair as Windows does, answering the device: bluetoothctl with an agent
+    of its own (keyboard and display), driven over a pipe. A keyboard that
+    wants a PIN typed on it gets one, published (bluetooth pairing) for
+    Settings to show; a passkey both sides show is confirmed; then the
+    device is trusted (it comes back by itself) and connected. Run plainly
+    (bluetoothctl pair with no agent) a keyboard could never pair: its PIN
+    went nowhere (David 2026-11-13)."""
+    import random
+    import select
+    import time
+    exe = tool("bluetoothctl")
+    env = dict(os.environ, LC_ALL="C", LANG="C")
+    p = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    buf = ""
+    seen = 0
+
+    def send(line):
+        try:
+            p.stdin.write((line + "\n").encode())
+            p.stdin.flush()
+        except OSError:
+            pass
+
+    def wait_for(patterns, secs):
+        """Read until one of PATTERNS (regexes) is in what bluetoothctl said
+        since the last match, answering the agent's questions meanwhile."""
+        nonlocal buf, seen
+        end = time.monotonic() + secs
+        while time.monotonic() < end:
+            r, _, _ = select.select([p.stdout], [], [], 0.25)
+            if r:
+                chunk = os.read(p.stdout.fileno(), 4096)
+                if not chunk:
+                    break
+                buf += ANSI.sub("", chunk.decode("utf-8", "replace"))
+            new = buf[seen:]
+            m = re.search(r"Passkey:\s*(\d+)", new)
+            if m and not os.environ.get("SG_MUTANT_BT_PIN_HIDDEN"):
+                bt_pair_status("PAIRING %s" % mac, "PIN %06d" % int(m.group(1)))
+                seen += m.end()
+                continue
+            m = re.search(r"Confirm passkey\s*(\d+)", new)
+            if m:
+                bt_pair_status("PAIRING %s" % mac, "CONFIRM %06d" % int(m.group(1)))
+                send("yes")
+                seen += m.end()
+                continue
+            m = re.search(r"Enter PIN code:|Request PIN code", new)
+            if m:
+                pin = "%06d" % random.SystemRandom().randrange(1000000)
+                if not os.environ.get("SG_MUTANT_BT_PIN_HIDDEN"):
+                    bt_pair_status("PAIRING %s" % mac, "PIN %s" % pin)
+                send(pin)
+                seen += m.end()
+                continue
+            m = re.search(r"Authorize service|Request authorization|Accept pairing", new)
+            if m:
+                send("yes")
+                seen += m.end()
+                continue
+            for pat in patterns:
+                m = re.search(pat, new)
+                if m:
+                    seen += m.end()
+                    return m.group(0)
+        return None
+
+    bt_pair_status("PAIRING %s" % mac)
+    try:
+        send("agent KeyboardDisplay")
+        send("default-agent")
+        send("pair %s" % mac)
+        got = wait_for([r"Pairing successful", r"Failed to pair[^\n]*", r"not available[^\n]*",
+                        r"AlreadyExists"], 60)
+        if not got:
+            raise Fail("failed", "the device did not answer")
+        if got.startswith("Failed") or "not available" in got:
+            raise Fail("failed", got.strip())
+        send("trust %s" % mac)
+        wait_for([r"trust succeeded", r"Failed to set trusted"], 10)
+        send("connect %s" % mac)
+        wait_for([r"Connection successful", r"Failed to connect[^\n]*"], 30)
+    finally:
+        send("quit")
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        bt_pair_status()
+    return ["PAIRED %s" % mac]
+
+
 def bluetooth(args):
     if not tool("bluetoothctl"):
         if not args:
@@ -440,15 +559,19 @@ def bluetooth(args):
     elif args[0] == "pair" and len(args) == 2:
         if not MAC.fullmatch(args[1]):
             raise Fail("invalid", "not a device address")
-        run(["bluetoothctl", "pair", args[1]], timeout=60)
-        run(["bluetoothctl", "trust", args[1]], check=False)
-        run(["bluetoothctl", "connect", args[1]], timeout=30, check=False)
+        return bt_pair(args[1])
+    elif args[0] == "pairing" and len(args) == 1:
+        try:
+            with open(bt_pair_status_path()) as f:
+                return [l.rstrip("\n") for l in f if l.strip()]
+        except OSError:
+            return []
     elif args[0] in ("connect", "disconnect", "remove") and len(args) == 2:
         if not MAC.fullmatch(args[1]):
             raise Fail("invalid", "not a device address")
         run(["bluetoothctl", args[0], args[1]], timeout=30)
     else:
-        raise Fail("invalid", "usage: bluetooth [power on|off | scan [SECONDS] | pair|connect|disconnect|remove MAC]")
+        raise Fail("invalid", "usage: bluetooth [power on|off | scan [SECONDS] | pair|connect|disconnect|remove MAC | pairing]")
     return []
 
 

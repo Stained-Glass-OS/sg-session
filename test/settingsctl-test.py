@@ -70,11 +70,21 @@ stand_in("pactl", """case "$*" in
   "get-default-sink") echo alsa_output.pci-0000_00_1f.3.analog-stereo ;;
   "get-default-source") echo alsa_input.pci-0000_00_1f.3.analog-stereo ;;
 esac""" % {"t": tmp})
-stand_in("bluetoothctl", """case "$1" in
+stand_in("bluetoothctl", """[ $# -eq 0 ] && while read -r line; do
+  echo "bluetoothctl> $line" >> %(log)s
+  case "$line" in
+    "agent "*) echo "Agent registered" ;;
+    pair*) echo "Attempting to pair with ${line#pair }"; printf '[agent] Passkey: 4321\\n'; sleep 2; echo "Pairing successful" ;;
+    trust*) echo "Changing ${line#trust } trust succeeded" ;;
+    connect*) echo "Connection successful" ;;
+    quit) exit 0 ;;
+  esac
+done
+case "$1" in
   show) [ -f %(t)s/no-bt ] && echo "No default controller available" || printf 'Controller 00:11:22:33:44:55 (public)\\n\\tPowered: yes\\n' ;;
   devices) echo "Device AA:BB:CC:DD:EE:01 Travel Mouse"; echo "Device AA:BB:CC:DD:EE:02 Headphones" ;;
   info) [ "$2" = AA:BB:CC:DD:EE:02 ] && printf '\\tPaired: yes\\n\\tConnected: yes\\n' || printf '\\tPaired: yes\\n\\tConnected: no\\n' ;;
-esac""" % {"t": tmp})
+esac""" % {"t": tmp, "log": LOG})
 stand_in("wlr-randr", "[ \"$1\" = --json ] && cat %s/outputs.json; exit 0" % tmp)
 # (the X server's primary output, which Wine takes for the main display)
 stand_in("xrandr", """case "$*" in
@@ -236,10 +246,31 @@ code, lines = ctl("bluetooth", "scan", "3")
 c = calls()
 check("bluetooth scan: bluetoothctl scans for that long, then lists", code == 0 and "bluetoothctl --timeout 3 scan on" in c
       and "DEVICE AA:BB:CC:DD:EE:01\tno\tyes\tTravel Mouse" in lines, c)
-code, lines = ctl("bluetooth", "pair", "AA:BB:CC:DD:EE:02")
+# pairing a keyboard (David 2026-11-13: Bluetooth keyboard and mouse did not
+# work): bluetoothctl with an agent, the PIN the keyboard wants typed on it
+# published while it waits, then trusted and connected
+import threading
+res = {}
+th = threading.Thread(target=lambda: res.update(r=ctl("bluetooth", "pair", "AA:BB:CC:DD:EE:02")))
+th.start()
+shown = []
+for _ in range(30):
+    time.sleep(0.2)
+    code2, lines2 = ctl("bluetooth", "pairing")
+    if any(l.startswith("PIN") for l in lines2):
+        shown = lines2
+        break
+th.join(30)
+code, lines = res.get("r", (1, []))
 c = calls()
-check("bluetooth pair: pair, trust, connect", code == 0 and c[:3] == ["bluetoothctl pair AA:BB:CC:DD:EE:02",
-      "bluetoothctl trust AA:BB:CC:DD:EE:02", "bluetoothctl connect AA:BB:CC:DD:EE:02"], c)
+check("bluetooth pair: the PIN to type on the keyboard is shown while it waits",
+      shown[:2] == ["PAIRING AA:BB:CC:DD:EE:02", "PIN 004321"], shown)
+check("bluetooth pair: an agent, pair, trust, connect, and done", code == 0 and lines[:1] == ["PAIRED AA:BB:CC:DD:EE:02"]
+      and [x for x in c if x.startswith("bluetoothctl>")][:6] == ["bluetoothctl> agent KeyboardDisplay", "bluetoothctl> default-agent",
+      "bluetoothctl> pair AA:BB:CC:DD:EE:02", "bluetoothctl> trust AA:BB:CC:DD:EE:02",
+      "bluetoothctl> connect AA:BB:CC:DD:EE:02", "bluetoothctl> quit"], (lines, c))
+code, lines = ctl("bluetooth", "pairing")
+check("bluetooth pairing: nothing once it is done", code == 0 and not [l for l in lines if l != "OK"], lines)
 code, lines = ctl("bluetooth", "scan", "999")
 check("bluetooth scan refuses 999 seconds", code == 2 and not calls(), lines)
 code, lines = ctl("bluetooth", "remove", "AA:BB:CC:DD:EE:0;reboot")
