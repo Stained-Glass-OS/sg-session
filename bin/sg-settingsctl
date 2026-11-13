@@ -513,9 +513,10 @@ def display(args):
             run(["wlr-randr", "--output", args[1], "--scale", args[2]])
         # kept for this monitor, as Windows keeps each monitor's settings, and
         # put back when the next session starts (display restore)
-        o = next(o for o in outputs() if o.get("name") == args[1])
+        outs = outputs()
+        o = next(o for o in outs if o.get("name") == args[1])
         c = load_config()
-        c.setdefault("display", {}).setdefault(monitor_key(o), {})[args[0]] = args[2]
+        c.setdefault("display", {}).setdefault(monitor_key(o, outs), {})[args[0]] = args[2]
         save_config(c)
         return []
     if args == ["restore"]:
@@ -575,7 +576,7 @@ def project_of(outs):
 
 
 def set_key(outs):
-    return "|".join(sorted(monitor_key(o) for o in outs))
+    return "|".join(sorted(monitor_key(o, outs) for o in outs))
 
 
 def layout_saved(outs):
@@ -623,9 +624,9 @@ def display_layout(args):
             pass
     c, lay = layout_saved(outs)
     if prim in names:
-        lay["primary"] = monitor_key(names[prim])
+        lay["primary"] = monitor_key(names[prim], outs)
     for name, (x, y) in places.items():
-        lay.setdefault("places", {})[monitor_key(names[name])] = [x, y]
+        lay.setdefault("places", {})[monitor_key(names[name], outs)] = [x, y]
     if len({p for p in places.values()}) > 1 or len(places) < 2:
         lay["project"] = "extend"
     save_config(c)
@@ -647,7 +648,7 @@ def display_primary(name):
         raise Fail("notfound", "no output %s" % name)
     set_primary(name)
     c, lay = layout_saved(outs)
-    lay["primary"] = monitor_key(o)
+    lay["primary"] = monitor_key(o, outs)
     save_config(c)
     return []
 
@@ -656,7 +657,7 @@ def side_by_side(outs, saved=None):
     """Each monitor where it was kept for this set, else left to right in the
     order they are listed, tops lined up."""
     places, x = {}, 0
-    keyed = {monitor_key(o): o for o in outs}
+    keyed = {monitor_key(o, outs): o for o in outs}
     saved = saved or {}
     if saved and all(k in saved for k in keyed):
         return normalized({keyed[k].get("name"): tuple(saved[k]) for k in keyed})
@@ -676,7 +677,7 @@ def display_project(how, only=None):
     if how == "only":
         for n in names:
             argv += ["--output", n] + (["--on", "--pos", "0,0"] if n == only else ["--off"])
-        lay["project"] = "only:" + monitor_key(next(o for o in outs if o.get("name") == only))
+        lay["project"] = "only:" + monitor_key(next(o for o in outs if o.get("name") == only), outs)
     elif how == "duplicate":
         for n in names:
             argv += ["--output", n, "--on", "--pos", "0,0"]
@@ -700,7 +701,7 @@ def restore_layout():
     if not lay:
         return []
     out = []
-    keyed = {monitor_key(o): o for o in outs}
+    keyed = {monitor_key(o, outs): o for o in outs}
     proj = str(lay.get("project") or "extend")
     if proj.startswith("only:") and proj[5:] in keyed:
         if project_of(outs) != "only\t%s" % clean(keyed[proj[5:]].get("name", "")):
@@ -743,11 +744,19 @@ def exact_mode(o, m):
     return "%dx%d@%.3f" % (w, h, float(best.get("refresh") or 0)) if best.get("refresh") else "%dx%d" % (w, h)
 
 
-def monitor_key(o):
+def monitor_key(o, outs):
     """A monitor, not the port it is on: make, model and serial when the
-    compositor knows them, else the output's name."""
-    parts = [str(o.get(k) or "").strip() for k in ("make", "model", "serial")]
-    return "/".join(parts) if any(parts) else "output:%s" % o.get("name", "")
+    compositor knows them, else the output's name. Two alike with no serial
+    (two monitors of one model, as many are sold in pairs) are told apart by
+    their ports too, as Windows does: with one key they were one monitor, and
+    their places, main display and modes were mixed up."""
+    def base(x):
+        parts = [str(x.get(k) or "").strip() for k in ("make", "model", "serial")]
+        return "/".join(parts) if any(parts) else "output:%s" % x.get("name", "")
+    key = base(o)
+    if not os.environ.get("SG_MUTANT_ALIKE_ONE_KEY") and sum(base(x) == key for x in outs) > 1:
+        key += "@%s" % o.get("name", "")
+    return key
 
 
 def display_restore():
@@ -757,8 +766,9 @@ def display_restore():
     reboot)."""
     saved = load_config().get("display", {})
     out = []
-    for o in outputs():
-        want = saved.get(monitor_key(o))
+    outs = outputs()
+    for o in outs:
+        want = saved.get(monitor_key(o, outs))
         if not isinstance(want, dict):
             continue
         name = o.get("name", "")

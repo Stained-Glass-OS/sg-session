@@ -368,6 +368,36 @@ code, lines = ctl("display", "project", "extend", env=XENV)
 check("display project extend: all on again, where they were kept",
       "wlr-randr --output DP-1 --on --pos 1920,0 --output DP-2 --on --pos 1920,1080 --output HDMI-A-1 --on --pos 0,0" in calls(),
       lines)
+# two monitors alike, with no serial (a pair of one model; QEMU's): told apart by
+# their ports -- with one key they were one monitor, and the second's place,
+# the main display, were mixed up (2026-11-13)
+def twins(places):
+    outs = [{"name": n, "description": "Twin", "make": "Acme", "model": "Twin", "serial": "", "scale": 1.0,
+             "enabled": True, "position": {"x": x, "y": y},
+             "modes": [{"width": 1280, "height": 800, "refresh": 60.0, "preferred": True, "current": True}]}
+            for n, (x, y) in zip(("Virtual-1", "Virtual-2"), places)]
+    with open(os.path.join(tmp, "outputs.json"), "w") as f:
+        json.dump(outs, f)
+
+
+twins([(0, 0), (1280, 0)])
+for f in ("primary",):
+    try:
+        os.unlink(os.path.join(tmp, f))
+    except OSError:
+        pass
+calls()
+code, lines = ctl("display", "layout", "Virtual-2", "0", "0", "Virtual-1", "1280", "0", env=XENV)
+calls()
+twins([(0, 0), (1280, 0)])          # the next session: as they come up
+os.unlink(os.path.join(tmp, "primary"))
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json")) as f:
+    tl = json.load(f).get("display_layouts", {}).get("Acme/Twin/@Virtual-1|Acme/Twin/@Virtual-2", {})
+check("display restore: two alike monitors each where it was kept, the main display kept as the same one",
+      "wlr-randr --output Virtual-1 --on --pos 1280,0 --output Virtual-2 --on --pos 0,0" in cl
+      and tl.get("primary") == "Acme/Twin/@Virtual-1", (lines, cl, tl))
 for bad in (["layout", "DP-1", "x", "0"], ["layout", "DP-1", "0"], ["layout", "DP-1", "0", "99999"],
             ["layout", "DP-1;", "0", "0"], ["primary", "--off"], ["project", "only", "DP-9"], ["project", "mirror"]):
     code, lines = ctl("display", *bad, env=XENV)
