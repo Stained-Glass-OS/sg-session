@@ -1,3 +1,13 @@
+sg-session (0.1.0-245) unstable; urgency=medium
+
+  * Login and lock screen: while a password is checked the password box is
+    greyed and takes no typing, as on Windows; it opens again, empty and
+    with the cursor in it, when the next try is asked for. After a wrong
+    password it took typing at once and cleared it a second or two later,
+    and Enter in that time sent what was typed as another try.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 13 Nov 2026 10:30:00 -0800
+
 sg-session (0.1.0-244) unstable; urgency=medium
 
   * sg-settingsctl display layout keeps the main display: with no primary

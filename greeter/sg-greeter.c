@@ -63,6 +63,12 @@ static char g_last[256];
 static BOOL g_last_mode;
 static HWND g_user_label, g_other;
 static BOOL g_awaiting_secret = FALSE;
+/* An answer sent and not yet taken or refused: the password box is greyed
+ * and takes no typing until the service asks again, as Windows' login
+ * screen takes none while it checks one (David 2026-11-13: after a wrong
+ * password it let him type at once, then cleared that a second or two later
+ * when the refusal came -- and Enter then sent what he had typed too) */
+static BOOL g_checking = FALSE;
 static BOOL g_done = FALSE;
 /* Lock mode ("/lock <user>"): the session's user is fixed -- the lock service
  * got it from the kernel -- so the screen only asks for the password. */
@@ -380,11 +386,20 @@ static void set_status( const char *text, BOOL is_error )
     InvalidateRect( g_status, NULL, TRUE );
 }
 
+static void checking( BOOL on )
+{
+#ifdef SG_MUTANT_TYPE_WHILE_CHECKING
+    on = FALSE;
+#endif
+    g_checking = on;
+    EnableWindow( g_secret, !on );
+}
+
 static void submit( void )
 {
     char buf[512];
 
-    if (g_done) return;
+    if (g_done || g_checking) return;
     if (!g_awaiting_secret && (g_lock_user || g_last_mode)) return;   /* waiting for the prompt */
     if (!g_awaiting_secret)
     {
@@ -399,6 +414,7 @@ static void submit( void )
         GetWindowTextA( g_secret, buf, sizeof(buf) );
         set_status( "Signing in...", FALSE );
         EnableWindow( g_submit, FALSE );
+        checking( TRUE );
         send_line( "REPLY %s", buf );
         /* Do not keep it in the control, and do not keep it here either. */
         SetWindowTextA( g_secret, "" );
@@ -413,6 +429,7 @@ static void last_user_mode( BOOL on )
     if (!on && g_last_mode) send_line( "CANCEL" );
     g_last_mode = on;
     g_awaiting_secret = FALSE;
+    checking( FALSE );
     SetWindowTextA( g_secret, "" );
     SetWindowTextA( g_prompt, "" );
     ShowWindow( g_secret, SW_HIDE );
@@ -447,6 +464,7 @@ static void handle_bridge_line( HWND hwnd, char *line )
         if (g_lock_user && !strcmp( g_lock_user, "live" ))
             set_status( "The live account has no password: select Sign in.", FALSE );
         if (!g_curtain) ShowWindow( g_secret, SW_SHOW );
+        checking( FALSE );
         EnableWindow( g_submit, TRUE );
         want_focus( g_secret );
     }
@@ -464,7 +482,8 @@ static void handle_bridge_line( HWND hwnd, char *line )
         SetWindowTextA( g_secret, "" );
         if (g_last_mode)
         {
-            /* the same account again: its password is asked once more */
+            /* the same account again: its password is asked once more --
+             * the box stays greyed until it is (PROMPT_SECRET) */
             EnableWindow( g_submit, TRUE );
             set_status( strcmp( line + 8, "The user name or password is incorrect. Try again." ) ? line + 8
                         : "The password is incorrect. Try again.", TRUE );
@@ -473,6 +492,7 @@ static void handle_bridge_line( HWND hwnd, char *line )
         }
         if (!g_lock_user)
         {
+            checking( FALSE );
             SetWindowTextA( g_prompt, "" );
             ShowWindow( g_secret, SW_HIDE );
             want_focus( g_user );
@@ -485,6 +505,7 @@ static void handle_bridge_line( HWND hwnd, char *line )
     }
     else if (!strncmp( line, "ERROR ", 6 ))
     {
+        checking( FALSE );
         EnableWindow( g_submit, TRUE );
         set_status( line + 6, TRUE );
     }
@@ -629,6 +650,15 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
     case WM_CTLCOLORSTATIC:
     {
         HDC dc = (HDC)wp;
+        /* the password box while it is checked (disabled edits colour as
+         * statics): grey, plainly not taking typing */
+        if ((HWND)lp == g_secret)
+        {
+            static HBRUSH grey;
+            if (!grey) grey = CreateSolidBrush( RGB(0xc8, 0xc8, 0xc8) );
+            SetBkColor( dc, RGB(0xc8, 0xc8, 0xc8) );
+            return (LRESULT)grey;
+        }
         /* A real brush, not NULL_BRUSH. A transparent static never erases what
          * it drew last time, so any change of text or font leaves the previous
          * one underneath -- two overlapping titles in different sizes, which
