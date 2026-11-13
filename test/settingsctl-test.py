@@ -76,6 +76,12 @@ stand_in("bluetoothctl", """case "$1" in
   info) [ "$2" = AA:BB:CC:DD:EE:02 ] && printf '\\tPaired: yes\\n\\tConnected: yes\\n' || printf '\\tPaired: yes\\n\\tConnected: no\\n' ;;
 esac""" % {"t": tmp})
 stand_in("wlr-randr", "[ \"$1\" = --json ] && cat %s/outputs.json; exit 0" % tmp)
+# (the X server's primary output, which Wine takes for the main display)
+stand_in("xrandr", """case "$*" in
+  --listmonitors) p=$(cat %(t)s/primary 2>/dev/null); echo "Monitors: 3"
+    i=0; for n in DP-1 DP-2 HDMI-A-1; do [ "$n" = "$p" ] && s='*' || s=''; echo " $i: +$s$n 1920/530x1080/300+0+0  $n"; i=$((i+1)); done ;;
+  "--output "*" --primary") echo "$2" > %(t)s/primary ;;
+esac""" % {"t": tmp})
 stand_in("wlsunset", "exec sleep 300")
 stand_in("swayidle", "exec sleep 300")
 stand_in("wlopm", "")
@@ -284,6 +290,85 @@ for bad in (["mode", "Virtual-1", "big"], ["mode", "Virtual-1", "1280x720 --off"
     check("display refuses %s" % " ".join(bad), code == 2 and not [c for c in calls() if "--json" not in c], lines)
 code, lines = ctl("display", env=dict(ENV, WAYLAND_DISPLAY=""))
 check("display: unsupported off the compositor", code == 4 and lines[-1].startswith("ERROR unsupported"), lines)
+
+# ---- several monitors (David 2026-11-12: "many monitors, more than two even, be able
+# to adjust where they are"): three, rearranged, the main display, extend /
+# duplicate / only one, kept for this set of monitors and put back
+def three(places, enabled=(True, True, True)):
+    outs = []
+    for i, (n, (x, y)) in enumerate(zip(("DP-1", "DP-2", "HDMI-A-1"), places)):
+        outs.append({"name": n, "description": "Monitor %d" % i, "make": "Acme", "model": "M%d" % i, "serial": "S%d" % i,
+                     "scale": 1.0, "enabled": enabled[i], "position": {"x": x, "y": y},
+                     "modes": [{"width": 1920, "height": 1080, "refresh": 144.0 if i == 1 else 60.0,
+                                "preferred": True, "current": True}]})
+    with open(os.path.join(tmp, "outputs.json"), "w") as f:
+        json.dump(outs, f)
+
+
+XENV = dict(ENV, DISPLAY=":99")
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", env=XENV)
+check("display: each of three monitors' place, the first the main display (none set: the one at 0,0)",
+      "PLACE DP-1\t0\t0\t1920\t1080\tyes\tyes" in lines and "PLACE DP-2\t1920\t0\t1920\t1080\tyes\tno" in lines
+      and "PLACE HDMI-A-1\t3840\t0\t1920\t1080\tyes\tno" in lines and "PROJECT extend" in lines, lines)
+check("display: each monitor's own refresh rate", "OUTPUT DP-2\t1920x1080@144\t1.0\tMonitor 1" in lines, lines)
+calls()
+# HDMI-A-1 dragged to the left of DP-1, DP-2 below DP-1: moved so the top-left is 0,0
+code, lines = ctl("display", "layout", "HDMI-A-1", "-1920", "0", "DP-1", "0", "0", "DP-2", "0", "1080", env=XENV)
+cl = calls()
+check("display layout: one wlr-randr call places all three, the top-left at 0,0",
+      code == 0 and "wlr-randr --output HDMI-A-1 --pos 0,0 --output DP-1 --pos 1920,0 --output DP-2 --pos 1920,1080" in cl,
+      (lines, cl))
+code, lines = ctl("display", "primary", "DP-2", env=XENV)
+check("display primary: the X server's primary output (Wine's main display)",
+      code == 0 and "xrandr --output DP-2 --primary" in calls(), lines)
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json")) as f:
+    cfg = json.load(f)
+lay = cfg.get("display_layouts", {}).get("Acme/M0/S0|Acme/M1/S1|Acme/M2/S2", {})
+check("display layout: kept for this set of monitors",
+      lay.get("places") == {"Acme/M2/S2": [0, 0], "Acme/M0/S0": [1920, 0], "Acme/M1/S1": [1920, 1080]}
+      and lay.get("primary") == "Acme/M1/S1" and lay.get("project") == "extend", lay)
+# the next session: the monitors come back side by side, no primary
+three([(0, 0), (1920, 0), (3840, 0)])
+os.unlink(os.path.join(tmp, "primary"))
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+check("display restore: the three where they were kept, and the main display",
+      "wlr-randr --output DP-1 --on --pos 1920,0 --output DP-2 --on --pos 1920,1080 --output HDMI-A-1 --on --pos 0,0" in cl
+      and "xrandr --output DP-2 --primary" in cl, (lines, cl))
+# two of them only (the laptop's other set) has its own layout: nothing restored
+with open(os.path.join(tmp, "outputs.json")) as f:
+    o3 = json.load(f)
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump(o3[:2], f)
+code, lines = ctl("display", "restore", env=XENV)
+check("display restore: another set of monitors keeps its own layout (none yet: left as it is)",
+      not [c for c in calls() if "--pos" in c], lines)
+three([(0, 0), (1920, 0), (3840, 0)])
+code, lines = ctl("display", "project", "duplicate", env=XENV)
+check("display project duplicate: all three at 0,0",
+      "wlr-randr --output DP-1 --on --pos 0,0 --output DP-2 --on --pos 0,0 --output HDMI-A-1 --on --pos 0,0" in calls(), lines)
+three([(0, 0), (0, 0), (0, 0)])
+code, lines = ctl("display", env=XENV)
+check("display: duplicate is told", "PROJECT duplicate" in lines, lines)
+code, lines = ctl("display", "project", "only", "DP-2", env=XENV)
+check("display project only DP-2: the others off",
+      "wlr-randr --output DP-1 --off --output DP-2 --on --pos 0,0 --output HDMI-A-1 --off" in calls(), lines)
+three([(0, 0), (0, 0), (0, 0)], (False, True, False))
+code, lines = ctl("display", env=XENV)
+check("display: only one is told", "PROJECT only\tDP-2" in lines, lines)
+code, lines = ctl("display", "project", "extend", env=XENV)
+check("display project extend: all on again, where they were kept",
+      "wlr-randr --output DP-1 --on --pos 1920,0 --output DP-2 --on --pos 1920,1080 --output HDMI-A-1 --on --pos 0,0" in calls(),
+      lines)
+for bad in (["layout", "DP-1", "x", "0"], ["layout", "DP-1", "0"], ["layout", "DP-1", "0", "99999"],
+            ["layout", "DP-1;", "0", "0"], ["primary", "--off"], ["project", "only", "DP-9"], ["project", "mirror"]):
+    code, lines = ctl("display", *bad, env=XENV)
+    check("display refuses %s" % " ".join(bad), code in (2, 5) and not [c for c in calls() if "--json" not in c and "listmonitors" not in c], lines)
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump(OUTPUTS, f)
+calls()
 
 # ---- screen rotation (David 2026-10-07: a tablet turns its screen, or not)
 code, lines = ctl("display")

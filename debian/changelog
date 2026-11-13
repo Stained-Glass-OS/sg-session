@@ -1,3 +1,18 @@
+sg-session (0.1.0-243) unstable; urgency=medium
+
+  * Several monitors, any number, arranged as on Windows: sg-settingsctl
+    display lists each monitor's place (PLACE), the main display and
+    extend/duplicate/only-one (PROJECT); "display layout OUTPUT X Y..."
+    places them all in one go (the top-left moved to 0,0), "display primary"
+    makes one the main display (the X server's primary output, which Wine
+    takes), "display project extend|duplicate|only OUTPUT". All of it is
+    kept for that set of monitors, as Windows keeps it (the laptop alone
+    and the laptop at the desk each have their own), and "display restore"
+    puts it back at sign-in and, from the desktop's watcher, whenever a
+    monitor is plugged in or out. settingsctl-test: three monitors.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 17:30:00 -0800
+
 sg-session (0.1.0-242) unstable; urgency=medium
 
   * The desktop over every monitor (with wine-sg 7749): sg-run-explorer sets

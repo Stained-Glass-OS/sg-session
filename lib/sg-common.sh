@@ -72,6 +72,13 @@ sg_desktop_follow() {
         # given the size of all of them as one mode made the primary monitor
         # that wide; the scale goes by the primary one.
         if [ "$(sg_reg_string 'HKCU\Software\Wine\Explorer' HostMonitors)" = Y ]; then
+            # a monitor plugged in or out: this set of monitors as Settings
+            # kept it (where each is, the main display; sg-settingsctl);
+            # nothing when it already is, so this does not go round again
+            if command -v sg-settingsctl >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+                _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
+                [ -n "$_df_r" ] && sg_log "display restored: $_df_r"
+            fi
             _df_prim=$(sg_primary_size "$_df_now")
             sg_auto_scale "${_df_prim%x*}" "${_df_prim#*x}" >/dev/null
             [ -f "$_df_settings" ] && wine "$_df_settings" --set metrics >/dev/null 2>&1
