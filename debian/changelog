@@ -1,3 +1,17 @@
+sg-session (0.1.0-242) unstable; urgency=medium
+
+  * The desktop over every monitor (with wine-sg 7749): sg-run-explorer sets
+    HKCU\Software\Wine\Explorer HostMonitors=Y, so programs see each
+    monitor where it is and the desktop reaches all of them (with two, the
+    desktop came up on one and the sign-in screen stayed on the other). The
+    display scale goes by the primary monitor (sg_primary_size, from xrandr
+    --listmonitors), not the size of all of them; when the monitors change,
+    the desktop is no longer resized to one mode the size of all of them
+    (that made the primary monitor that wide): the scale and the title bars
+    follow the primary monitor. desktop-follow-test covers it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 16:45:00 -0800
+
 sg-session (0.1.0-241) unstable; urgency=medium
 
   * Remote control for Linux programs: xdg-desktop-portal-sg (a fork of

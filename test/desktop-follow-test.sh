@@ -44,4 +44,39 @@ kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
 sleep 0.5
 if kill -0 "$W" 2>/dev/null; then echo "FAIL  the watcher outlived the session"; kill "$W"; RC=1
 else echo "PASS  the watcher ends with the session"; fi
+
+# Over every monitor (HostMonitors=Y, wine-sg 7749) Wine follows the monitors
+# itself: the desktop is not given the size of all of them as one mode (that
+# made the primary monitor that wide); the scale goes by the primary monitor
+# (xrandr's *: 2560x1440, 125%), not all of them (6400x2160: 200%); the
+# title bars follow it (--set metrics).
+cat > "$T/bin/wine" <<'W'
+#!/bin/sh
+case "$*" in
+*sg-settings64.exe*) echo "${*##*/}" >> "$Q.args" ;;
+*"reg query"*HostMonitors*) printf '    HostMonitors    REG_SZ    Y\r\n' ;;
+*"reg add"*"/v LogPixels"*) echo "LogPixels ${*##*/d }" | sed 's/ \/f$//' >> "$Q.args" ;;
+esac
+W
+cat > "$T/bin/xrandr" <<'W'
+#!/bin/sh
+printf 'Monitors: 2\n 0: +*XWAYLAND0 2560/600x1440/340+0+0  XWAYLAND0\n 1: +XWAYLAND1 3840/600x2160/340+2560+0  XWAYLAND1\n'
+W
+chmod +x "$T/bin/wine" "$T/bin/xrandr"
+printf '%s\n' 1280x800 6400x2160 > "$T/q"
+: > "$T/q.args"; rm -f "$T/q.last"
+sleep 30 & SESSION=$!
+( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
+  SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T"
+  export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR
+  unset DISPLAY
+  . "$HERE/lib/sg-common.sh"; sg_desktop_follow 1280x800 "$SESSION" ) 2>/dev/null &
+W=$!
+sleep 2
+got=$(cat "$T/q.args" | tr '\n' ' ')
+want="sg-settings64.exe --set metrics LogPixels 120 sg-settings64.exe --set metrics "
+if [ "$got" = "$want" ]; then echo "PASS  over every monitor the desktop is not resized, and the scale follows the primary monitor"
+else echo "FAIL  over every monitor: '$got' (want '$want')"; RC=1; fi
+kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
+sleep 0.5; kill "$W" 2>/dev/null
 exit $RC

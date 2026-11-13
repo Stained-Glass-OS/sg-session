@@ -147,6 +147,11 @@ reg_set() {
 # fullscreen compositor covers the desktop and taskbar entirely.
 reg_set 'HKCU\Software\Wine\Explorer' Desktop  shell
 reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
+# The desktop is every monitor (wine-sg 7749): programs see each where it is,
+# the primary one primary, and the desktop reaches all of them -- with two, the
+# desktop came up on one and the sign-in screen stayed on the other (David
+# 2026-11-12). GEOM is then all of them; the scale goes by the primary one.
+reg_set 'HKCU\Software\Wine\Explorer' HostMonitors Y
 
 # The display scale: the recommended one for this screen unless the user
 # picked one (sg-common.sh sg_auto_scale; David 2026-10-05, a Surface Pro 7
@@ -155,7 +160,8 @@ reg_set 'HKCU\Software\Wine\Explorer\Desktops' shell "$GEOM"
 # by the XSETTINGS manager started here and the X resources, and follow a
 # change while they run (sg_linux_scale_env; Settings runs
 # sg-display-scale). At 1080p and below it is 100%, as before.
-SG_SCALE=$(sg_auto_scale "${GEOM%x*}" "${GEOM#*x}")
+PRIMARY=$(sg_primary_size "$GEOM")
+SG_SCALE=$(sg_auto_scale "${PRIMARY%x*}" "${PRIMARY#*x}")
 export SG_SCALE
 sg_linux_scale_env "$SG_SCALE"
 

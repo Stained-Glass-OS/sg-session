@@ -34,6 +34,18 @@ SG_WINE_GROUP="${SG_WINE_GROUP:-sgwine}"
 # answer. Domain groups map onto it later (P2).
 SG_ADMIN_GROUP="${SG_ADMIN_GROUP:-sg-admins}"
 
+# The primary monitor's size, WxH (xrandr --listmonitors: the one marked *,
+# else the first), or $1 when there is no X server to ask: with several
+# monitors the X root is all of them, and the display scale and the work area
+# go by the primary one.
+sg_primary_size() {
+    _ps=$(xrandr --listmonitors 2>/dev/null | awk '
+        /^ *[0-9]+:/ { g = $3; sub(/\/[0-9]+/, "", g); sub(/\/[0-9]+/, "", g); sub(/\+.*/, "", g)
+                       if (!first) first = g; if ($2 ~ /\*/) prim = g }
+        END { print (prim ? prim : first) }')
+    case "$_ps" in [0-9]*x[0-9]*) echo "$_ps" ;; *) echo "$1" ;; esac
+}
+
 # The desktop follows the output. Settings resizes the shell when it changes the
 # mode; a change made any other way -- a monitor plugged in or swapped, another
 # tool, the compositor -- left the desktop at the old size and the taskbar off
@@ -55,8 +67,17 @@ sg_desktop_follow() {
         if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi
         sg_log "the output is now $_df_now (was $_df_last): the desktop follows"
         # (sg-settings --set desktop also sets the recommended display scale
-        # for the new size, unless the user picked one)
-        [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
+        # for the new size, unless the user picked one). Over every monitor
+        # (HostMonitors, wine-sg 7749) Wine follows them itself: the desktop
+        # given the size of all of them as one mode made the primary monitor
+        # that wide; the scale goes by the primary one.
+        if [ "$(sg_reg_string 'HKCU\Software\Wine\Explorer' HostMonitors)" = Y ]; then
+            _df_prim=$(sg_primary_size "$_df_now")
+            sg_auto_scale "${_df_prim%x*}" "${_df_prim#*x}" >/dev/null
+            [ -f "$_df_settings" ] && wine "$_df_settings" --set metrics >/dev/null 2>&1
+        else
+            [ -f "$_df_settings" ] && wine "$_df_settings" --set desktop "$_df_now" >/dev/null 2>&1
+        fi
         _df_last=$_df_now
         # Linux programs (running ones too), and the work area above the
         # taskbar, at the scale now in use
@@ -461,6 +482,12 @@ sg_scale_for() {
 sg_reg_dword() {
     _rd=$(wine reg query "$1" /v "$2" 2>/dev/null | tr -d '\r' | awk -v n="$2" '$1 == n && $2 == "REG_DWORD" { print $3; exit }')
     [ -n "$_rd" ] && printf '%d\n' "$_rd"
+    return 0
+}
+
+# A REG_SZ of the current account's, or empty.   sg_reg_string KEY NAME
+sg_reg_string() {
+    wine reg query "$1" /v "$2" 2>/dev/null | tr -d '\r' | awk -v n="$2" '$1 == n && $2 == "REG_SZ" { print $3; exit }'
     return 0
 }
 
