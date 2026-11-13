@@ -9,6 +9,8 @@ sg-session (0.1.0-242) unstable; urgency=medium
     the desktop is no longer resized to one mode the size of all of them
     (that made the primary monitor that wide): the scale and the title bars
     follow the primary monitor. desktop-follow-test covers it.
+  * CI: the wine-sg build installs libicu-dev (wine-sg's icu unixlib needs
+    it; 241's CI stopped at unicode/utypes.h).
 
  -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 16:45:00 -0800
 

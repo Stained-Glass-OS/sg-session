@@ -81,7 +81,7 @@ jobs:
           sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get build-dep -y --no-install-recommends wine
-          apt-get install -y --no-install-recommends libsane-dev
+          apt-get install -y --no-install-recommends libsane-dev libicu-dev
           make -C _deps/wine-sg install
 
       - name: Save wine-sg
