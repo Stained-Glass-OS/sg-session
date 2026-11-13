@@ -315,11 +315,17 @@ check("display: each of three monitors' place, the first the main display (none 
 check("display: each monitor's own refresh rate", "OUTPUT DP-2\t1920x1080@144\t1.0\tMonitor 1" in lines, lines)
 calls()
 # HDMI-A-1 dragged to the left of DP-1, DP-2 below DP-1: moved so the top-left is 0,0
+try:
+    os.unlink(os.path.join(tmp, "primary"))
+except OSError:
+    pass
 code, lines = ctl("display", "layout", "HDMI-A-1", "-1920", "0", "DP-1", "0", "0", "DP-2", "0", "1080", env=XENV)
 cl = calls()
 check("display layout: one wlr-randr call places all three, the top-left at 0,0",
       code == 0 and "wlr-randr --output HDMI-A-1 --pos 0,0 --output DP-1 --pos 1920,0 --output DP-2 --pos 1920,1080" in cl,
       (lines, cl))
+check("display layout: the main display stays the main display (DP-1, at 0,0 before, now right of HDMI-A-1)",
+      "xrandr --output DP-1 --primary" in cl, cl)
 code, lines = ctl("display", "primary", "DP-2", env=XENV)
 check("display primary: the X server's primary output (Wine's main display)",
       code == 0 and "xrandr --output DP-2 --primary" in calls(), lines)

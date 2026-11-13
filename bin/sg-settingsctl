@@ -607,11 +607,23 @@ def display_layout(args):
             raise Fail("invalid", "a place is X Y, -32768 to 32768")
         places[name] = (int(xs), int(ys))
     places = normalized(places)
+    # the main display stays the main display wherever it now is, as on
+    # Windows: with no primary output the X server's main display is whichever
+    # is at 0,0 -- moving a display to the left of it made that one the main
+    # display, the taskbar and the windows went with it
+    prim = primary_output(outs)
     argv = ["wlr-randr"]
     for name, (x, y) in places.items():
         argv += ["--output", name, "--pos", "%d,%d" % (x, y)]
     run(argv)
+    if prim and os.environ.get("DISPLAY") and not os.environ.get("SG_MUTANT_LAYOUT_MOVES_MAIN"):
+        try:
+            set_primary(prim)
+        except Fail:
+            pass
     c, lay = layout_saved(outs)
+    if prim in names:
+        lay["primary"] = monitor_key(names[prim])
     for name, (x, y) in places.items():
         lay.setdefault("places", {})[monitor_key(names[name])] = [x, y]
     if len({p for p in places.values()}) > 1 or len(places) < 2:

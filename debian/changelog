@@ -1,3 +1,13 @@
+sg-session (0.1.0-244) unstable; urgency=medium
+
+  * sg-settingsctl display layout keeps the main display: with no primary
+    output set, the X server's main display is whichever is at 0,0, and a
+    display dragged to the left of the main one became the main display,
+    the taskbar and the windows going with it. The main display is made
+    the X server's primary output as the displays move, and kept.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 12 Nov 2026 19:10:00 -0800
+
 sg-session (0.1.0-243) unstable; urgency=medium
 
   * Several monitors, any number, arranged as on Windows: sg-settingsctl
