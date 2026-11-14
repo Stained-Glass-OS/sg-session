@@ -1,3 +1,11 @@
+sg-session (0.1.0-248) unstable; urgency=medium
+
+  * sg-settingsctl input: the scrolling direction of mice and touchpads
+    (SCROLL lines; input natural mouse|touchpad yes|no), kept in
+    input.conf for the compositor. Natural scrolling is off by default.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 13 Nov 2026 21:05:00 -0800
+
 sg-session (0.1.0-247) unstable; urgency=medium
 
   * Bluetooth pairing as on Windows: sg-settingsctl bluetooth pair runs

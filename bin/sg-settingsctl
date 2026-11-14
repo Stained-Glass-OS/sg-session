@@ -36,6 +36,11 @@
 #       PAIRING <mac> while a pair runs, then PIN <digits> when the device
 #       wants it typed on it, or CONFIRM <digits> when it shows it too
 #   sg-settingsctl bluetooth scan [SECONDS]            (then lists, as above)
+#   sg-settingsctl input
+#       SCROLL mouse|touchpad <natural yes|no>
+#   sg-settingsctl input natural mouse|touchpad yes|no
+#       the scrolling direction, kept in input.conf for the compositor, which
+#       applies it to every mouse and touchpad (natural off by default)
 #   sg-settingsctl display
 #       OUTPUT <name>\t<WxH@Hz>\t<scale>\t<description>
 #       MODE <name>\t<WxH@Hz>\t<current yes|no>\t<preferred yes|no>
@@ -1731,7 +1736,41 @@ def media(args):
     return ["PLAYER %s" % clean(target[len(MPRIS):])]
 
 
-COMMANDS = {"sound": sound, "media": media, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
+def input_conf_path():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "stained-glass", "input.conf")
+
+
+def input_settings(args):
+    """The scrolling direction of mice and touchpads (Settings > Mouse): the
+    compositor reads input.conf (natural_mouse=, natural_touchpad=). Natural
+    scrolling is off unless chosen, as David wants it (2026-11-13)."""
+    conf = {"natural_mouse": "0", "natural_touchpad": "0"}
+    try:
+        with open(input_conf_path()) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k in conf:
+                    conf[k] = "1" if v.strip() == "1" else "0"
+    except OSError:
+        pass
+    if not args:
+        return ["SCROLL mouse\t%s" % yn(conf["natural_mouse"] == "1"),
+                "SCROLL touchpad\t%s" % yn(conf["natural_touchpad"] == "1")]
+    if len(args) == 3 and args[0] == "natural":
+        which = one_of(args[1], ("mouse", "touchpad"), "device")
+        conf["natural_" + which] = "1" if one_of(args[2], ("yes", "no"), "natural") == "yes" else "0"
+        path = input_conf_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("".join("%s=%s\n" % kv for kv in sorted(conf.items())))
+        os.replace(tmp, path)
+        return []
+    raise Fail("invalid", "usage: input [natural mouse|touchpad yes|no]")
+
+
+COMMANDS = {"input": input_settings, "sound": sound, "media": media, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen, "look": look, "display-scale": display_scale,

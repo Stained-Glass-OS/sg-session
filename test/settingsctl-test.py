@@ -437,6 +437,22 @@ with open(os.path.join(tmp, "outputs.json"), "w") as f:
     json.dump(OUTPUTS, f)
 calls()
 
+# ---- scrolling direction (David 2026-11-13: "natural scrolling should not be
+# default"): off for both unless chosen; kept in input.conf for the compositor
+code, lines = ctl("input")
+check("input: natural scrolling off for mouse and touchpad by default",
+      code == 0 and "SCROLL mouse\tno" in lines and "SCROLL touchpad\tno" in lines, lines)
+code, lines = ctl("input", "natural", "touchpad", "yes")
+with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "input.conf")) as f:
+    ic = f.read()
+code2, lines2 = ctl("input")
+check("input natural touchpad yes: input.conf for the compositor, the mouse unchanged",
+      code == 0 and "natural_touchpad=1" in ic and "natural_mouse=0" in ic and "SCROLL touchpad\tyes" in lines2
+      and "SCROLL mouse\tno" in lines2, (ic, lines2))
+code, lines = ctl("input", "natural", "pen", "yes")
+check("input refuses another device", code == 2, lines)
+ctl("input", "natural", "touchpad", "no")
+
 # ---- screen rotation (David 2026-10-07: a tablet turns its screen, or not)
 code, lines = ctl("display")
 check("display: the output's orientation", "TRANSFORM Virtual-1\tnormal" in lines, lines)
