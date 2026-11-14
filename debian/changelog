@@ -1,3 +1,12 @@
+sg-session (0.1.0-250) unstable; urgency=medium
+
+  * Login screen: this computer's accounts are listed bottom left, above
+    "Other user", as on Windows -- a click picks one and asks its password
+    (sg-greet-bridge sends LOCALUSER for people's accounts: uid 1000 up
+    with a login shell). Local accounts could only be typed in.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 14 Nov 2026 01:20:00 -0800
+
 sg-session (0.1.0-249) unstable; urgency=medium
 
   * sg-settingsctl display power OUTPUT on|off: one display turned off,

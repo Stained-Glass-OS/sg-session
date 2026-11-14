@@ -56,5 +56,18 @@ grep -q 'stub: cancel_session' "$T/stub.out" && pass "CANCEL ends the sign-in be
 echo root > "$T/last-user"
 run "$T/look.sh"
 grep -q '^LASTUSER' "$T/got" && fail "a system account was offered" || pass "a system account (root) is never offered"
+# this computer's own accounts, listed for the login screen (LOCALUSER, David
+# 2026-11-13): people's (uid 1000 up, a login shell), not system or service accounts
+cat > "$T/passwd" <<EOP
+root:x:0:0:root:/root:/bin/bash
+alex:x:1000:100:Alex:/home/alex:/bin/bash
+sgsystem:x:1003:100::/var/lib/sgsystem:/usr/sbin/nologin
+bob:x:1001:100:Bob:/home/bob:/bin/bash
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+EOP
+SG_GREETER_PASSWD="$T/passwd" run "$T/look.sh"
+[ "$(grep '^LOCALUSER' "$T/got" | tr '\n' '|')" = "LOCALUSER alex|LOCALUSER bob|" ] \
+    && pass "this computer's people's accounts are listed (LOCALUSER alex, bob; not root, sgsystem, nobody)" \
+    || fail "local accounts: $(grep '^LOCALUSER' "$T/got" | tr '\n' '|')"
 [ "$RC" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

@@ -45,6 +45,7 @@
 #define ID_POWER  106
 #define ID_EASE   108
 #define ID_OTHER  107
+#define ID_LOCAL_FIRST 300   /* this computer's accounts, listed bottom left (LOCALUSER) */
 #define ID_SAS_LOCK    110
 #define ID_SAS_SIGNOUT 111
 #define ID_SAS_TASKMGR 112
@@ -62,6 +63,12 @@ static HWND g_title;
 static char g_last[256];
 static BOOL g_last_mode;
 static HWND g_user_label, g_other;
+/* This computer's own accounts (LOCALUSER), listed bottom left above "Other
+ * user" as Windows lists them: a click picks one, its password asked at once
+ * (David 2026-11-13: local accounts could only be typed in) */
+static char g_local[8][64];
+static HWND g_local_btn[8];
+static int g_nlocal;
 static BOOL g_awaiting_secret = FALSE;
 /* An answer sent and not yet taken or refused: the password box is greyed
  * and takes no typing until the service asks again, as Windows' login
@@ -445,6 +452,17 @@ static void last_user_mode( BOOL on )
     else want_focus( g_user );
 }
 
+/* an account of the list picked: the sign-in begun for another is ended, this
+ * one's begins */
+static void pick_local( int i )
+{
+    if (i < 0 || i >= g_nlocal || g_done) return;
+    if (g_last_mode) send_line( "CANCEL" );
+    g_last_mode = FALSE;
+    lstrcpynA( g_last, g_local[i], sizeof(g_last) );
+    last_user_mode( TRUE );
+}
+
 /* One line from the bridge, on the UI thread. */
 static void handle_bridge_line( HWND hwnd, char *line )
 {
@@ -509,6 +527,21 @@ static void handle_bridge_line( HWND hwnd, char *line )
         EnableWindow( g_submit, TRUE );
         set_status( line + 6, TRUE );
     }
+#ifndef SG_MUTANT_LOCALUSER_IGNORED
+    else if (!strncmp( line, "LOCALUSER ", 10 ) && !g_lock_user && !g_sas && !g_done && g_nlocal < 8 && line[10])
+    {
+        int i, sh = g_sh;
+        lstrcpynA( g_local[g_nlocal], line + 10, sizeof(g_local[0]) );
+        g_local_btn[g_nlocal] = CreateWindowExA( 0, "BUTTON", g_local[g_nlocal],
+                                                 WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | (g_curtain ? 0 : WS_VISIBLE),
+                                                 24, 0, 220, 48, hwnd, (HMENU)(INT_PTR)(ID_LOCAL_FIRST + g_nlocal),
+                                                 GetModuleHandleA( NULL ), NULL );
+        g_nlocal++;
+        /* stacked upwards from above "Other user" */
+        for (i = 0; i < g_nlocal; i++)
+            SetWindowPos( g_local_btn[i], NULL, 24, sh - 76 - 52 * (g_nlocal - i), 220, 48, SWP_NOZORDER | SWP_NOACTIVATE );
+    }
+#endif
     else if (!strncmp( line, "LASTUSER ", 9 ) && !g_lock_user && !g_sas && !g_done)
     {
 #ifndef SG_MUTANT_IGNORE_LAST_USER
@@ -645,7 +678,11 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
             sg_ease_draw( (const DRAWITEMSTRUCT *)lp, RGB(0x1A, 0x16, 0x40), RGB(0x40, 0x30, 0x70), RGB(0xFF, 0xFF, 0xFF) );
             return TRUE;
         }
-        if ((wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) || wp == ID_OTHER) { draw_link( hwnd, (const DRAWITEMSTRUCT *)lp ); return TRUE; }
+        if ((wp >= ID_SAS_LOCK && wp <= ID_SAS_TASKMGR) || wp == ID_OTHER || (wp >= ID_LOCAL_FIRST && wp < ID_LOCAL_FIRST + 8))
+        {
+            draw_link( hwnd, (const DRAWITEMSTRUCT *)lp );
+            return TRUE;
+        }
         break;
     case WM_CTLCOLORSTATIC:
     {
@@ -700,6 +737,7 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         else if (LOWORD(wp) == ID_POWER) power_menu( hwnd );
         else if (LOWORD(wp) == ID_EASE) sg_ease_menu( hwnd, (HWND)lp );
         else if (LOWORD(wp) == ID_OTHER) last_user_mode( FALSE );
+        else if (LOWORD(wp) >= ID_LOCAL_FIRST && LOWORD(wp) < ID_LOCAL_FIRST + 8) pick_local( LOWORD(wp) - ID_LOCAL_FIRST );
         else if (LOWORD(wp) == ID_SAS_LOCK) sas_choose( hwnd, "lock" );
         else if (LOWORD(wp) == ID_SAS_SIGNOUT) sas_choose( hwnd, "signout" );
         else if (LOWORD(wp) == ID_SAS_TASKMGR) sas_choose( hwnd, "taskmgr" );

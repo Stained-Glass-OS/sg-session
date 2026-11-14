@@ -70,6 +70,30 @@ static void last_user( char *out, size_t len )
     if (strchr( out, '\\' )) return;
     if (!(pw = getpwnam( out )) || pw->pw_uid < 1000) out[0] = 0;
 }
+/* This computer's own accounts, for the login screen to list (bottom left, as
+ * Windows lists them): people's -- a uid of 1000 or more, a shell to log in
+ * with -- from the local account database (a directory's accounts are not
+ * enumerated: "Other user" is for them). David 2026-11-13: local accounts
+ * could only be typed in. SG_GREETER_PASSWD: another passwd file (the gate). */
+static int local_users( char names[][64], int max )
+{
+    const char *alt = getenv( "SG_GREETER_PASSWD" );
+    FILE *f = fopen( alt && *alt ? alt : "/etc/passwd", "r" );
+    struct passwd *pw;
+    int n = 0;
+    if (!f) return 0;
+    while (n < max && (pw = fgetpwent( f )))
+    {
+        const char *sh = pw->pw_shell ? pw->pw_shell : "";
+        if (pw->pw_uid < 1000 || pw->pw_uid >= 60000) continue;
+        if (!sh[0] || strstr( sh, "nologin" ) || strstr( sh, "/false" )) continue;
+        if (strlen( pw->pw_name ) >= 64) continue;
+        snprintf( names[n++], 64, "%s", pw->pw_name );
+    }
+    fclose( f );
+    return n;
+}
+
 static int to_greeter = -1;    /* we write, greeter reads  */
 static int from_greeter = -1;  /* greeter writes, we read  */
 
@@ -454,6 +478,13 @@ int main( int argc, char **argv )
             to_ui( "READY" );
             last_user( last, sizeof(last) );
             if (last[0]) to_ui( "LASTUSER %s", last );
+#ifndef SG_MUTANT_NO_LOCAL_USERS
+            {
+                char names[8][64];
+                int i, n = local_users( names, 8 );
+                if (n >= 2) for (i = 0; i < n; i++) to_ui( "LOCALUSER %s", names[i] );
+            }
+#endif
         }
         else if (!strncmp( line, "USER ", 5 ))
         {
