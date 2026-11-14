@@ -1,3 +1,13 @@
+sg-session (0.1.0-249) unstable; urgency=medium
+
+  * sg-settingsctl display power OUTPUT on|off: one display turned off,
+    the others as they are -- Windows' "Disconnect this display", such as
+    a laptop's own screen with monitors attached -- kept for that set of
+    monitors and put back off at the next sign-in. The last display on is
+    never turned off; the main display hands over to another.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 14 Nov 2026 00:30:00 -0800
+
 sg-session (0.1.0-248) unstable; urgency=medium
 
   * sg-settingsctl input: the scrolling direction of mice and touchpads

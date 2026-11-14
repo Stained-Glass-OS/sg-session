@@ -47,6 +47,9 @@
 #       TRANSFORM <name>\t<normal|90|180|270>
 #       PLACE <name>\t<x>\t<y>\t<w>\t<h>\t<on yes|no>\t<main display yes|no>
 #       PROJECT extend|duplicate|only\t<name>
+#   sg-settingsctl display power OUTPUT on|off
+#       a display turned off (Windows' "Disconnect this display": a laptop's
+#       own screen with monitors attached), or on again; kept for this set
 #   sg-settingsctl display mode OUTPUT WxH[@Hz]
 #   sg-settingsctl display scale OUTPUT SCALE                  (1-3, steps of .25)
 #       (both kept for that monitor, in the user's settings.json)
@@ -653,10 +656,12 @@ def display(args):
         return display_layout(args[1:])
     if len(args) == 2 and args[0] == "primary":
         return display_primary(args[1])
+    if len(args) == 3 and args[0] == "power":
+        return display_power(args[1], one_of(args[2], ("on", "off"), "power"))
     if args[:1] == ["project"] and (args[1:] in (["extend"], ["duplicate"]) or (len(args) == 3 and args[1] == "only")):
         return display_project(args[1], args[2] if len(args) == 3 else None)
     raise Fail("invalid", "usage: display [mode OUTPUT WxH[@HZ] | scale OUTPUT S | transform OUTPUT T | "
-                          "layout OUTPUT X Y... | primary OUTPUT | project extend|duplicate|only OUTPUT | restore]")
+                          "layout OUTPUT X Y... | primary OUTPUT | power OUTPUT on|off | project extend|duplicate|only OUTPUT | restore]")
 
 
 # ---- several monitors: where each is, the main one, extend / duplicate / only one (David
@@ -795,6 +800,54 @@ def side_by_side(outs, saved=None):
     return places
 
 
+def display_power(name, how):
+    """One display off -- as Windows' "Disconnect this display", the others
+    staying as they are (David 2026-11-13: a laptop's screen off, only the
+    monitors attached to it) -- or on again where it was kept. Never the last
+    one on; the main display, turned off, hands over to another."""
+    if not OUTPUT_NAME.fullmatch(name):
+        raise Fail("invalid", "not an output name")
+    outs = outputs()
+    o = next((x for x in outs if x.get("name") == name), None)
+    if not o:
+        raise Fail("notfound", "no output %s" % name)
+    c, lay = layout_saved(outs)
+    off = set(lay.get("off") or [])
+    key = monitor_key(o, outs)
+    # where each one is now, so the set comes back as it is (display restore)
+    for x in outs:
+        if x.get("enabled", True):
+            lay.setdefault("places", {})[monitor_key(x, outs)] = list(place_of(x)[:2])
+    if how == "off":
+        on = [x for x in outs if x.get("enabled", True) and x.get("name") != name]
+        if not on and not os.environ.get("SG_MUTANT_LAST_DISPLAY_OFF"):
+            raise Fail("invalid", "the last display on cannot be turned off")
+        prim = primary_output(outs)
+        run(["wlr-randr", "--output", name, "--off"])
+        if prim == name and on and os.environ.get("DISPLAY"):
+            try:
+                set_primary(on[0].get("name"))
+                lay["primary"] = monitor_key(on[0], outs)
+            except Fail:
+                pass
+        off.add(key)
+    else:
+        places = lay.get("places") or {}
+        if key in places:
+            x, y = places[key]
+        else:
+            # beside the others: right of the rightmost
+            x, y = max([place_of(v)[0] + place_of(v)[2] for v in outs if v.get("enabled", True)] or [0]), 0
+        run(["wlr-randr", "--output", name, "--on", "--pos", "%d,%d" % (x, y)])
+        off.discard(key)
+    lay["off"] = sorted(off)
+    if not lay["off"]:
+        lay.pop("off")
+    lay["project"] = "extend"
+    save_config(c)
+    return []
+
+
 def display_project(how, only=None):
     outs = outputs()
     names = [o.get("name") for o in outs]
@@ -814,6 +867,7 @@ def display_project(how, only=None):
         for n, (x, y) in side_by_side(outs, lay.get("places")).items():
             argv += ["--output", n, "--on", "--pos", "%d,%d" % (x, y)]
         lay["project"] = "extend"
+        lay.pop("off", None)
     run(argv)
     save_config(c)
     return []
@@ -842,12 +896,16 @@ def restore_layout():
     elif isinstance(lay.get("places"), dict) and all(k in lay["places"] for k in keyed):
         want = side_by_side(outs, lay["places"])
         have = {o.get("name"): place_of(o)[:2] for o in outs}
-        if want != have or not all(o.get("enabled", True) for o in outs):
+        # (and the displays turned off stay off)
+        off = {keyed[k].get("name") for k in (lay.get("off") or []) if k in keyed}
+        enabled = {o.get("name"): o.get("enabled", True) for o in outs}
+        if want != have or any(enabled[n] == (n in off) for n in enabled):
             argv = ["wlr-randr"]
             for n, (x, y) in want.items():
-                argv += ["--output", n, "--on", "--pos", "%d,%d" % (x, y)]
+                argv += ["--output", n, "--off"] if n in off else ["--output", n, "--on", "--pos", "%d,%d" % (x, y)]
             run(argv)
-            out.append("RESTORED *\tlayout\t%s" % " ".join("%s:%d,%d" % (clean(n), x, y) for n, (x, y) in want.items()))
+            out.append("RESTORED *\tlayout\t%s" % " ".join("%s:%s" % (clean(n), "off" if n in off else "%d,%d" % (x, y))
+                                                               for n, (x, y) in want.items()))
     prim = keyed.get(lay.get("primary"))
     if prim and os.environ.get("DISPLAY") and primary_output(outputs()) != prim.get("name"):
         try:

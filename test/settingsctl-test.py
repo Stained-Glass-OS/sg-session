@@ -429,6 +429,31 @@ with open(os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "settings.json")
 check("display restore: two alike monitors each where it was kept, the main display kept as the same one",
       "wlr-randr --output Virtual-1 --on --pos 1280,0 --output Virtual-2 --on --pos 0,0" in cl
       and tl.get("primary") == "Acme/Twin/@Virtual-1", (lines, cl, tl))
+# one display turned off, the others as they are (David 2026-11-13: a laptop's
+# screen off with monitors attached), kept for this set, back on where it was
+three([(0, 0), (1920, 0), (3840, 0)])
+try:
+    os.unlink(os.path.join(tmp, "primary"))
+except OSError:
+    pass
+calls()
+code, lines = ctl("display", "power", "DP-1", "off", env=XENV)
+cl = calls()
+check("display power DP-1 off: that display off alone, the main display handed to another",
+      code == 0 and "wlr-randr --output DP-1 --off" in cl and "xrandr --output DP-2 --primary" in cl, (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)])        # the next session: all on as they come up
+os.unlink(os.path.join(tmp, "primary"))
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+check("display restore: the display turned off stays off, the others where they were",
+      any("--output DP-1 --off" in c and "--output DP-2 --on --pos 1920,0" in c and "--output HDMI-A-1 --on --pos 3840,0" in c
+          for c in cl), (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)], (False, True, True))
+code, lines = ctl("display", "power", "DP-1", "on", env=XENV)
+check("display power DP-1 on: back where it was", code == 0 and "wlr-randr --output DP-1 --on --pos 0,0" in calls(), lines)
+three([(0, 0), (0, 0), (0, 0)], (False, True, False))
+code, lines = ctl("display", "power", "DP-2", "off", env=XENV)
+check("display power: the last display on is not turned off", code == 2 and not [c for c in calls() if "--off" in c], lines)
 for bad in (["layout", "DP-1", "x", "0"], ["layout", "DP-1", "0"], ["layout", "DP-1", "0", "99999"],
             ["layout", "DP-1;", "0", "0"], ["primary", "--off"], ["project", "only", "DP-9"], ["project", "mirror"]):
     code, lines = ctl("display", *bad, env=XENV)
