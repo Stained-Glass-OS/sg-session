@@ -1,3 +1,15 @@
+sg-session (0.1.0-252) unstable; urgency=medium
+
+  * sg-prefix-init: wait for its transient wineserver to be gone, not only
+    ask it to end. The machine's server started the moment prefix-init
+    exited, found the prefix still taken and exited 2; systemd restarted it
+    40 seconds later, and meanwhile a live boot found no system to add its
+    Install shortcuts to (release 662's ISO install test).
+  * sg-live-setup: wait up to two minutes for sg-wineserver to be up instead
+    of asking once (After= is met by a failed start, which systemd retries).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 14 Nov 2026 22:55:00 -0800
+
 sg-session (0.1.0-251) unstable; urgency=medium
 
   * sg-profile-create: /etc/stained-glass/profile-in-home (set by sg-image's

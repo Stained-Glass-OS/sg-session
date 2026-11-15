@@ -13,7 +13,7 @@ Before=greetd.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/libexec/stained-glass/sg-live-setup
-TimeoutStartSec=180
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target

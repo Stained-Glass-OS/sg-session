@@ -28,6 +28,10 @@ STAMP="$SG_PREFIX/.sg-initialized"
 stop_transient_server() {
     sg_machine_wineserver_up && return 0
     timeout 30 wineserver -k 2>/dev/null || true
+    # -k asks it to end and returns at once; the machine's server starts the
+    # moment this exits, and found the prefix still taken (exit 2, a restart
+    # 40s later, and a live boot's shortcuts missing). Wait for it to be gone.
+    timeout 30 wineserver -w 2>/dev/null || true
 }
 trap stop_transient_server EXIT
 
