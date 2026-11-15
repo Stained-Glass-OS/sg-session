@@ -1,3 +1,22 @@
+sg-session (0.1.0-253) unstable; urgency=medium
+
+  * test/fluidsynth-off-test.sh: search only its own unit tree; on a machine
+    with sg-session installed the real drop-in held the mutant off too.
+  * test/shared-home-test.sh: SG_PROFILE_IN_HOME=/nonexistent, so a converted
+    machine's /etc/stained-glass/profile-in-home does not turn it off.
+  * test/netctl-test.py: the bridge check names no admin group, so it holds
+    when the person running it is in sg-admins.
+  * sg-dictate: SG_ADMIN_GROUP (as sg-netd), and test/dictate-test.py names
+    no admin group and no packaged model, so it holds on a machine with the
+    speech model installed and the person running it an administrator.
+  * NVIDIA: /usr/lib/modprobe.d/sg-nvidia-kms.conf turns on the driver's
+    kernel modesetting (nvidia-drm modeset=1 fbdev=1). Without it the
+    login screen's compositor found 0 GPUs and greetd gave up: seen on the
+    first Debian machine with NVIDIA's driver turned into a Stained Glass
+    one (driver 550); an image that installs the driver has it the same way.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 09:10:00 -0800
+
 sg-session (0.1.0-252) unstable; urgency=medium
 
   * sg-prefix-init: wait for its transient wineserver to be gone, not only

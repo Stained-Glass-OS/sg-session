@@ -532,7 +532,7 @@ def run_tests(t):
                           env=dict(env, SG_NETD_SOCKET=sock))
     conn, _ = srv.accept()
     p = subprocess.Popen([sys.executable, NETCTL, "--serve"], stdin=conn, stdout=conn,
-                         env=dict(env, SG_WINE_GROUP=my_group))
+                         env=dict(env, SG_WINE_GROUP=my_group, SG_ADMIN_GROUP="sg-no-such-group"))
     conn.close()
     p.wait(timeout=30)
     rc = bp.wait(timeout=30)

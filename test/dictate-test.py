@@ -172,8 +172,8 @@ def serve(argv, env_extra):
 
 with tempfile.TemporaryDirectory(dir="/var/tmp") as d:
     mine = grp.getgrgid(os.getgid()).gr_name
-    env_no = {"SG_SPEECH_DIR": d, "SG_WINE_GROUP": "sg-no-such-group"}
-    env_yes = {"SG_SPEECH_DIR": d, "SG_WINE_GROUP": mine}
+    env_no = {"SG_SPEECH_DIR": d, "SG_SPEECH_PACKAGED_DIR": os.path.join(d, "no-package"), "SG_WINE_GROUP": "sg-no-such-group", "SG_ADMIN_GROUP": "sg-no-such-group"}
+    env_yes = {"SG_SPEECH_DIR": d, "SG_SPEECH_PACKAGED_DIR": os.path.join(d, "no-package"), "SG_WINE_GROUP": mine}
     lines = serve(["status"], env_no)
     check("sg-speechd: status for anyone", lines == ["MODEL missing", "OK"], repr(lines))
     # Root is an administrator (and CI builds the package as root): only an

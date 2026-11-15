@@ -23,7 +23,7 @@ W
 chmod +x "$T/bin/getent" "$T/bin/runuser"
 P="$T/prefix/drive_c/users/$ME"
 run() { PATH="$T/bin:$PATH" SG_LIB="$HERE/lib" SG_PREFIX="$T/prefix" SG_HOMES="$T/homes" SG_SYSTEM_USER=nobody \
-        SG_PROFILE_CREATE=/nonexistent SG_NO_SHARED_HOME="$T/off" sh "$HERE/bin/sg-shared-home" "$@" 2>/dev/null; }
+        SG_PROFILE_CREATE=/nonexistent SG_PROFILE_IN_HOME=/nonexistent SG_NO_SHARED_HOME="$T/off" sh "$HERE/bin/sg-shared-home" "$@" 2>/dev/null; }
 RC=0
 ok() { echo "PASS  $*"; }
 bad() { echo "FAIL  $*"; RC=1; }

@@ -46,7 +46,7 @@ import sgspeech  # noqa: E402
 
 SOCKET = os.environ.get("SG_SPEECHD_SOCKET", "/run/stained-glass-speech/speechd.sock")
 STATUS = os.path.join(sgspeech.MODEL_DIR, "status")
-ADMIN_GROUP = "sg-admins"
+ADMIN_GROUP = os.environ.get("SG_ADMIN_GROUP", "sg-admins")
 USER_GROUP = os.environ.get("SG_WINE_GROUP", "sgwine")
 CHUNK = 512 * 2  # bytes: 32 ms of 16 kHz s16le mono, one VAD frame
 
