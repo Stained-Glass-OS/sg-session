@@ -1,3 +1,12 @@
+sg-session (0.1.0-257) unstable; urgency=medium
+
+  * sg-session-check: the lock screen's sign-in (sg-lockd.service) runs an
+    explorer desktop as the system account by design; the "shell leaked into
+    session 0" check leaves processes of that service out (by cgroup). A
+    converted machine locked while the session gate ran failed it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 11:55:00 -0800
+
 sg-session (0.1.0-256) unstable; urgency=medium
 
   * sg-drivers: a card NVIDIA's open kernel modules run (Turing and later)
