@@ -266,6 +266,10 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -D -m 0755 kernel/90-sg-boot-tries.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/90-sg-boot-tries.install
 	@# The linux-surface archive's key: used (Signed-By) on Surface PCs only.
 	install -D -m 0644 config/keyrings/linux-surface.gpg $(DESTDIR)$(PREFIX)/share/stained-glass/keyrings/linux-surface.gpg
+	@# NVIDIA's Debian 13 archive key (fingerprint 0218 2E60 104F CDC2 6EAE 1B85 97A5 D4CB
+	@# 8793 F200, signs developer.download.nvidia.com/compute/cuda/repos/debian13):
+	@# used (Signed-By) on PCs with an NVIDIA card its open driver supports.
+	install -D -m 0644 config/keyrings/nvidia-debian13.gpg $(DESTDIR)$(PREFIX)/share/stained-glass/keyrings/nvidia-debian13.gpg
 	install -D -m 0755 kernel/91-sg-recovery.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/91-sg-recovery.install
 	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
 	install -D -m 0755 kernel/93-sg-reboot-required.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/93-sg-reboot-required.install
@@ -460,6 +464,8 @@ lint:
 	@for m in layout tries configured newer platformoff rootless; do ! sh test/kernel-entries-test.sh --mutant $$m >/dev/null 2>&1 || { echo "kernel-entries-test: mutant $$m passed"; exit 1; }; done
 	@sh test/surface-test.sh
 	@for m in dmi pin key tries twin; do ! sh test/surface-test.sh --mutant $$m >/dev/null 2>&1 || { echo "surface-test: mutant $$m passed"; exit 1; }; done
+	@sh test/nvidia-driver-test.sh
+	@for m in pin key boot; do ! sh test/nvidia-driver-test.sh --mutant $$m >/dev/null 2>&1 || { echo "nvidia-driver-test: mutant $$m passed"; exit 1; }; done
 	@sh test/oobe-fallback-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@sh test/oobe-user-test.sh
 	@sh test/media-test.sh

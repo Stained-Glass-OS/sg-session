@@ -1,3 +1,19 @@
+sg-session (0.1.0-256) unstable; urgency=medium
+
+  * sg-drivers: a card NVIDIA's open kernel modules run (Turing and later)
+    is offered NVIDIA's own current driver, nvidia-open, from NVIDIA's
+    Debian 13 archive -- added on such a PC only, its key (shipped here,
+    0218 2E60 ... 8793 F200) pinned to it, and apt pinned so the archive
+    gives only NVIDIA's driver packages (both architectures; never CUDA,
+    never dkms). Debian 13 has only 550, which under Xwayland scrambled
+    Steam, made games flicker and left video black (David's decision,
+    2026-11-15). At boot a running NVIDIA driver is not replaced: the new
+    libraries would fail every GL program until a restart, the login screen
+    first; a run by hand does it and asks for the restart.
+    test/nvidia-driver-test.sh, with real apt for the pin.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 11:40:00 -0800
+
 sg-session (0.1.0-255) unstable; urgency=medium
 
   * sg-session-start: the system's data folders (/usr/local/share,

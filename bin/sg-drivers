@@ -56,7 +56,16 @@
 #       On such a PC, write hwsupport.off (Setup's third-party drivers not
 #       chosen; sg-install runs it into the new system). Elsewhere nothing.
 #
-# NVIDIA: Debian's nvidia-detect chooses the package from the device id
+# NVIDIA: a card NVIDIA's open kernel modules run (Turing and later: device
+# id 1e00 and up) gets NVIDIA's own current driver, nvidia-open, from NVIDIA's
+# Debian 13 archive -- as Windows Update offers NVIDIA's driver. Debian 13 has
+# only 550, which under Xwayland has no explicit synchronization: Steam's
+# pages scrambled, games flickered, video panes stayed black (David's RTX
+# 3090, 2026-11-15; his decision to offer NVIDIA's archive). The archive is
+# added on such a PC only, its key pinned to it (Signed-By, the key
+# sg-session ships) and apt pinned so that it can only ever provide NVIDIA's
+# driver packages -- never CUDA, never a package Debian has (dkms). Older
+# cards: Debian's nvidia-detect chooses the package from the device id
 # (nvidia-driver, the Tesla series, or nothing for a card no driver in this
 # release supports -- which keeps the open nouveau driver). Firmware for AMD
 # and Intel graphics and for Wi-Fi comes from non-free-firmware, by vendor.
@@ -70,7 +79,8 @@
 # SG_DRIVERS_DMI is /sys/class/dmi/id (a directory of sys_vendor,
 # product_name, product_family files); SG_DRIVERS_APT is /etc/apt (where the
 # Surface archive's source and pin go); SG_DRIVERS_KEYRING is the Surface
-# archive key sg-session ships; SG_DRIVERS_BOOT the boot partition (for its
+# archive key sg-session ships; SG_DRIVERS_NVIDIA_KEYRING NVIDIA's;
+# SG_DRIVERS_BOOT the boot partition (for its
 # free space); SG_DRIVERS_UNAME the running kernel's version.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -119,6 +129,9 @@ pci_devices() {
 BROADCOM_STA="4311 4312 4313 4315 4327 4328 4329 432a 432b 432c 432d 4331 4353 4357 4358 4359 4360 43a0 43b1 a8d8 a99d"
 KERNEL_PAIR="linux-image-amd64 linux-headers-amd64"
 
+# NVIDIA's open kernel modules run on Turing and later: device ids from 1e00
+nvidia_open_card() { [ "$(printf '%d' "0x$1" 2>/dev/null || echo 0)" -ge "$(printf '%d' 0x1e00)" ]; }
+
 nvidia_package() {   # device id -> the package nvidia-detect recommends, "" for none, "?" unknown
     if [ -n "${SG_DRIVERS_NVIDIA_DETECT:-}" ]; then out=$("$SG_DRIVERS_NVIDIA_DETECT" "10de$1" 2>/dev/null || :)
     elif [ -x "$ROOT/usr/bin/nvidia-detect" ]; then out=$(in_root /usr/bin/nvidia-detect "10de$1" 2>/dev/null || :)
@@ -134,6 +147,11 @@ survey() {
         case "$vendor:$base" in
             10de:03)
                 what="NVIDIA graphics"
+                if nvidia_open_card "$device"; then
+                    printf 'DEVICE %s\t%s:%s\t%s\t%s\t%s\n' "$slot" "$vendor" "$device" "$what" \
+                        "nvidia-open $KERNEL_PAIR" "NVIDIA's own driver (open kernel modules), from NVIDIA's archive, built for this kernel by DKMS"
+                    continue
+                fi
                 p=$(nvidia_package "$device")
                 case "$p" in
                     "?") pkgs="nvidia-detect"; note="the driver is chosen once Debian's nvidia-detect is installed" ;;
@@ -235,6 +253,40 @@ Pin-Priority: -1
 EOS
     mv -f "$SURFACE_PIN.tmp" "$SURFACE_PIN"
     mv -f "$SURFACE_SOURCES.tmp" "$SURFACE_SOURCES"
+}
+
+# NVIDIA's archive: its source (its own key only) and the pin that keeps it to
+# NVIDIA's driver packages. Written on a PC with a card nvidia-open runs.
+NVIDIA_KEYRING=${SG_DRIVERS_NVIDIA_KEYRING:-/usr/share/stained-glass/keyrings/nvidia-debian13.gpg}
+NVIDIA_SOURCES="$APT_DIR/sources.list.d/sg-nvidia.sources"
+NVIDIA_PIN="$APT_DIR/preferences.d/sg-nvidia.pref"
+NVIDIA_ALLOWED='/^(nvidia-.+|libnvidia-.+|libcuda[a-z]*1|libnvcuvid1|libnvoptix1|lib(egl|gles|glx)-nvidia[0-9]+|libgl1-nvidia-glvnd-glx|libxnvctrl0|firmware-nvidia-gsp|xserver-xorg-video-nvidia)$/'
+nvidia_archive() {
+    [ -s "$NVIDIA_KEYRING" ] || die "NVIDIA's archive key is missing ($NVIDIA_KEYRING)"
+    mkdir -p "$APT_DIR/sources.list.d" "$APT_DIR/preferences.d"
+    cat > "$NVIDIA_SOURCES.tmp" <<EOS
+# NVIDIA's driver (sg-drivers, on PCs with a card NVIDIA's open driver runs):
+# NVIDIA's own Debian 13 archive. Its key vouches for this archive alone, and
+# sg-nvidia.pref lets it provide only NVIDIA's driver packages.
+Types: deb
+URIs: https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/
+Suites: /
+Signed-By: $NVIDIA_KEYRING
+EOS
+    cat > "$NVIDIA_PIN.tmp" <<EOS
+# NVIDIA's archive (sg-drivers) may provide its driver -- the kernel modules,
+# the libraries (both architectures, for 32-bit games), the X driver and the
+# firmware -- and nothing else: not CUDA, not a package Debian has (dkms).
+Package: $NVIDIA_ALLOWED
+Pin: release o=NVIDIA
+Pin-Priority: 500
+
+Package: *
+Pin: release o=NVIDIA
+Pin-Priority: -1
+EOS
+    mv -f "$NVIDIA_PIN.tmp" "$NVIDIA_PIN"
+    mv -f "$NVIDIA_SOURCES.tmp" "$NVIDIA_SOURCES"
 }
 
 boot_path() {
@@ -420,11 +472,25 @@ install-recommended)
         printf 'Install the drivers and firmware this PC needs (Setup)\n' > "$AUTO_FILE"
     fi
     export DEBIAN_FRONTEND=noninteractive
+    if survey | cut -f4 | grep -qw nvidia-open; then nvidia_archive; fi
     in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
     if survey | cut -f4 | grep -qw nvidia-detect; then
         in_root apt-get -q -y install nvidia-detect >/dev/null || die "cannot install nvidia-detect"
     fi
     want=$(recommended)
+    # NVIDIA's driver in place of a running one: GL programs started after
+    # it fail (the libraries no longer match the module) until a restart. At
+    # boot, before the login screen, that would be the login screen: there it
+    # waits for a run by hand (Settings, or sg-drivers --install-recommended),
+    # which asks for the restart.
+    nvidia_running=${SG_DRIVERS_NVIDIA_RUNNING:-/proc/driver/nvidia/version}
+    if [ "$PENDING" = 1 ] && [ -e "$nvidia_running" ]; then
+        case " $want " in *" nvidia-open "*)
+            say "NVIDIA's driver would replace the one running: not at boot (sg-drivers --install-recommended, then restart)"
+            # shellcheck disable=SC2086  # package names, one per line
+            want=$(printf '%s\n' $want | grep -vx nvidia-open | tr '\n' ' ') ;;
+        esac
+    fi
     pkgs=""
     for p in $want; do
         if has_candidate "$p"; then pkgs="$pkgs $p"; else say "$p is not in the archive: skipped"; fi
@@ -441,7 +507,10 @@ install-recommended)
             for p in $pkgs; do in_root apt-get -q -y install "$p" || failed="$failed $p"; done
             [ -z "$failed" ] || say "could not install:$failed"
         fi
-        case " $pkgs " in *" nvidia-"*"-driver "*|*" nvidia-driver "*) keep_nouveau_away ;; esac
+        case " $pkgs " in *" nvidia-"*"-driver "*|*" nvidia-driver "*|*" nvidia-open "*) keep_nouveau_away ;; esac
+        case " $pkgs " in *" nvidia-open "*)
+            { echo "*** System restart required: NVIDIA's driver ***" > /run/reboot-required; } 2>/dev/null || : ;;
+        esac
         say "installed: $pkgs"
         [ ! -x /usr/bin/sg-firmware-initrd ] || /usr/bin/sg-firmware-initrd update || :
         rebind_failed
