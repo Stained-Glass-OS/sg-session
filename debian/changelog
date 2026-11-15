@@ -1,3 +1,24 @@
+sg-session (0.1.0-251) unstable; urgency=medium
+
+  * sg-profile-create: /etc/stained-glass/profile-in-home (set by sg-image's
+    new stained-glass-desktop, which turns an existing Debian machine into a
+    Stained Glass one) makes a person's Windows profile a link to their home
+    instead of their home a link to the profile -- or the home
+    bind-mounted on the profile (the conversion's /etc/fstab lines, so
+    Windows programs see a real C:\users\<name>), recognised by its
+    device and inode; sg-shared-home then does nothing. It would copy a
+    home in use into the prefix at the next boot -- a large home, often on
+    another disk -- and the recursive SYSTEM ACL raised every file's mask:
+    ssh keys became group-writable and ssh refused them. Here nothing is
+    copied; SYSTEM may pass through the home (r-x, never group-writable, so
+    sshd still takes keys under it) and has Full control of AppData,
+    Desktop, Documents and Downloads, except private files (no group or
+    other access) and .ssh/.gnupg. Gate: make test-profile-home (root, a
+    scratch account; link and bind mount), with the mutant that opens
+    private files.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 14 Nov 2026 19:30:00 -0800
+
 sg-session (0.1.0-250) unstable; urgency=medium
 
   * Login screen: this computer's accounts are listed bottom left, above

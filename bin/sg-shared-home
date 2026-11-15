@@ -24,6 +24,10 @@ HOMES="${SG_HOMES:-/home}"
 PROFILE_CREATE="${SG_PROFILE_CREATE:-/usr/libexec/stained-glass/sg-profile-create}"
 
 [ -e "${SG_NO_SHARED_HOME:-/etc/stained-glass/no-shared-home}" ] && exit 0
+# A converted Debian machine's profiles are its people's homes already
+# (profile-in-home: bind-mounted or linked, see sg-profile-create): moving a
+# home into its own profile would copy it onto itself.
+[ -e "${SG_PROFILE_IN_HOME:-/etc/stained-glass/profile-in-home}" ] && exit 0
 
 # only_skel DIR: nothing in it but what /etc/skel gives a new account
 only_skel() {

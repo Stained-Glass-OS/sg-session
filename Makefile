@@ -904,6 +904,18 @@ test-profile:
 	@! sudo env SG_PROFILE_CREATE=/var/tmp/sg-profile-create.mut sh test/profile-sendto-test.sh > /var/tmp/profile-mut.log 2>&1 \
 	    && echo "PASS  mutant PROFILE_NO_OWNER_ENTRY caught" || { echo "FAIL  mutant PROFILE_NO_OWNER_ENTRY passed"; exit 1; }
 
+# A profile that is the person's home (profile-in-home, Debian machines turned
+# into Stained Glass ones): linked not copied, keys and private files keep
+# their rights, SYSTEM works in the Windows folders (needs root; makes and
+# removes an account).
+.PHONY: test-profile-home
+test-profile-home:
+	sudo sh test/profile-in-home-test.sh
+	@# mutant: private files and .ssh not spared -- ssh then refuses the keys (must fail)
+	@sed 's/-type f -perm \/077/-type f/; s/-name .ssh -o -name .gnupg/-name .none1 -o -name .none2/' bin/sg-profile-create > /var/tmp/sg-profile-create.pih-mut
+	@! sudo env SG_PROFILE_CREATE_UNDER_TEST=/var/tmp/sg-profile-create.pih-mut sh test/profile-in-home-test.sh > /var/tmp/profile-pih-mut.log 2>&1 \
+	    && echo "PASS  mutant PROFILE_HOME_OPENS_PRIVATE caught" || { echo "FAIL  mutant PROFILE_HOME_OPENS_PRIVATE passed"; exit 1; }
+
 # Disk Management's partition changes for real, on a loop device only (needs sudo).
 # Restore points, going back, and converting an ext4 system drive, for real on
 # loop devices only (btrfs, btrfs-convert; needs sudo -n; 77 without), and the
