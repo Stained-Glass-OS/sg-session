@@ -260,7 +260,11 @@ EOS
 NVIDIA_KEYRING=${SG_DRIVERS_NVIDIA_KEYRING:-/usr/share/stained-glass/keyrings/nvidia-debian13.gpg}
 NVIDIA_SOURCES="$APT_DIR/sources.list.d/sg-nvidia.sources"
 NVIDIA_PIN="$APT_DIR/preferences.d/sg-nvidia.pref"
-NVIDIA_ALLOWED='/^(nvidia-.+|libnvidia-.+|libcuda[a-z]*1|libnvcuvid1|libnvoptix1|lib(egl|gles|glx)-nvidia[0-9]+|libgl1-nvidia-glvnd-glx|libxnvctrl0|firmware-nvidia-gsp|xserver-xorg-video-nvidia)$/'
+# What the archive may give. The pin names each package (NAME and NAME:i386)
+# from the archive's index, not this pattern: a pattern pin did not hold for
+# the 32-bit libraries (Steam's) against the "everything else -1" one, which
+# left them at Debian's 550 and held the 64-bit ones back (Multi-Arch: same).
+NVIDIA_ALLOWED='/^(nvidia-[a-z0-9.+-]+|libnvidia-[a-z0-9.+-]+|libcuda[a-z]*1|libnvcuvid1|libnvoptix1|lib(egl|gles|glx)-nvidia[0-9]+|libgl1-nvidia-glvnd-glx|libxnvctrl0|firmware-nvidia-gsp|xserver-xorg-video-nvidia)(.i386)?$/'
 nvidia_archive() {
     [ -s "$NVIDIA_KEYRING" ] || die "NVIDIA's archive key is missing ($NVIDIA_KEYRING)"
     mkdir -p "$APT_DIR/sources.list.d" "$APT_DIR/preferences.d"
@@ -273,20 +277,34 @@ URIs: https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/
 Suites: /
 Signed-By: $NVIDIA_KEYRING
 EOS
-    cat > "$NVIDIA_PIN.tmp" <<EOS
-# NVIDIA's archive (sg-drivers) may provide its driver -- the kernel modules,
-# the libraries (both architectures, for 32-bit games), the X driver and the
-# firmware -- and nothing else: not CUDA, not a package Debian has (dkms).
-Package: $NVIDIA_ALLOWED
-Pin: release o=NVIDIA
-Pin-Priority: 500
-
-Package: *
-Pin: release o=NVIDIA
-Pin-Priority: -1
-EOS
-    mv -f "$NVIDIA_PIN.tmp" "$NVIDIA_PIN"
+    # until the pin names its packages: nothing of the archive
+    [ -f "$NVIDIA_PIN" ] || nvidia_write_pin ""
     mv -f "$NVIDIA_SOURCES.tmp" "$NVIDIA_SOURCES"
+}
+
+# the pin, from the archive's index (after apt-get update)
+nvidia_pin() {
+    # shellcheck disable=SC2016  # apt-get's own $(...) fields
+    idx=${SG_DRIVERS_NVIDIA_INDEX:-$(in_root apt-get indextargets --format '$(SITE) $(FILENAME)' 2>/dev/null \
+        | awk '$1 ~ /developer\.download\.nvidia\.com/ { print $2; exit }')}
+    [ -n "$idx" ] || return 0
+    re=$(printf '%s' "$NVIDIA_ALLOWED" | sed 's|^/||; s|/$||')
+    names=$(/usr/lib/apt/apt-helper cat-file "$idx" 2>/dev/null | sed -n 's/^Package: //p' | grep -E "$re" | sort -u \
+        | awk '{ printf "%s %s:i386 ", $1, $1 }')
+    nvidia_write_pin "$names"
+}
+
+nvidia_write_pin() {   # "name name:i386 ..." (empty: none)
+    {
+        echo "# NVIDIA's archive (sg-drivers) may provide its driver -- the kernel modules,"
+        echo "# the libraries (both architectures, for 32-bit games), the X driver and the"
+        echo "# firmware -- and nothing else: not CUDA, not a package Debian has (dkms)."
+        if [ -n "$1" ]; then
+            printf 'Package: %s\nPin: release o=NVIDIA\nPin-Priority: 500\n\n' "${1% }"
+        fi
+        printf 'Package: *\nPin: release o=NVIDIA\nPin-Priority: -1\n'
+    } > "$NVIDIA_PIN.tmp"
+    mv -f "$NVIDIA_PIN.tmp" "$NVIDIA_PIN"
 }
 
 boot_path() {
@@ -474,6 +492,7 @@ install-recommended)
     export DEBIAN_FRONTEND=noninteractive
     if survey | cut -f4 | grep -qw nvidia-open; then nvidia_archive; fi
     in_root apt-get -q update >/dev/null || die "cannot reach the package archive"
+    if [ -f "$NVIDIA_SOURCES" ]; then nvidia_pin; fi
     if survey | cut -f4 | grep -qw nvidia-detect; then
         in_root apt-get -q -y install nvidia-detect >/dev/null || die "cannot install nvidia-detect"
     fi
@@ -500,10 +519,10 @@ install-recommended)
         say "this PC needs no third-party drivers or firmware"
     else
         say "installing: $pkgs"
+        failed=""
         # shellcheck disable=SC2086  # a list of package names
         if ! in_root apt-get -q -y install $pkgs; then
             # one that cannot be installed does not stop the others
-            failed=""
             for p in $pkgs; do in_root apt-get -q -y install "$p" || failed="$failed $p"; done
             [ -z "$failed" ] || say "could not install:$failed"
         fi
@@ -511,7 +530,9 @@ install-recommended)
         case " $pkgs " in *" nvidia-open "*)
             { echo "*** System restart required: NVIDIA's driver ***" > /run/reboot-required; } 2>/dev/null || : ;;
         esac
-        say "installed: $pkgs"
+        ok=""
+        for p in $pkgs; do case " ${failed:-} " in *" $p "*) ;; *) ok="$ok $p" ;; esac; done
+        [ -z "$ok" ] || say "installed:$ok"
         [ ! -x /usr/bin/sg-firmware-initrd ] || /usr/bin/sg-firmware-initrd update || :
         rebind_failed
     fi

@@ -1,3 +1,15 @@
+sg-session (0.1.0-258) unstable; urgency=medium
+
+  * sg-drivers: NVIDIA's archive pin names each driver package (NAME and
+    NAME:i386) from the archive's index. apt matches a foreign package as
+    NAME:i386 and cuts a pattern at ":", and a pattern pin lost to the
+    "everything else -1" one for the 32-bit libraries: they stayed Debian's
+    550 and held the 64-bit ones back, so nvidia-open never installed.
+    nvidia-driver-test checks a 32-bit library too. "installed:" names only
+    what was installed. (The dev box: NVIDIA 620 with explicit sync.)
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 12:35:00 -0800
+
 sg-session (0.1.0-257) unstable; urgency=medium
 
   * sg-session-check: the lock screen's sign-in (sg-lockd.service) runs an

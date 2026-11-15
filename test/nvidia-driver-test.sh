@@ -18,7 +18,7 @@ RC=0
 pass() { printf 'PASS  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; RC=1; }
 case "$MUTANT" in
-    pin) sed 's/^Pin-Priority: -1$/Pin-Priority: 500/' "$D" > "$T/sg-drivers"; D="$T/sg-drivers" ;;
+    pin) sed 's/Pin-Priority: -1/Pin-Priority: 500/' "$D" > "$T/sg-drivers"; D="$T/sg-drivers" ;;
     key) KEY=/usr/share/keyrings/debian-archive-keyring.gpg ;;
     boot) sed 's/if \[ "\$PENDING" = 1 \] && \[ -e "\$nvidia_running" \]; then/if false; then/' "$D" > "$T/sg-drivers"; D="$T/sg-drivers" ;;
 esac
@@ -51,9 +51,20 @@ EOS
 cp "$T/q/dpkg-query" "$T/bin/dpkg-query"
 chmod +x "$T/bin/"*
 printf '0000:01:00.0 10de 2204 030000\n' > "$T/pci1"
+# a stand-in of NVIDIA's archive (Origin: NVIDIA): its driver (both
+# architectures), CUDA and a dkms of its own; the index sg-drivers reads
+R="$T/repo"; mkdir -p "$R"
+for p in nvidia-driver:620.70.06-1:amd64 libglx-nvidia0:620.70.06-1:amd64 libglx-nvidia0:620.70.06-1:i386 \
+         cuda-toolkit:13.0.1-1:amd64 dkms:9.9-1:all; do
+    IFS=: read -r n v a <<EOP
+$p
+EOP
+    printf 'Package: %s\nVersion: %s\nArchitecture: %s\nMulti-Arch: same\nMaintainer: t\nFilename: ./x.deb\nSize: 1\nDescription: t\n\n' "$n" "$v" "$a"
+done > "$R/Packages"
 inst() {   # [env...]
     rm -rf "$T/apt" "$T/etc"; mkdir -p "$T/apt" "$T/etc"; : > "$T/apt.log"
     env SG_T="$T" PATH="$T/bin:$PATH" SG_DRIVERS_PCI="$T/pci1" SG_DRIVERS_APT="$T/apt" SG_DRIVERS_ETC="$T/etc" \
+        SG_DRIVERS_NVIDIA_INDEX="$R/Packages" \
         SG_DRIVERS_NVIDIA_KEYRING="$KEY" SG_DRIVERS_FIRMWARE_LOOKUP=/nonexistent SG_DRIVERS_DMI="$T/nodmi" \
         SG_DRIVERS_NVIDIA_RUNNING="$T/no-nvidia-running" SG_DRIVERS_ENTRIES="$T/none" "$@" \
         sh "$D" --install-recommended 2> "$T/inst.err"
@@ -72,29 +83,27 @@ inst SG_DRIVERS_NVIDIA_RUNNING="$T/nvidia-running"
 : > "$T/etc/drivers.auto"
 env SG_T="$T" PATH="$T/bin:$PATH" SG_DRIVERS_PCI="$T/pci1" SG_DRIVERS_APT="$T/apt" SG_DRIVERS_ETC="$T/etc" \
     SG_DRIVERS_NVIDIA_KEYRING="$KEY" SG_DRIVERS_FIRMWARE_LOOKUP=/nonexistent SG_DRIVERS_DMI="$T/nodmi" \
-    SG_DRIVERS_NVIDIA_RUNNING="$T/nvidia-running" SG_DRIVERS_ENTRIES="$T/none" \
+    SG_DRIVERS_NVIDIA_RUNNING="$T/nvidia-running" SG_DRIVERS_ENTRIES="$T/none" SG_DRIVERS_NVIDIA_INDEX="$R/Packages" \
     sh "$D" --install-recommended --pending 2> "$T/boot.err"
 tail -1 "$T/apt.log" | grep -q nvidia-open && fail "at boot, the running NVIDIA driver was replaced: $(tail -1 "$T/apt.log")" \
     || { grep -q "not at boot" "$T/boot.err" && pass "at boot a running NVIDIA driver is left for a run by hand (it says so)" \
         || fail "boot run: $(cat "$T/boot.err")"; }
 
-# the pin, by real apt: a stand-in of NVIDIA's archive (Origin: NVIDIA) with
-# its driver, CUDA and a dkms of its own; apt may take only the driver
-R="$T/repo"; mkdir -p "$R" "$T/root/etc/apt/sources.list.d" "$T/root/etc/apt/preferences.d" \
+# the pin, by real apt, against the stand-in: only the driver, both
+# architectures (the 32-bit library a game needs among them)
+mkdir -p "$T/root/etc/apt/sources.list.d" "$T/root/etc/apt/preferences.d" \
     "$T/root/var/lib/apt/lists/partial" "$T/root/var/cache/apt/archives/partial" "$T/root/var/lib/dpkg"
 : > "$T/root/var/lib/dpkg/status"
-for p in nvidia-driver:620.70.06-1 libglx-nvidia0:620.70.06-1 cuda-toolkit:13.0.1-1 dkms:9.9-1; do
-    printf 'Package: %s\nVersion: %s\nArchitecture: amd64\nMaintainer: t\nFilename: ./x.deb\nSize: 1\nDescription: t\n\n' "${p%%:*}" "${p#*:}"
-done > "$R/Packages"
 ( cd "$R" && apt-ftparchive -o APT::FTPArchive::Release::Origin=NVIDIA release . > Release )
 printf 'Types: deb\nURIs: file:%s/\nSuites: /\nTrusted: yes\n' "$R" > "$T/root/etc/apt/sources.list.d/nv.sources"
 cp "$T/apt/preferences.d/sg-nvidia.pref" "$T/root/etc/apt/preferences.d/" 2>/dev/null
-A="-o Dir=$T/root -o Dir::State::status=$T/root/var/lib/dpkg/status -o Debug::NoLocking=1 -o APT::Architecture=amd64 -o APT::Sandbox::User=$(id -un)"
+A="-o Dir=$T/root -o Dir::State::status=$T/root/var/lib/dpkg/status -o Debug::NoLocking=1 -o APT::Architecture=amd64 -o APT::Architectures::=amd64 -o APT::Architectures::=i386 -o APT::Sandbox::User=$(id -un)"
 # shellcheck disable=SC2086
 apt-get $A update >/dev/null 2>&1
 cand() { apt-cache $A policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; exit }'; }   # shellcheck disable=SC2086
-[ "$(cand nvidia-driver)" = 620.70.06-1 ] && [ "$(cand libglx-nvidia0)" = 620.70.06-1 ] \
-    && pass "apt takes NVIDIA's driver packages from it" || fail "driver candidates: '$(cand nvidia-driver)' '$(cand libglx-nvidia0)'"
+[ "$(cand nvidia-driver)" = 620.70.06-1 ] && [ "$(cand libglx-nvidia0)" = 620.70.06-1 ] && [ "$(cand libglx-nvidia0:i386)" = 620.70.06-1 ] \
+    && pass "apt takes NVIDIA's driver packages from it, the 32-bit ones too" \
+    || fail "driver candidates: '$(cand nvidia-driver)' '$(cand libglx-nvidia0)' i386 '$(cand libglx-nvidia0:i386)'"
 [ "$(cand cuda-toolkit)" = "(none)" ] && [ "$(cand dkms)" = "(none)" ] \
     && pass "...and never anything else of it (CUDA, its dkms)" || fail "pinned out: cuda '$(cand cuda-toolkit)' dkms '$(cand dkms)'"
 
