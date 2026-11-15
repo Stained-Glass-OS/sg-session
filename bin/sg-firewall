@@ -1276,14 +1276,14 @@ class Daemon:
         text = ruleset(self.conf, plan, iface_profiles(self.networks))
         if text != self.loaded or now - self.check_time > 10:
             self.check_time = now
-            listing = nft(["list", "table", "inet", TABLE])
+            listing = nft(["-s", "list", "table", "inet", TABLE])
             if text != self.loaded or listing[0] or listing[1] != self.listing:
                 try:
                     load(text)
                     if self.loaded is not None and text == self.loaded:
                         log("the firewall's table was changed or removed by something else; put back")
                     self.loaded = text
-                    self.listing = nft(["list", "table", "inet", TABLE])[1]
+                    self.listing = nft(["-s", "list", "table", "inet", TABLE])[1]
                 except Fail as e:
                     log(e.message)
         self.update_asks(plan, rules)

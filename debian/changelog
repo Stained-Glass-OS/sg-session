@@ -1,3 +1,18 @@
+sg-session (0.1.0-254) unstable; urgency=medium
+
+  * sg-firewall: compare its table without counters (nft -s). The drop
+    rule's counter moved with every dropped packet, so on a busy network
+    the daemon took it for a change by another program and reloaded the
+    table every 10 seconds (the dev box's journal). firewall-netns-test
+    checks the counters survive past a check.
+  * postinst: an sgsystem account made before, without a group of its own
+    (a Debian machine turned into a Stained Glass one), gets one. Without
+    it sg-shell's administration spool was never made, and every elevated
+    request -- the firewall's questions among them -- said "The
+    administration service is not available".
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 09:35:00 -0800
+
 sg-session (0.1.0-253) unstable; urgency=medium
 
   * test/fluidsynth-off-test.sh: search only its own unit tree; on a machine

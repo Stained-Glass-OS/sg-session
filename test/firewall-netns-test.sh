@@ -205,6 +205,15 @@ wait_for 8080 open 8 && pass "firewall off for Private: everything in" || fail "
 fwcmd profile private on
 wait_for 8080 dropped 8 && pass "and on again" || fail "8080 after on: $(reach 8080)"
 
+# dropped packets move the drop rule's counter: not a change by someone else
+# (the dev box reloaded its table every 10 seconds on a busy network)
+# (a reload starts the counters at 0 again)
+dropped() { inb "$NFT" list table inet sg_firewall 2>/dev/null | sed -n 's/.*counter packets \([0-9]*\) .*drop.*/\1/p' | awk '{n += $1} END {print n + 0}'; }
+reach 8090 >/dev/null; reach 8090 >/dev/null
+n1=$(dropped); sleep 12; n2=$(dropped)
+[ "$n1" -gt 0 ] && [ "$n2" -ge "$n1" ] \
+    && pass "packets counted by the drop rule are not taken for a change ($n1, then $n2)" \
+    || fail "the daemon took its own counters for a change and reloaded the table ($n1, then $n2)"
 inb "$NFT" list table inet sg_other_probe >/dev/null 2>&1 && pass "another program's table is untouched" || fail "another program's table is gone"
 stop_bg "$DPID"; wait "$DPID" 2>/dev/null; DPID=""
 inb "$PY" "$FW" --stop

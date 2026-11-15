@@ -122,6 +122,16 @@ case "$1" in
                     --gecos "Stained Glass SYSTEM account" \
                     --disabled-password "$SG_SYSTEM_USER"
         fi
+        # ...with a group of its own, which the administration spool
+        # (/run/stained-glass-admin, sg-shell's tmpfiles) is owned by. An
+        # account made before, without it (a Debian machine turned into a
+        # Stained Glass one), left the spool unmade: "The administration
+        # service is not available" for every elevated request.
+        if ! getent group "$SG_SYSTEM_USER" >/dev/null; then
+            addgroup --system "$SG_SYSTEM_USER" >/dev/null
+            usermod -g "$SG_SYSTEM_USER" "$SG_SYSTEM_USER"
+            systemd-tmpfiles --create sg-admind.conf >/dev/null 2>&1 || true
+        fi
         adduser "$SG_SYSTEM_USER" "$SG_WINE_GROUP" >/dev/null 2>&1 || true
 
         # Device access for driver work -- printers, scanners, USB and serial
