@@ -45,10 +45,17 @@ fi
 # stainedglass-portals.conf, the first name it finds a file for.
 : "${XDG_CURRENT_DESKTOP:=StainedGlass:sway}"
 : "${XDG_SESSION_DESKTOP:=stained-glass}"
-export XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
-systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
+# The system's data folders are always in XDG_DATA_DIRS. greetd sources the
+# person's profile before this, and a common line there --
+# XDG_DATA_DIRS="$HOME/.local/share:$XDG_DATA_DIRS" -- made it that alone
+# when nothing had set it yet: Start then had no Linux app from
+# /usr/share/applications (David's dev box: OBS, Kdenlive, Chromium).
+case ":${XDG_DATA_DIRS:-}:" in *:/usr/local/share:*) ;; *) XDG_DATA_DIRS="${XDG_DATA_DIRS:+${XDG_DATA_DIRS%:}:}/usr/local/share" ;; esac
+case ":$XDG_DATA_DIRS:" in *:/usr/share:*) ;; *) XDG_DATA_DIRS="$XDG_DATA_DIRS:/usr/share" ;; esac
+export XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_DATA_DIRS
+systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_DATA_DIRS >/dev/null 2>&1 || true
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
-    dbus-update-activation-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP >/dev/null 2>&1 || true
+    dbus-update-activation-environment XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_DATA_DIRS >/dev/null 2>&1 || true
 fi
 
 # Linux programs through Xwayland, not full screen as native Wayland ones
