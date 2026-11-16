@@ -31,7 +31,7 @@ sleep 30 & SESSION=$!
 ( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
   SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T"
   export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR
-  unset DISPLAY
+  unset DISPLAY WAYLAND_DISPLAY
   . "$HERE/lib/sg-common.sh"; sg_desktop_follow 1280x800 "$SESSION" ) 2>/dev/null &
 W=$!
 sleep 2
@@ -69,7 +69,7 @@ sleep 30 & SESSION=$!
 ( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
   SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T"
   export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR
-  unset DISPLAY
+  unset DISPLAY WAYLAND_DISPLAY
   . "$HERE/lib/sg-common.sh"; sg_desktop_follow 1280x800 "$SESSION" ) 2>/dev/null &
 W=$!
 sleep 2
@@ -79,4 +79,42 @@ if [ "$got" = "$want" ]; then echo "PASS  over every monitor the desktop is not 
 else echo "FAIL  over every monitor: '$got' (want '$want')"; RC=1; fi
 kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
 sleep 0.5; kill "$W" 2>/dev/null
+# A monitor that comes back (woken from sleep, plugged in again) at another
+# mode of the same size gets the mode Settings kept for it again (David's
+# monitor woke at 165 Hz and stayed: the desktop's size had not changed).
+# wlr-randr replays: 144 Hz at sign-in, gone, back at 165 Hz, then 144 again
+# (restored). Mutant SG_MUTANT_NO_MODE_RESTORE.
+modecase() {
+    cat > "$T/bin/wlr-randr" <<'W'
+#!/bin/sh
+s=$(head -n 1 "$Q.w"); [ -n "$s" ] && sed -i 1d "$Q.w"
+[ -n "$s" ] || s=$(cat "$Q.w.last")
+echo "$s" > "$Q.w.last"
+[ "$s" = gone ] && exit 0
+printf 'DP-1 "Microstep Optix AG32C (DP-1)"\n  Modes:\n    1920x1080 px, %s Hz (current)\n' "$s"
+W
+    cat > "$T/bin/sg-settingsctl" <<'W'
+#!/bin/sh
+[ "$*" = "display restore" ] && echo "restore at $(cat "$Q.w.last")" >> "$Q.restore" && echo "RESTORED DP-1	mode	1920x1080@143.99"
+W
+    printf '#!/bin/sh\n' > "$T/bin/wine"
+    chmod +x "$T/bin/wlr-randr" "$T/bin/sg-settingsctl" "$T/bin/wine"
+    printf '%s\n' 1920x1080 > "$T/q"; rm -f "$T/q.last" "$T/q.w.last"; : > "$T/q.restore"
+    printf '%s\n' 143.990005 143.990005 gone gone 164.970001 143.990005 143.990005 > "$T/q.w"
+    sleep 30 & SESSION=$!
+    ( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
+      SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T" WAYLAND_DISPLAY=sg-test-wl
+      export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR WAYLAND_DISPLAY
+      unset DISPLAY
+      . "$HERE/lib/sg-common.sh"; sg_desktop_follow 1920x1080 "$SESSION" ) 2>/dev/null &
+    W=$!
+    sleep 2
+    kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
+    sleep 0.5; kill "$W" 2>/dev/null
+}
+modecase
+if grep -q "^restore at 164.970001$" "$T/q.restore" && ! grep -q "^restore at gone$" "$T/q.restore" \
+    && [ "$(head -1 "$T/q.restore")" = "restore at 164.970001" ]; then
+    echo "PASS  a monitor back at another mode of the same size gets its kept mode again (once it is back, not at sign-in)"
+else echo "FAIL  restores: '$(tr '\n' ' ' < "$T/q.restore")'"; RC=1; fi
 exit $RC

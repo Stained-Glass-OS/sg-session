@@ -1,3 +1,16 @@
+sg-session (0.1.0-261) unstable; urgency=medium
+
+  * A monitor that comes back -- woken from sleep, plugged in again -- or
+    changes mode at the same size gets the mode, scale and place Settings
+    kept for it again (sg-settingsctl display restore). Only a change of
+    the desktop's size did that: David's 144 Hz monitor woke at its 165 Hz
+    preferred mode and stayed there (2026-11-16), where its DisplayPort
+    link garbles the picture. desktop-follow-test checks it (mutant
+    SG_MUTANT_NO_MODE_RESTORE), and its other cases no longer inherit the
+    session's WAYLAND_DISPLAY.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 16 Nov 2026 09:10:00 -0800
+
 sg-session (0.1.0-260) unstable; urgency=medium
 
   * /etc/profile.d/00-stained-glass-xdg.sh: every login (a tty, ssh, the

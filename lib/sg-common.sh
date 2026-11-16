@@ -63,6 +63,21 @@ sg_desktop_follow() {
     sleep "${SG_METRICS_DELAY:-4}"
     [ -f "$_df_settings" ] && wine "$_df_settings" --set metrics >/dev/null 2>&1
     while sleep "${SG_DESKTOP_WATCH_SECONDS:-2}" && kill -0 "$_df_session" 2>/dev/null; do
+        # a monitor back (woken, plugged in again) or in another mode at the
+        # same size: the mode, scale and place Settings kept for it, again --
+        # David's 144 Hz monitor woke at its 165 Hz preferred mode and stayed
+        # there (2026-11-16): the desktop's size had not changed, so nothing
+        # below ran. Nothing when it already is, so this does not go round.
+        if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wlr-randr >/dev/null 2>&1; then
+            _df_sig=$(wlr-randr 2>/dev/null | awk '/^[^ ]/ {o = $1} /current/ {print o, $1, $3}')
+            if [ -n "$_df_sig" ] && [ "$_df_sig" != "${_df_sig_last:-}" ] && [ -n "${_df_sig_seen:-}" ] \
+                && [ -z "${SG_MUTANT_NO_MODE_RESTORE:-}" ] && command -v sg-settingsctl >/dev/null 2>&1; then
+                _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
+                [ -n "$_df_r" ] && sg_log "display restored: $_df_r"
+            fi
+            _df_sig_last=$_df_sig
+            [ -n "$_df_sig" ] && _df_sig_seen=1
+        fi
         _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
         if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi
         sg_log "the output is now $_df_now (was $_df_last): the desktop follows"
