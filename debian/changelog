@@ -1,3 +1,16 @@
+sg-session (0.1.0-260) unstable; urgency=medium
+
+  * /etc/profile.d/00-stained-glass-xdg.sh: every login (a tty, ssh, the
+    desktop) starts with the XDG spec's XDG_DATA_DIRS and XDG_CONFIG_DIRS
+    before the person's ~/.profile. The common idiom there, export
+    XDG_DATA_DIRS="$HOME/.local/share:$XDG_DATA_DIRS", left /usr/share out
+    of a login nothing had set it for: the Vulkan loader found no driver,
+    and icons and .desktop files were not found (David's converted dev box,
+    2026-11-16). sg-session-start already did this for the desktop (-255).
+    xdg-profile-test checks it.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 16 Nov 2026 02:20:00 -0800
+
 sg-session (0.1.0-259) unstable; urgency=medium
 
   * sg-profile-create: the SYSTEM account gets all of AppData in a profile

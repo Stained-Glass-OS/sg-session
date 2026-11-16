@@ -311,6 +311,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -D -m 0644 config/sysctl/60-stained-glass-ping.conf $(DESTDIR)$(PREFIX)/lib/sysctl.d/60-stained-glass-ping.conf
 	install -D -m 0644 logind/60-stained-glass-vts.conf $(DESTDIR)$(PREFIX)/lib/systemd/logind.conf.d/60-stained-glass-vts.conf
 	install -D -m 0644 config/ssh/05-stained-glass.conf $(DESTDIR)/etc/ssh/sshd_config.d/05-stained-glass.conf
+	install -D -m 0644 config/profile.d/00-stained-glass-xdg.sh $(DESTDIR)/etc/profile.d/00-stained-glass-xdg.sh
 	install -d $(DESTDIR)/etc/udisks2
 	install -m 0644 config/udisks2/mount_options.conf $(DESTDIR)/etc/udisks2/mount_options.conf
 
@@ -335,6 +336,7 @@ lint:
 	    convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/smooth-glyphs-test.sh
+	@sh test/xdg-profile-test.sh
 	@sh test/shell-supervisor-test.sh
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh
