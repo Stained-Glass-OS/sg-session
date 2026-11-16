@@ -135,12 +135,22 @@ if [ "$linked" = 1 ] && command -v setfacl >/dev/null 2>&1; then
         for d in AppData Desktop Documents Downloads; do
             setfacl -P -m "u:$2:rwx" -m "d:u:$2:rwx" -m "u:$3:rwx" -m "d:u:$3:rwx" "$d" 2>/dev/null || exit 1
         done
-        mark="AppData/Local/Stained Glass/system-access-home-1"
+        mark="AppData/Local/Stained Glass/system-access-home-2"
         [ -e "$mark" ] && exit 0
+        # AppData is Windows programs'"'"' own, all of it -- SYSTEM has Full
+        # control of it on Windows. Wine makes its folders private (0700:
+        # AppData\Local, Temp), and a home converted with them already there
+        # kept them so: an elevated installer could not unpack into Temp
+        # ("error 5, access denied": Unigine Heaven, GOG GALAXY; David
+        # 2026-11-15). Only in Desktop, Documents and Downloads does a private
+        # file or folder keep its own rights. "-2": homes passed over before.
+        ap=/077
+        [ -n "${SG_MUTANT_APPDATA_PRIVATE_SKIPPED:-}" ] || ap=
         for d in AppData Desktop Documents Downloads; do
-            find -P "$d" \( -name .ssh -o -name .gnupg \) -prune -o -type d -perm /077 \
+            perm=/077; [ "$d" = AppData ] && perm=$ap
+            find -P "$d" \( -name .ssh -o -name .gnupg \) -prune -o -type d ${perm:+-perm "$perm"} \
                 -exec setfacl -P -m "u:$2:rwx" -m "d:u:$2:rwx" -m "u:$3:rwx" -m "d:u:$3:rwx" {} + 2>/dev/null
-            find -P "$d" \( -name .ssh -o -name .gnupg \) -prune -o -type f -perm /077 \
+            find -P "$d" \( -name .ssh -o -name .gnupg \) -prune -o -type f ${perm:+-perm "$perm"} \
                 -exec setfacl -P -m "u:$2:rwX" -m "u:$3:rwX" {} + 2>/dev/null
         done
         mkdir -p "AppData/Local/Stained Glass" && : > "$mark"' sg-profile-create "$profile/" "$SG_SYSTEM_USER" "$user" 2>/dev/null ||

@@ -1,3 +1,17 @@
+sg-session (0.1.0-259) unstable; urgency=medium
+
+  * sg-profile-create: the SYSTEM account gets all of AppData in a profile
+    that is the person's home, private folders too. Wine makes AppData\Local
+    and Temp 0700, and on a converted Debian machine they were there before
+    the one-time pass, which skipped private folders: an elevated installer
+    could not unpack into Temp ("error 5, access denied": Unigine Heaven,
+    GOG GALAXY; David 2026-11-15). Desktop, Documents and Downloads keep the
+    private-file exception. The marker is now system-access-home-2, so
+    homes passed over before get the pass again. profile-in-home-test
+    checks it (mutant SG_MUTANT_APPDATA_PRIVATE_SKIPPED).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 15 Nov 2026 21:50:00 -0800
+
 sg-session (0.1.0-258) unstable; urgency=medium
 
   * sg-drivers: NVIDIA's archive pin names each driver package (NAME and

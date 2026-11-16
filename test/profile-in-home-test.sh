@@ -4,9 +4,10 @@
 #   - C:\users\<user> becomes a link to the home, nothing is copied or moved;
 #   - the home stays not group-writable and ssh keys keep their rights (ssh
 #     refuses a key, sshd a home, that the group may write);
-#   - the SYSTEM account (an elevated installer) may work in AppData, Desktop,
-#     Documents and Downloads, but not in private files there (no group or
-#     other access) nor in the rest of the home;
+#   - the SYSTEM account (an elevated installer) may work in AppData, all of
+#     it (Wine's own folders are private, 0700), and in Desktop, Documents and
+#     Downloads but not in private files there (no group or other access), nor
+#     in the rest of the home (mutant SG_MUTANT_APPDATA_PRIVATE_SKIPPED);
 #   - a second sign-in changes nothing; without the setting, the profile is
 #     a folder of its own, as before.
 #
@@ -27,7 +28,7 @@ getent passwd "$U" >/dev/null && userdel -r "$U" >/dev/null 2>&1
 useradd -m -d "$T/home/$U" -s /bin/sh "$U" 2>/dev/null || { mkdir -p "$T/home"; useradd -m -d "$T/home/$U" -s /bin/sh "$U"; }
 H="$T/home/$U"; G=$(id -gn "$U")
 runuser -u "$U" -- sh -c 'cd "$1" && umask 077 && mkdir -p .ssh Documents Projects && ssh-keygen -q -t ed25519 -N "" -f .ssh/id_ed25519 &&
-    echo secret > Documents/private.txt && umask 022 && echo hello > Documents/public.txt && echo code > Projects/main.c &&
+    echo secret > Documents/private.txt && mkdir -p AppData/Local/Temp && echo s > AppData/Local/state.dat && umask 022 && echo hello > Documents/public.txt && echo code > Projects/main.c &&
     chmod 755 . Projects' x "$H"
 mkdir -p "$T/prefix/drive_c/users" && chown nobody "$T/prefix/drive_c/users"
 : > "$T/profile-in-home"
@@ -47,6 +48,11 @@ m=$(stat -c %a "$H"); case "$m" in ?[2367]?) fail "the home is group-writable ($
 runuser -u "$U" -- ssh-keygen -y -f "$H/.ssh/id_ed25519" >/dev/null 2>&1 && pass "ssh still accepts the key" || fail "ssh refuses the key"
 getfacl -cp "$H/Documents/public.txt" 2>/dev/null | grep -q '^user:nobody:rw' && pass "SYSTEM may write a shared file in Documents" || fail "no SYSTEM entry on Documents/public.txt"
 getfacl -cp "$H/Downloads" 2>/dev/null | grep -q '^default:user:nobody:rwx' && pass "new files in Downloads are SYSTEM's to use too (default ACL)" || fail "no default ACL on Downloads"
+# Wine's own AppData folders are private (0700) and were there before the conversion:
+# an elevated installer unpacks into Temp (David 2026-11-15: "error 5, access denied")
+getfacl -cp "$H/AppData/Local/Temp" 2>/dev/null | grep -q '^user:nobody:rwx' && getfacl -cp "$H/AppData/Local/Temp" 2>/dev/null | grep -q '^default:user:nobody:rwx' \
+    && pass "SYSTEM may work in a private AppData\\Local\\Temp that was already there" || fail "Temp: $(getfacl -cp "$H/AppData/Local/Temp" 2>/dev/null | tr '\n' ' ')"
+getfacl -cp "$H/AppData/Local/state.dat" 2>/dev/null | grep -q '^user:nobody:rw' && pass "and on a private file in AppData" || fail "AppData/Local/state.dat has no SYSTEM entry"
 [ "$(stat -c %a "$H/Documents/private.txt")" = 600 ] && ! getfacl -cp "$H/Documents/private.txt" 2>/dev/null | grep -q '^user:[^:]' \
     && pass "a private file in Documents keeps its rights" || fail "private.txt: $(getfacl -cp "$H/Documents/private.txt" 2>/dev/null | tr '\n' ' ')"
 ! getfacl -cp "$H/Projects/main.c" 2>/dev/null | grep -q '^user:nobody' && pass "the rest of the home is untouched" || fail "Projects got an ACL"
@@ -56,7 +62,7 @@ run
 # the conversion's way: the home bind-mounted on the profile (/etc/fstab)
 rm -f "$P"; mkdir -p "$P"
 if mount --bind "$H" "$P" 2>/dev/null; then
-    rm -f "$H/AppData/Local/Stained Glass/system-access-home-1"
+    rm -f "$H/AppData/Local/Stained Glass/system-access-home-2"
     run
     [ -d "$P" ] && [ ! -L "$P" ] && [ -f "$P/Projects/main.c" ] && pass "a home bind-mounted on the profile is taken as the profile" || fail "bind mount: $(ls -ld "$P" 2>&1)"
     [ "$(stat -c %a "$H/.ssh/id_ed25519")" = 600 ] && ! getfacl -cp "$H/.ssh/id_ed25519" 2>/dev/null | grep -q '^user:[^:]' \
