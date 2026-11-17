@@ -1,3 +1,14 @@
+sg-session (0.1.0-262) unstable; urgency=medium
+
+  * Monitors never end up over each other: a monitor given another mode,
+    scale or orientation in Settings keeps its neighbours beside it (they
+    move along, as on Windows), and kept places restored for a monitor that
+    came back at a larger mode are pushed apart. A 3840-wide mode left the
+    next monitor at x=1920, half over it. test/settingsctl-test.py (mutants
+    MODE_NO_RELAYOUT, RESTORE_OVERLAPS).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 16 Nov 2026 16:43:50 -0800
+
 sg-session (0.1.0-261) unstable; urgency=medium
 
   * A monitor that comes back -- woken from sleep, plugged in again -- or

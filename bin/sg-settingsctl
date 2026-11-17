@@ -629,19 +629,38 @@ def display(args):
             raise Fail("invalid", "not an output name")
         if args[1] not in [o.get("name") for o in outputs()]:
             raise Fail("notfound", "no output %s" % args[1])
+        before = outputs()
+        o = next(o for o in before if o.get("name") == args[1])
+        bx, by, bw, bh = place_of(o)
+        cur = next((m for m in o.get("modes", []) if m.get("current")), {})
+        mw, mh = int(cur.get("width") or 0), int(cur.get("height") or 0)
+        sc = float(o.get("scale") or 1) or 1
+        turned = transform_of(o) in ("90", "270")
         if args[0] == "transform":
             one_of(args[2], TRANSFORMS, "orientation")
             run(["wlr-randr", "--output", args[1], "--transform", args[2]])
+            turned = args[2] in ("90", "270")
         elif args[0] == "mode":
             m = MODE.fullmatch(args[2])
             if not m:
                 raise Fail("invalid", "a mode is WIDTHxHEIGHT[@HZ]")
-            o = next(o for o in outputs() if o.get("name") == args[1])
             run(["wlr-randr", "--output", args[1], "--mode", exact_mode(o, m) or args[2]])
+            mw, mh = int(m.group(1)), int(m.group(2))
         else:
             if not re.fullmatch(r"[123](\.(0|00|25|5|50|75))?", args[2]):
                 raise Fail("invalid", "the scale is 1 to 3 in steps of 0.25")
             run(["wlr-randr", "--output", args[1], "--scale", args[2]])
+            sc = float(args[2])
+        # the others stay beside it, as on Windows: a monitor grown or turned
+        # pushes its neighbours along, one shrunk pulls them back; it never
+        # ends up over another (a 3840-wide mode left the next monitor at
+        # x=1920, half over it)
+        w, h = (mh, mw) if turned else (mw, mh)
+        nw, nh = int(round(w / sc)), int(round(h / sc))
+        if (nw, nh) != (bw, bh) and len(before) > 1 and not os.environ.get("SG_MUTANT_MODE_NO_RELAYOUT"):
+            places = relayout_beside(before, args[1], (bx, by, bw, bh), (nw, nh))
+            if places:
+                display_layout([v for n, (x, y) in places.items() for v in (n, str(x), str(y))])
         # kept for this monitor, as Windows keeps each monitor's settings, and
         # put back when the next session starts (display restore)
         outs = outputs()
@@ -764,6 +783,61 @@ def display_layout(args):
         lay["project"] = "extend"
     save_config(c)
     return ["PLACED %s\t%d\t%d" % (clean(n), x, y) for n, (x, y) in places.items()]
+
+
+def apart(outs, places):
+    """The places with no two monitors over each other, as Windows never has them:
+    kept places were made for the sizes then -- a monitor that comes back at a
+    larger mode (or another scale) would cover its neighbour. Left to right,
+    each one over an earlier one moves to that one's right edge."""
+    size = {o.get("name"): place_of(o)[2:] for o in outs}
+    done = {}
+    for n, (x, y) in sorted(places.items(), key=lambda kv: (kv[1][0], kv[1][1])):
+        w, h = size.get(n, (0, 0))
+        moved = True
+        while moved:
+            moved = False
+            for (dx, dy, dw, dh) in done.values():
+                if x < dx + dw and x + w > dx and y < dy + dh and y + h > dy:
+                    x, moved = dx + dw, True
+        done[n] = (x, y, w, h)
+    return {n: done[n][:2] for n in places}
+
+
+def relayout_beside(outs, name, old, new):
+    """The places of every enabled monitor once NAME (at OLD x, y, w, h) has the
+    size NEW (w, h): those beyond its right edge move by the width it gained,
+    those below its bottom edge by the height; any still over it go to its right.
+    None when nothing moves."""
+    ox, oy, ow, oh = old
+    nw, nh = new
+    dw, dh = nw - ow, nh - oh
+    places, moved = {}, False
+    for o in outs:
+        if not o.get("enabled", True):
+            continue
+        n = o.get("name")
+        x, y, w, h = place_of(o)
+        if n != name:
+            if x >= ox + ow:
+                x += dw
+            elif y >= oy + oh and x < ox + ow and x + w > ox:
+                y += dh
+            moved = moved or (x, y) != place_of(o)[:2]
+        places[n] = (x, y)
+    # what still covers it goes to its right
+    right = ox + nw
+    for o in outs:
+        n = o.get("name")
+        if n == name or n not in places:
+            continue
+        x, y = places[n]
+        w, h = place_of(o)[2:]
+        if x < ox + nw and x + w > ox and y < oy + nh and y + h > oy:
+            places[n] = (right, oy)
+            right += w
+            moved = True
+    return places if moved else None
 
 
 def set_primary(name):
@@ -895,6 +969,8 @@ def restore_layout():
             out.append("RESTORED *\tproject\tduplicate")
     elif isinstance(lay.get("places"), dict) and all(k in lay["places"] for k in keyed):
         want = side_by_side(outs, lay["places"])
+        if not os.environ.get("SG_MUTANT_RESTORE_OVERLAPS"):
+            want = apart(outs, want)
         have = {o.get("name"): place_of(o)[:2] for o in outs}
         # (and the displays turned off stay off)
         off = {keyed[k].get("name") for k in (lay.get("off") or []) if k in keyed}

@@ -322,6 +322,8 @@ for bad in (["mode", "Virtual-1", "big"], ["mode", "Virtual-1", "1280x720 --off"
 code, lines = ctl("display", env=dict(ENV, WAYLAND_DISPLAY=""))
 check("display: unsupported off the compositor", code == 4 and lines[-1].startswith("ERROR unsupported"), lines)
 
+# (mutants: SG_MUTANT_MODE_NO_RELAYOUT=1 must fail the "display mode/scale/transform" neighbour checks,
+#  SG_MUTANT_RESTORE_OVERLAPS=1 the "display restore: a monitor back 3840 wide" one)
 # ---- several monitors (David 2026-11-12: "many monitors, more than two even, be able
 # to adjust where they are"): three, rearranged, the main display, extend /
 # duplicate / only one, kept for this set of monitors and put back
@@ -458,6 +460,58 @@ for bad in (["layout", "DP-1", "x", "0"], ["layout", "DP-1", "0"], ["layout", "D
             ["layout", "DP-1;", "0", "0"], ["primary", "--off"], ["project", "only", "DP-9"], ["project", "mirror"]):
     code, lines = ctl("display", *bad, env=XENV)
     check("display refuses %s" % " ".join(bad), code in (2, 5) and not [c for c in calls() if "--json" not in c and "listmonitors" not in c], lines)
+# a monitor given another mode, scale or turn keeps its neighbours beside it, as on Windows
+# (qa5 2026-11-16: a 3840-wide mode left the next monitor at x=1920, half over it)
+def relayout_call(cl):
+    return [c for c in cl if "--pos" in c]
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", "mode", "DP-1", "3840x2160", env=XENV)
+cl = relayout_call(calls())
+check("display mode: a monitor grown to 3840 wide pushes the two on its right along",
+      code == 0 and "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 3840,0 --output HDMI-A-1 --pos 5760,0" in cl, (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", "mode", "DP-2", "1280x720", env=XENV)
+cl = relayout_call(calls())
+check("display mode: one shrunk to 1280 wide pulls the next back (no gap)",
+      code == 0 and "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 1920,0 --output HDMI-A-1 --pos 3200,0" in cl, (lines, cl))
+three([(0, 0), (0, 1080), (1920, 0)])
+calls()
+code, lines = ctl("display", "mode", "DP-1", "2560x1440", env=XENV)
+cl = relayout_call(calls())
+check("display mode: the one below moves down, the one on the right moves right",
+      code == 0 and "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 0,1440 --output HDMI-A-1 --pos 2560,0" in cl, (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", "scale", "DP-1", "2", env=XENV)
+cl = relayout_call(calls())
+check("display scale: at 200% the monitor is 960 wide in the layout, the others follow",
+      code == 0 and "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 960,0 --output HDMI-A-1 --pos 2880,0" in cl, (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", "transform", "DP-1", "90", env=XENV)
+cl = relayout_call(calls())
+check("display transform: turned upright (1080 wide) the others follow",
+      code == 0 and "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 1080,0 --output HDMI-A-1 --pos 3000,0" in cl, (lines, cl))
+three([(0, 0), (1920, 0), (3840, 0)])
+calls()
+code, lines = ctl("display", "mode", "DP-1", "1920x1080", env=XENV)
+check("display mode: the same size moves nobody", code == 0 and not relayout_call(calls()), lines)
+# kept places are for the sizes then: a monitor back at a larger mode must not cover its neighbour
+three([(0, 0), (1920, 0), (3840, 0)])
+ctl("display", "layout", "DP-1", "0", "0", "DP-2", "1920", "0", "HDMI-A-1", "3840", "0", env=XENV)
+with open(os.path.join(tmp, "outputs.json")) as f:
+    big = json.load(f)
+big[0]["modes"] = [{"width": 3840, "height": 2160, "refresh": 60.0, "preferred": True, "current": True}]
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump(big, f)
+calls()
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+check("display restore: a monitor back 3840 wide pushes the kept places of its neighbours apart (none over it)",
+      code == 0 and any("--output DP-1 --on --pos 0,0" in c and "--output DP-2 --on --pos 3840,0" in c
+                        and "--output HDMI-A-1 --on --pos 5760,0" in c for c in cl), (lines, cl))
 with open(os.path.join(tmp, "outputs.json"), "w") as f:
     json.dump(OUTPUTS, f)
 calls()
