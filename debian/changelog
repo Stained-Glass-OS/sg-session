@@ -1,3 +1,15 @@
+sg-session (0.1.0-263) unstable; urgency=medium
+
+  * Monitors placed by another tool stay where it put them (wlr-randr
+    --pos, a Linux display tool): the session put the layout Settings kept
+    back at once, so such a move had no effect. The same monitors moved are
+    kept as their layout, as Windows keeps one however it was made; a
+    monitor plugged in, or out, still gets its kept layout back. Wine's
+    monitors follow the move. test/desktop-follow-test.sh (mutant
+    MOVE_UNDONE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 17 Nov 2026 19:00:00 -0800
+
 sg-session (0.1.0-262) unstable; urgency=medium
 
   * Monitors never end up over each other: a monitor given another mode,

@@ -69,7 +69,13 @@ sg_desktop_follow() {
         # there (2026-11-16): the desktop's size had not changed, so nothing
         # below ran. Nothing when it already is, so this does not go round.
         if [ -n "${WAYLAND_DISPLAY:-}" ] && command -v wlr-randr >/dev/null 2>&1; then
-            _df_sig=$(wlr-randr 2>/dev/null | awk '/^[^ ]/ {o = $1} /current/ {print o, $1, $3}')
+            _df_out=$(wlr-randr 2>/dev/null)
+            _df_sig=$(printf '%s\n' "$_df_out" | awk '/^[^ ]/ {o = $1} /current/ {print o, $1, $3}')
+            # which monitors are on: a monitor plugged in or out, turned on or off, since the
+            # layout was last put back (pending until the desktop's size follows it)
+            _df_set=$(printf '%s\n' "$_df_out" | awk '/^[^ ]/ {o = $1} /^ *Enabled: yes/ {print o}' | sort | tr '\n' ' ')
+            [ -n "${_df_set_last+x}" ] && [ "$_df_set" != "$_df_set_last" ] && _df_set_changed=1
+            _df_set_last=$_df_set
             if [ -n "$_df_sig" ] && [ "$_df_sig" != "${_df_sig_last:-}" ] && [ -n "${_df_sig_seen:-}" ] \
                 && [ -z "${SG_MUTANT_NO_MODE_RESTORE:-}" ] && command -v sg-settingsctl >/dev/null 2>&1; then
                 _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
@@ -91,8 +97,21 @@ sg_desktop_follow() {
             # kept it (where each is, the main display; sg-settingsctl);
             # nothing when it already is, so this does not go round again
             if command -v sg-settingsctl >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-                _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
-                [ -n "$_df_r" ] && sg_log "display restored: $_df_r"
+                if [ -n "${_df_set_changed:-}" ] || [ -n "${SG_MUTANT_MOVE_UNDONE:-}" ]; then
+                    _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
+                    [ -n "$_df_r" ] && sg_log "display restored: $_df_r"
+                else
+                    # the same monitors, placed elsewhere by another tool (wlr-randr --pos, a
+                    # Linux display tool): kept as this set's layout, as Windows keeps a layout
+                    # however it was made -- putting the kept one back undid every such move
+                    _df_pl=$(wlr-randr 2>/dev/null | awk '/^[^ ]/ {o = $1} /^ *Enabled: yes/ {on[o] = 1}
+                        /^ *Position:/ {split($2, p, ","); pos[o] = p[1] " " p[2]}
+                        END {for (o in on) if (o in pos) printf "%s %s ", o, pos[o]}')
+                    # shellcheck disable=SC2086
+                    [ -n "$_df_pl" ] && sg-settingsctl display layout $_df_pl >/dev/null 2>&1 &&
+                        sg_log "display moved by another tool, kept: $_df_pl"
+                fi
+                _df_set_changed=
             fi
             _df_prim=$(sg_primary_size "$_df_now")
             sg_auto_scale "${_df_prim%x*}" "${_df_prim#*x}" >/dev/null

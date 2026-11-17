@@ -117,4 +117,56 @@ if grep -q "^restore at 164.970001$" "$T/q.restore" && ! grep -q "^restore at go
     && [ "$(head -1 "$T/q.restore")" = "restore at 164.970001" ]; then
     echo "PASS  a monitor back at another mode of the same size gets its kept mode again (once it is back, not at sign-in)"
 else echo "FAIL  restores: '$(tr '\n' ' ' < "$T/q.restore")'"; RC=1; fi
+
+# Over every monitor, the same monitors placed elsewhere by another tool (wlr-randr --pos):
+# the move is kept as this set's layout (display layout), not undone by putting the kept one back
+# (display restore) -- wlr-randr --pos had no effect in the session. A monitor plugged in (another
+# set) still gets its kept layout back. wlr-randr replays: two monitors side by side, then DP-2
+# moved down 300 (the root 3840x1380), then HDMI-1 plugged in (5760x1380). Mutant
+# SG_MUTANT_MOVE_UNDONE.
+movecase() {
+    cat > "$T/bin/wlr-randr" <<'W'
+#!/bin/sh
+[ $# -gt 0 ] && exit 0
+s=$(head -n 1 "$Q.w"); [ -n "$s" ] && sed -i 1d "$Q.w"
+[ -n "$s" ] || s=$(cat "$Q.w.last")
+echo "$s" > "$Q.w.last"
+for o in $s; do
+    printf '%s "Monitor (%s)"\n  Enabled: yes\n  Modes:\n    1920x1080 px, 60.000000 Hz (current)\n  Position: %s\n' "${o%%=*}" "${o%%=*}" "${o#*=}"
+done
+W
+    cat > "$T/bin/sg-settingsctl" <<'W'
+#!/bin/sh
+echo "$*" >> "$Q.ctl"
+W
+    cat > "$T/bin/wine" <<'W'
+#!/bin/sh
+case "$*" in *"reg query"*HostMonitors*) printf '    HostMonitors    REG_SZ    Y\r\n' ;; esac
+W
+    cat > "$T/bin/xrandr" <<'W'
+#!/bin/sh
+printf 'Monitors: 1\n 0: +*DP-1 1920/600x1080/340+0+0  DP-1\n'
+W
+    chmod +x "$T/bin/wlr-randr" "$T/bin/sg-settingsctl" "$T/bin/wine" "$T/bin/xrandr"
+    printf '%s\n' 3840x1080 3840x1080 3840x1380 3840x1380 3840x1380 5760x1380 > "$T/q"; rm -f "$T/q.last" "$T/q.w.last"; : > "$T/q.ctl"
+    printf '%s\n' "DP-1=0,0 DP-2=1920,0" "DP-1=0,0 DP-2=1920,0" "DP-1=0,0 DP-2=1920,300" "DP-1=0,0 DP-2=1920,300" \
+        "DP-1=0,0 DP-2=1920,300" "DP-1=0,0 DP-2=1920,300 HDMI-1=3840,0" > "$T/q.w"
+    sleep 30 & SESSION=$!
+    ( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
+      SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T" WAYLAND_DISPLAY=sg-test-wl
+      export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR WAYLAND_DISPLAY
+      unset DISPLAY
+      . "$HERE/lib/sg-common.sh"; sg_desktop_follow 3840x1080 "$SESSION" ) 2>/dev/null &
+    W=$!
+    sleep 2
+    kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null
+    sleep 0.5; kill "$W" 2>/dev/null
+}
+movecase
+ctl=$(grep -v "^display restore$" "$T/q.ctl" | head -1 | tr ' ' '\n' | sed '1,2d' | paste -sd' ' | awk '{n = split($0, a, " "); for (i = 1; i <= n; i += 3) print a[i], a[i+1], a[i+2]}' | sort | tr '\n' ';')
+first=$(head -1 "$T/q.ctl")
+if [ "$ctl" = "DP-1 0 0;DP-2 1920 300;" ] && [ "${first%% *}" = display ] && [ "$(echo "$first" | cut -d' ' -f2)" = layout ] \
+    && [ "$(grep -c "^display restore$" "$T/q.ctl")" -ge 1 ] && [ "$(tail -1 "$T/q.ctl")" = "display restore" ]; then
+    echo "PASS  monitors moved by another tool keep their places (kept as the layout); a monitor plugged in gets the kept layout back"
+else echo "FAIL  move kept: calls '$(tr '\n' '|' < "$T/q.ctl")'"; RC=1; fi
 exit $RC
