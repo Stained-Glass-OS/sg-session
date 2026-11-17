@@ -38,6 +38,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAXFIELD 512
@@ -329,7 +330,23 @@ static int lockscale_read( const char *user )
 
 /* ---- the lock UI ------------------------------------------------------- */
 
-struct ui { pid_t pid; int to, from; char *picture; int sas; };
+/* hello: it said HELLO (it is up); started: when (CLOCK_MONOTONIC s); fails: starts in a row that
+ * never came up; restart_at: a restart waiting (0: none) */
+struct ui { pid_t pid; int to, from; char *picture; int sas; int hello; long started, restart_at; int fails; };
+
+static long now_s( void )
+{
+    struct timespec ts;
+    clock_gettime( CLOCK_MONOTONIC, &ts );
+    return (long)ts.tv_sec;
+}
+
+static long env_long( const char *name, long def )
+{
+    const char *v = getenv( name );
+    long n = v ? atol( v ) : 0;
+    return n > 0 ? n : def;
+}
 
 static int ui_start( struct ui *ui, const char *user, int sas )
 {
@@ -350,6 +367,13 @@ static int ui_start( struct ui *ui, const char *user, int sas )
             else unsetenv( "SG_LOCK_SCALE" );
         }
         setenv( "SG_LOCK_SIGNIN", signin ? "1" : "0", 1 );
+        /* the lock UI failed to come up this many times in a row: its simple stand-in, which
+         * needs no Wine (sg-lock-ui, sg-lock-fallback) */
+#ifndef SG_MUTANT_LOCK_NO_FALLBACK
+        if (ui->fails >= env_long( "SG_LOCK_UI_FALLBACK_AFTER", 3 )) setenv( "SG_LOCK_FALLBACK", "1", 1 );
+        else
+#endif
+            unsetenv( "SG_LOCK_FALLBACK" );
         if (sas) setenv( "SG_LOCK_MODE", "sas", 1 );
         else unsetenv( "SG_LOCK_MODE" );
         dup2( down[0], 0 ); dup2( up[1], 1 );
@@ -367,6 +391,9 @@ static int ui_start( struct ui *ui, const char *user, int sas )
     }
     close( up[1] ); close( down[0] );
     ui->sas = sas;
+    ui->hello = 0;
+    ui->started = now_s();
+    ui->restart_at = 0;
     ui->from = up[0];
     ui->to = down[1];
     return 0;
@@ -374,13 +401,14 @@ static int ui_start( struct ui *ui, const char *user, int sas )
 
 static void ui_stop( struct ui *ui )
 {
-    if (ui->pid <= 0) return;
+    if (ui->pid <= 0) { ui->restart_at = 0; return; }
     close( ui->to ); close( ui->from );
     kill( -ui->pid, SIGTERM );
     for (int i = 0; i < 20 && waitpid( ui->pid, NULL, WNOHANG ) == 0; i++) usleep( 100000 );
     kill( -ui->pid, SIGKILL );
     waitpid( ui->pid, NULL, 0 );
     ui->pid = 0;
+    ui->restart_at = 0;
     if (ui->picture) { unlink( ui->picture ); free( ui->picture ); ui->picture = NULL; }
 }
 
@@ -420,6 +448,12 @@ static int ui_line( struct ui *ui, const char *user, char *line )
     /* The security screen: its choices are the compositor's to carry out --
      * Lock through LOCK, the rest through SAS (which ends the screen and runs
      * Task Manager or sign-out in the session). */
+    if (ui->sas && !strncmp( line, "HELLO", 5 ))
+    {
+        ui->hello = 1;
+        ui->fails = 0;
+        return 0;
+    }
     if (ui->sas)
     {
         char cmd[32];
@@ -433,7 +467,12 @@ static int ui_line( struct ui *ui, const char *user, char *line )
     }
 
     if (!strncmp( line, "HELLO", 5 ))
+    {
+        if (ui->fails) logmsg( "the lock UI is up again after %d failed start(s)", ui->fails );
+        ui->hello = 1;
+        ui->fails = 0;
         ui_send( ui, "PROMPT_SECRET Password for %s:", user );
+    }
     else if (!strncmp( line, "REPLY ", 6 ))
     {
         int ok = check_password( user, line + 6 );
@@ -536,7 +575,38 @@ int main( int argc, char **argv )
         for (;;)
         {
             struct pollfd pf[2] = { { w, POLLIN, 0 }, { ui.pid > 0 ? ui.from : -1, POLLIN, 0 } };
-            if (poll( pf, 2, -1 ) < 0) { if (errno == EINTR) continue; break; }
+            long hello_s = env_long( "SG_LOCK_UI_HELLO_SECONDS", 60 ), t = now_s(), wait_s = -1;
+            int pr;
+
+            /* The machine stays locked whatever the lock UI does -- the compositor shows only
+             * privileged clients -- so a lock UI that is not up must be brought back, or the person
+             * faces a blank screen with no way to sign in (an upgrade left Wine's client and server
+             * at different versions: the lock UI died at every start). Like LogonUI: always back. */
+            if (ui.pid > 0 && !ui.hello) wait_s = ui.started + hello_s > t ? ui.started + hello_s - t : 0;
+            if (ui.pid <= 0 && ui.restart_at) wait_s = ui.restart_at > t ? ui.restart_at - t : 0;
+            pr = poll( pf, 2, wait_s < 0 ? -1 : (int)(wait_s * 1000) + 100 );
+            if (pr < 0) { if (errno == EINTR) continue; break; }
+            t = now_s();
+            if (ui.pid <= 0 && ui.restart_at && t >= ui.restart_at)
+            {
+                logmsg( "starting the lock UI again (%d failed start(s) in a row%s)", ui.fails,
+                        ui.fails >= env_long( "SG_LOCK_UI_FALLBACK_AFTER", 3 ) ? ": its stand-in" : "" );
+                if (ui_start( &ui, user, ui.sas ) < 0) { logmsg( "could not start the lock UI" ); ui.restart_at = t + 5; }
+                continue;
+            }
+#ifndef SG_MUTANT_LOCK_NO_WATCHDOG
+            if (ui.pid > 0 && !ui.hello && t >= ui.started + hello_s)
+            {
+                int sas = ui.sas, fails = ui.fails + 1;
+                logmsg( "the lock UI did not come up in %ld s; stopping it", hello_s );
+                ui_stop( &ui );
+                ui.sas = sas;
+                ui.fails = fails;
+                ui.restart_at = t + 1;
+                continue;
+            }
+#endif
+            if (pr == 0) continue;
 
             if (pf[0].revents)
             {
@@ -544,16 +614,21 @@ int main( int argc, char **argv )
                 if ((!strcmp( ev, "locked" ) || !strcmp( ev, "OK locked" )) && (ui.pid <= 0 || ui.sas))
                 {
                     ui_stop( &ui );   /* the security screen, when Lock was chosen on it */
+                    ui.fails = 0;
                     logmsg( "locked: starting the lock screen for %s", user );
                     if (ui_start( &ui, user, 0 ) < 0) logmsg( "could not start the lock UI" );
                 }
                 else if (!strcmp( ev, "sas" ) && ui.pid <= 0)
                 {
+                    ui.fails = 0;
                     logmsg( "Ctrl+Alt+Del: starting the security screen for %s", user );
                     if (ui_start( &ui, user, 1 ) < 0) logmsg( "could not start the security screen" );
                 }
                 else if (!strcmp( ev, "unlocked" ) || !strcmp( ev, "OK unlocked" ))
+                {
                     ui_stop( &ui );
+                    ui.fails = 0;
+                }
             }
             if (ui.pid > 0 && pf[1].revents)
             {
@@ -563,11 +638,21 @@ int main( int argc, char **argv )
                     /* The lock UI died. The machine stays locked -- the
                      * compositor shows nothing but privileged clients -- so
                      * put it back. */
-                    logmsg( "lock UI exited while locked; restarting it" );
-                    int sas = ui.sas;
+                    int sas = ui.sas, fails = ui.hello ? 1 : ui.fails + 1;
+                    long delay = 1;
+                    /* never a tight loop if it dies on start: 1, 2, 4 ... 30 s while it keeps failing */
+                    for (int i = 1; i < fails && delay < 30; i++) delay *= 2;
+                    if (delay > 30) delay = 30;
+                    logmsg( "the lock UI exited while %s (%s); starting it again in %ld s",
+                            sas ? "on the security screen" : "locked", ui.hello ? "it had been up" : "it never came up",
+                            delay );
                     ui_stop( &ui );
-                    sleep( 1 );   /* never a tight loop if it dies on start */
-                    ui_start( &ui, user, sas );
+                    ui.sas = sas;
+                    ui.fails = fails;
+#ifdef SG_MUTANT_LOCK_NO_FALLBACK
+                    ui.fails = 0;
+#endif
+                    ui.restart_at = now_s() + delay;
                     continue;
                 }
                 if (ui_line( &ui, user, line ) == 1) ui_stop( &ui );

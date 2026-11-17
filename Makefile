@@ -105,7 +105,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	@# passwords" (a keyring an administrator's reset left on the old password).
 	@if [ -f build/sg-lockd ]; then \
 	    install -m 0755 build/sg-lockd build/sg-lockctl build/sg-rdp-pamcheck build/sg-password-change build/sg-keyring-first \
-	        build/sg-keyring \
+	        build/sg-keyring build/sg-lock-fallback \
 	        $(DESTDIR)$(PREFIX)/libexec/stained-glass/; \
 	fi
 	@# The session's org.freedesktop.ScreenSaver service (power/): what Linux
@@ -657,6 +657,7 @@ greeter:
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-greet-bridge greeter/sg-greet-bridge.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/greetd-stub greeter/greetd-stub.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockd greeter/sg-lockd.c
+	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lock-fallback greeter/sg-lock-fallback.c -lX11
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-polimport greeter/sg-polimport.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-lockctl greeter/sg-lockctl.c
 	$(CC) $(CFLAGS_BRIDGE) -o build/sg-xtype greeter/sg-xtype.c -lX11 -lXtst
@@ -868,6 +869,13 @@ test-lock: greeter rdp vkbd
 .PHONY: test-lockpic
 test-lockpic: greeter
 	@sh test/lockpic-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
+
+# The lock screen always comes back: the lock UI killed, dying at every start
+# or never coming up, while locked (sg-lockd's restart, watchdog and its
+# Wine-less stand-in sg-lock-fallback). Needs the compositor (SG_COMPOSITOR_BIN).
+.PHONY: test-lockrevive
+test-lockrevive: greeter vkbd
+	@sh test/lock-revive-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 # sg-vkbd: a virtual-keyboard test fixture with a stable keymap (see its
 # header for why wtype is not enough to drive a Wine prompt). Never installed.

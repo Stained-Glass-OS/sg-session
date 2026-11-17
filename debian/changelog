@@ -1,3 +1,20 @@
+sg-session (0.1.0-265) unstable; urgency=medium
+
+  * The lock screen always comes back, as Windows' sign-in screen does: the
+    machine stays locked whatever its lock screen does, so a lock screen
+    that died, could not start or hung left a blank screen with no way to
+    sign in (an upgrade left Wine's client and server at different
+    versions: the lock screen died at every start, a purple screen with a
+    pointer). sg-lockd now logs it and starts it again, waiting 1, 2, 4 ...
+    30 s while it keeps failing; stops one that does not come up in 60 s
+    (SG_LOCK_UI_HELLO_SECONDS); and after three failed starts brings up a
+    simple stand-in that needs no Wine (sg-lock-fallback). The stand-in is
+    only a password prompt on the lock screen's own X server: sg-lockd
+    still checks the password and alone unlocks. test/lock-revive-test.sh
+    (make test-lockrevive; mutants LOCK_NO_FALLBACK, LOCK_NO_WATCHDOG).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 17 Nov 2026 09:30:00 -0800
+
 sg-session (0.1.0-264) unstable; urgency=medium
 
   * The session's process agent (sg-procagent) comes back when it dies:
