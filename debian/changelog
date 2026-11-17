@@ -1,3 +1,16 @@
+sg-session (0.1.0-264) unstable; urgency=medium
+
+  * The session's process agent (sg-procagent) comes back when it dies:
+    sg-session-start runs it under sg_procagent_supervise, which restarts it
+    (after 1 s, backing off to a minute if it keeps dying at once) for as
+    long as the session lives, and stops it with the session. The machine's
+    wineserver reaches the user's threads only through it; without it a .NET
+    program's garbage collection could not stop its threads (wine-sg 7843
+    makes that fail instead of hang). Test procagent-supervise-test (mutant:
+    no restart).
+
+ -- Stained Glass OS <dev@stained-glass.example>  Tue, 17 Nov 2026 05:26:55 -0800
+
 sg-session (0.1.0-263) unstable; urgency=medium
 
   * Monitors placed by another tool stay where it put them (wlr-randr

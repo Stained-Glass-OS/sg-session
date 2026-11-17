@@ -1520,3 +1520,36 @@ sg_dictate_wanted() {
     [ ! -e "${XDG_RUNTIME_DIR:-/nonexistent}/sg-dictate-idle" ]
 }
 
+
+# sg_procagent_supervise AGENT PREFIX SESSION_PID: keep the user's process agent
+# (sg-procagent, ADR 0014) running for as long as the session's process lives.
+# The machine's wineserver (SYSTEM) reaches this user's threads only through it:
+# with the agent gone a .NET program's next garbage collection could not stop its
+# threads (wine-sg 7843 now fails that instead of waiting forever, but the program
+# is still better served by an agent that comes back). Restarted after a second;
+# one that keeps dying at once is retried less and less often (up to a minute)
+# rather than in a tight loop. Run it in the background; it ends, and stops the
+# agent, when SESSION_PID is gone (greetd's teardown of the process group ends
+# both sooner).
+sg_procagent_supervise() {
+    _pa_agent=$1; _pa_prefix=$2; _pa_session=$3; _pa_delay=1
+    while kill -0 "$_pa_session" 2>/dev/null; do
+        _pa_start=$(date +%s)
+        "$_pa_agent" "$_pa_prefix" </dev/null &
+        _pa_pid=$!
+        sg_log "sg-procagent running (pid $_pa_pid) for $(id -un)"
+        while kill -0 "$_pa_pid" 2>/dev/null && kill -0 "$_pa_session" 2>/dev/null; do sleep 2; done
+        if ! kill -0 "$_pa_session" 2>/dev/null; then
+            kill "$_pa_pid" 2>/dev/null || true
+            wait "$_pa_pid" 2>/dev/null || true
+            break
+        fi
+        _pa_rc=0; wait "$_pa_pid" 2>/dev/null || _pa_rc=$?
+        [ "${SG_MUTANT_PROCAGENT_NO_RESTART:-}" = 1 ] && break
+        if [ $(($(date +%s) - _pa_start)) -lt 10 ]; then
+            _pa_delay=$((_pa_delay * 2)); [ "$_pa_delay" -le 60 ] || _pa_delay=60
+        else _pa_delay=1; fi
+        sg_log "sg-procagent (pid $_pa_pid) ended with $_pa_rc; restarting in ${_pa_delay}s"
+        sleep "$_pa_delay"
+    done
+}

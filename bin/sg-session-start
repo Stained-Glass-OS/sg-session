@@ -91,10 +91,12 @@ fi
 # shell so cross-process operations (debuggers, ReadProcessMemory, async APCs,
 # thread affinity) work from the first program. It removes its own socket on
 # exit; greetd tears down the session's process group, so it stops with us.
+# Supervised: if it dies it comes back (sg_procagent_supervise). $$ is the
+# session's own process -- this script execs the compositor below.
 SG_LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 if [ -x "$SG_LIBEXEC/sg-procagent" ]; then
-    "$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" &
-    sg_log "started sg-procagent (pid $!) for $(id -un)"
+    sg_procagent_supervise "$SG_LIBEXEC/sg-procagent" "$SG_PREFIX" $$ &
+    sg_log "started sg-procagent's supervisor (pid $!) for $(id -un)"
 else
     sg_log "note: sg-procagent not present; cross-process operations limited"
 fi

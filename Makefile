@@ -456,6 +456,8 @@ lint:
 	@! sh test/drivers-test.sh --mutant >/dev/null 2>&1
 	@sh test/procagent-stop-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@! sh test/procagent-stop-test.sh --mutant >/dev/null 2>&1
+	@sh test/procagent-supervise-test.sh
+	@! sh test/procagent-supervise-test.sh --mutant >/dev/null 2>&1
 	@sh test/netbrowse-test.sh
 	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
 	@sh test/boot-health-test.sh
