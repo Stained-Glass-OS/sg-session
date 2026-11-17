@@ -19,8 +19,12 @@ mkdir -p "$HOME"
 trap 'exec 3>&- 2>/dev/null; wineserver -k 2>/dev/null; [ -n "$XP" ] && kill "$XP" 2>/dev/null; rm -rf "$T"' EXIT INT TERM
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
-for n in $(seq 140 180); do [ -e "/tmp/.X11-unix/X$n" ] || break; done
-Xvfb ":$n" -screen 0 1024x768x24 -nolisten tcp >/dev/null 2>&1 & XP=$!
+# Xvfb picks a free display itself (-displayfd): a scan for a free socket name found none when
+# old sockets were left in /tmp/.X11-unix, and the test then typed at no display at all
+Xvfb -displayfd 3 -screen 0 1024x768x24 -nolisten tcp 3>"$T/xvfb.display" >/dev/null 2>&1 & XP=$!
+_x=0; while [ ! -s "$T/xvfb.display" ] && [ $_x -lt 100 ]; do sleep 0.1; _x=$((_x + 1)); done
+[ -s "$T/xvfb.display" ] || { echo "FAIL  Xvfb did not start"; exit 1; }
+n=$(cat "$T/xvfb.display")
 export DISPLAY=":$n"
 wine wineboot -i >/dev/null 2>&1; wineserver -w
 mkfifo "$T/in"

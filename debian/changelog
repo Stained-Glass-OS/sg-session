@@ -1,3 +1,16 @@
+sg-session (0.1.0-266) unstable; urgency=medium
+
+  * The greeter and key-typing tests start their own Xvfb on a display it
+    picks itself (-displayfd): with old X sockets left in /tmp/.X11-unix the
+    search for a free display name found none, and the test typed at no
+    display at all -- make lint failed (greeter-selectall-test) wherever the
+    greeter's Windows build was present. A test now fails plainly if its
+    Xvfb does not start, and skips only when Xvfb is not installed.
+    greeter-selectall, -ease, -checking, -localusers, -lastuser-ui and
+    xtype tests.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 17 Nov 2026 12:00:00 -0800
+
 sg-session (0.1.0-265) unstable; urgency=medium
 
   * The lock screen always comes back, as Windows' sign-in screen does: the

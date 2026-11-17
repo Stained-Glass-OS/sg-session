@@ -17,8 +17,12 @@ fail() { echo "FAIL  $*"; RC=1; }
 T=$(mktemp -d /var/tmp/sg-xtype.XXXXXX)
 trap '[ -n "$EP" ] && kill "$EP" 2>/dev/null; [ -n "$XP" ] && kill "$XP" 2>/dev/null; rm -rf "$T"' EXIT INT TERM
 unset DISPLAY XAUTHORITY WAYLAND_DISPLAY
-for n in $(seq 181 220); do [ -e "/tmp/.X11-unix/X$n" ] || [ -e "/tmp/.X$n-lock" ] || break; done
-Xvfb ":$n" -screen 0 800x600x24 -nolisten tcp >/dev/null 2>&1 & XP=$!
+# Xvfb picks a free display itself (-displayfd): a scan for a free socket name found none when
+# old sockets were left in /tmp/.X11-unix
+Xvfb -displayfd 3 -screen 0 800x600x24 -nolisten tcp 3>"$T/xvfb.display" >/dev/null 2>&1 & XP=$!
+_x=0; while [ ! -s "$T/xvfb.display" ] && [ $_x -lt 100 ]; do sleep 0.1; _x=$((_x + 1)); done
+[ -s "$T/xvfb.display" ] || { echo "FAIL  Xvfb did not start"; exit 1; }
+n=$(cat "$T/xvfb.display")
 export DISPLAY=":$n" SG_XTYPE_TEST=1
 sleep 1
 xev -geometry 300x200+10+10 -event keyboard > "$T/xev.log" 2>&1 & EP=$!
