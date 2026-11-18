@@ -141,9 +141,11 @@ struct row
     char disk[64], path[64], type[16], fstype[16], label[64];
     unsigned long long bytes, free_bytes, start, sectors;
     BOOL free_known, disk_has_esp;
+    BOOL mbr;   /* on an MBR disk beside Windows (sg-install --layout "mbr"): unallocated space only */
 };
 static struct row g_row[MAX_ROWS], g_chosen_row;
 static int g_nrows, g_sel = -1, g_ndrives;
+static BOOL g_disk_mbr;     /* the disk being listed is such an MBR disk */
 static BOOL g_listing, g_busy, g_new_mode, g_after_new;
 static char g_old_paths[MAX_ROWS][64];
 static int g_nold;
@@ -291,7 +293,9 @@ static const char *row_type( const struct row *r )
 static const char *row_problem( const struct row *r, char *buf, size_t len )
 {
     if (r->kind == R_MBR)
-        return "This disk has an MBR partition table. On UEFI PCs Stained Glass OS installs to GPT disks only.";
+        return "This disk has an MBR partition table. Stained Glass OS installs to GPT disks, or beside Windows on a PC that starts without UEFI.";
+    if (r->kind == R_PART && r->mbr)
+        return "On this disk Stained Glass OS installs into unallocated space beside Windows. Shrink a Windows partition in Windows' Disk Management to make some.";
     if (r->kind == R_FREE)
     {
         /* our boot partition beside an EFI partition, or our own EFI partition: 1 GiB either way */
@@ -325,9 +329,11 @@ static void update_disk_buttons( void )
     BOOL idle = !g_busy && !g_listing;
 
     EnableWindow( g_refresh, idle );
-    EnableWindow( g_delete, idle && r && r->kind == R_PART );
-    EnableWindow( g_format, idle && r && r->kind == R_PART && !strcmp( r->type, "primary" ) );
-    EnableWindow( g_new, idle && r && r->kind == R_FREE );
+    /* an MBR disk beside Windows: nothing of it changed here -- Windows'
+     * partitions are Windows', and the space is installed into as it is */
+    EnableWindow( g_delete, idle && r && r->kind == R_PART && !r->mbr );
+    EnableWindow( g_format, idle && r && r->kind == R_PART && !r->mbr && !strcmp( r->type, "primary" ) );
+    EnableWindow( g_new, idle && r && r->kind == R_FREE && !r->mbr );
     EnableWindow( g_next, idle && r && !problem && !g_new_mode );
     if (g_busy || g_listing) set_status( "Please wait...", FALSE );
     else if (problem) set_status( problem, TRUE );
@@ -427,6 +433,7 @@ static void layout_line( char *line )
     {
         n = split_tabs( line + 5, f, 4 );
         g_ndrives++;
+        g_disk_mbr = n >= 4 && !strcmp( f[3], "mbr" );
         if (n >= 4 && !strcmp( f[3], "dos" ) && g_nrows < MAX_ROWS)
         {
             r = &g_row[g_nrows++];
@@ -441,6 +448,7 @@ static void layout_line( char *line )
     r = &g_row[g_nrows];
     memset( r, 0, sizeof(*r) );
     r->drive = g_ndrives - 1;
+    r->mbr = g_disk_mbr;
     if (!strncmp( line, "PART ", 5 ) && split_tabs( line + 5, f, 8 ) >= 8)
     {
         r->kind = R_PART;

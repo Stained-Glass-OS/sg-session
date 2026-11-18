@@ -1,9 +1,12 @@
 #!/bin/sh
 # sg-grub-bios -- start Stained Glass OS on a legacy BIOS PC, with GRUB.
 #
-#   sg-grub-bios --install --disk DISK --boot DIR      (sg-install, BIOS mode)
+#   sg-grub-bios --install --disk DISK --boot DIR [--windows FSUUID]
+#                                                      (sg-install, BIOS mode)
 #   sg-grub-bios --update [--boot DIR] [--trial ID]    (kernel-install plugin)
 #   sg-grub-bios --bless                               (sg-grub-bless.service)
+#   sg-grub-bios --restore-mbr --disk DISK [--boot DIR]
+#                                    the MBR's boot code as it was before GRUB
 #
 # A UEFI PC starts systemd-boot, which reads the boot entries (loader/entries,
 # Boot Loader Specification type 1) on the boot partition. A BIOS PC cannot
@@ -27,19 +30,33 @@
 # spends a try nor ends the trial. A new kernel GRUB cannot even load falls
 # back at once (GRUB's fallback), its try spent.
 #
+# Beside Windows on an MBR disk (sg-install): GRUB's first stage goes into
+# the MBR, its core into the gap before the first partition (no BIOS boot
+# partition on MBR). The MBR's boot code as it was -- Windows' -- is saved
+# first, the first 446 bytes (440 of code, the disk signature, 2 reserved),
+# to BOOT/sg-original-mbr.bin (once: a reinstall never saves GRUB's own over
+# it); --restore-mbr puts the 440 bytes of code back (the partition table and
+# signature are never written). Windows gets a menu entry (--windows: the file
+# system UUID of its boot partition, the one with bootmgr, kept in
+# BOOT/grub/sg-chain): GRUB chainloads that partition's boot sector, as the
+# Windows MBR code would. The menu then waits 5 seconds (loader.conf).
+#
+# grub.cfg honours next_entry (grub-reboot's): that entry starts once.
+#
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # grub.cfg lines carry GRUB variables, written as they are:
 # shellcheck disable=SC2016
 set -u
 PATH="$PATH:/usr/sbin:/sbin"
-MODE="" DISK="" BOOT="" TRIAL=""
+MODE="" DISK="" BOOT="" TRIAL="" WINDOWS=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --install|--update|--bless) MODE=${1#--} ;;
+        --install|--update|--bless|--restore-mbr) MODE=${1#--} ;;
+        --windows) WINDOWS=${2:?}; shift ;;
         --disk) DISK=${2:?}; shift ;;
         --boot) BOOT=${2:?}; shift ;;
         --trial) TRIAL=${2:?}; shift ;;
-        *) echo "usage: sg-grub-bios --install --disk DISK --boot DIR | --update [--boot DIR] [--trial ID] | --bless" >&2; exit 2 ;;
+        *) echo "usage: sg-grub-bios --install --disk DISK --boot DIR [--windows FSUUID] | --update [--boot DIR] [--trial ID] | --bless | --restore-mbr --disk DISK [--boot DIR]" >&2; exit 2 ;;
     esac
     shift
 done
@@ -128,6 +145,21 @@ write_cfg() {
             echo '    fi'
             echo "}"
         done
+        # Windows (an MBR disk it shares): its boot sector, chainloaded
+        _win="" _wn=""
+        read -r _ _win _wn <<EOS
+$(grep '^windows[[:space:]]' "$_boot/grub/sg-chain" 2>/dev/null | head -1)
+EOS
+        if [ -n "$_win" ]; then
+            echo "menuentry 'Windows' --id 'windows' {"
+            echo "    insmod part_msdos"
+            echo "    insmod ntfs"
+            echo "    insmod chain"
+            # (the disk GRUB started from, its partition first: hd0 at boot)
+            echo "    search --no-floppy --fs-uuid --set=root ${_wn:+--hint=hd0,msdos$_wn }$_win"
+            echo "    chainloader +1"
+            echo "}"
+        fi
         echo "set default=\"$_default\""
         # an entry GRUB cannot even load (a kernel file it cannot read) falls
         # back at once: to the entry before the trial, else the next one
@@ -144,12 +176,28 @@ write_cfg() {
         done
         echo '    elif [ -n "$sg_fallback" ]; then set default="$sg_fallback"; fi'
         echo 'fi'
+        # grub-reboot: that entry this once (never spending a trial's try)
+        echo 'if [ -n "$next_entry" ]; then set default="$next_entry"; set next_entry=; save_env next_entry; fi'
     } > "$_cfg.new" && mv -f "$_cfg.new" "$_cfg"
 }
 
 case "$MODE" in
 install)
     if [ -z "$DISK" ] || [ -z "$BOOT" ]; then die "--install needs --disk and --boot"; fi
+    # an MBR disk: its boot code as it was, kept before GRUB's replaces it
+    if [ "$(sfdisk -d "$DISK" 2>/dev/null | sed -n 's/^label: //p')" = dos ] && [ ! -s "$BOOT/sg-original-mbr.bin" ]; then
+        if dd if="$DISK" of="$BOOT/sg-original-mbr.bin.tmp" bs=446 count=1 status=none && sync "$BOOT/sg-original-mbr.bin.tmp" \
+            && mv -f "$BOOT/sg-original-mbr.bin.tmp" "$BOOT/sg-original-mbr.bin"; then
+            say "the MBR's boot code as it was is kept in $BOOT/sg-original-mbr.bin (sg-grub-bios --restore-mbr)"
+        else rm -f "$BOOT/sg-original-mbr.bin.tmp"; die "cannot keep a copy of $DISK's MBR: GRUB not installed"; fi
+    fi
+    if [ -n "$WINDOWS" ]; then
+        # and its partition's number on this disk: GRUB looks there first (a
+        # cloned disk elsewhere may carry the same file system UUID)
+        _wn=$(lsblk -n -r -o PATH,UUID "$DISK" 2>/dev/null | awk -v u="$WINDOWS" 'toupper($2) == toupper(u) { print $1; exit }' \
+            | sed -n 's/.*[^0-9]\([0-9]\{1,\}\)$/\1/p')
+        { mkdir -p "$BOOT/grub" && printf 'windows %s %s\n' "$WINDOWS" "$_wn" > "$BOOT/grub/sg-chain"; } || die "cannot write $BOOT/grub/sg-chain"
+    fi
     grub-install --target=i386-pc --boot-directory="$BOOT" --no-floppy \
         --modules="part_gpt part_msdos fat search_fs_uuid" "$DISK" >&2 || die "grub-install onto $DISK failed"
     "$EDITENV" "$BOOT/grub/grubenv" create || die "cannot create $BOOT/grub/grubenv"
@@ -199,6 +247,15 @@ bless)
     "$EDITENV" "$B/grub/grubenv" unset sg_trial sg_tries sg_fallback || :
     write_cfg "$B"
     ;;
-*) echo "usage: sg-grub-bios --install --disk DISK --boot DIR | --update [--boot DIR] [--trial ID] | --bless" >&2; exit 2 ;;
+restore-mbr)
+    [ -n "$DISK" ] || die "--restore-mbr needs --disk"
+    B=$(find_boot) || B=""
+    { [ -n "$B" ] && [ -s "$B/sg-original-mbr.bin" ]; } || die "no saved MBR (BOOT/sg-original-mbr.bin)"
+    # the 440 bytes of code only: the disk signature and the partition table
+    # are this disk's as they are now
+    dd if="$B/sg-original-mbr.bin" of="$DISK" bs=440 count=1 conv=notrunc,fsync status=none || die "cannot write $DISK's MBR"
+    say "$DISK's MBR boot code is the one it had before GRUB; GRUB no longer starts from it"
+    ;;
+*) echo "usage: sg-grub-bios --install --disk DISK --boot DIR [--windows FSUUID] | --update [--boot DIR] [--trial ID] | --bless | --restore-mbr --disk DISK [--boot DIR]" >&2; exit 2 ;;
 esac
 exit 0

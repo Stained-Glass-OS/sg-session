@@ -1,3 +1,35 @@
+sg-session (0.1.0-269) unstable; urgency=medium
+
+  * Beside Windows on an MBR disk, on a legacy BIOS PC: Setup installs into
+    the unallocated space (sg-install --free), never converting the table and
+    never touching Windows' partitions. Our boot partition is vfat with MBR
+    type 0xEF (Windows gives it no drive letter; kernels and GRUB in it, at
+    /efi as on a blank disk), the system a Linux partition: primaries while
+    the table has two free slots, else an extended partition over the space
+    with both inside; four primaries already, an extended partition already,
+    or a first partition too close to the disk's start (no room for GRUB's
+    core): refused up front with a message. GRUB goes into the MBR (its core
+    into the 1 MiB gap); Windows' MBR boot code and disk signature are kept
+    first in BOOT/sg-original-mbr.bin, and sg-grub-bios --restore-mbr puts
+    the code back. GRUB's menu has Windows (its active NTFS partition's boot
+    sector, chainloaded, found by file system UUID -- its partition on the
+    disk GRUB started from first, so a cloned disk's copy is never taken)
+    and waits 5 seconds.
+    sg-install --layout lists such a disk as "mbr"; Setup offers only its
+    unallocated space (New, Delete and Format off on it; its partitions say
+    to shrink Windows in Disk Management). Any other MBR disk stays refused.
+    grub.cfg honours next_entry (grub-reboot). Gates: test/grub-bios-test.sh
+    (MBR cases), sg-image test/bios-mbr-test.sh (SeaBIOS, NTFS fixture whose
+    boot sector proves the chainload).
+  * sg-boot-space (-268) keeps the kernel the boot loader started as well
+    as the one uname -r names: GRUB's sg.entry=, systemd-boot's
+    LoaderEntrySelected. Running a kernel image from another entry's
+    directory, the started entry was taken off the boot partition at the
+    next kernel update, and a failing update then fell back past it
+    (sg-image bios-test). Mutant NO_BOOTED.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 17 Nov 2026 23:55:00 -0800
+
 sg-session (0.1.0-268) unstable; urgency=medium
 
   * A kernel update never fills the boot partition, and never fails for want

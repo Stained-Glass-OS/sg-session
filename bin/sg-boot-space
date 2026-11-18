@@ -17,7 +17,8 @@
 # someone repaired it by hand (measured 2026-11-17, install-test disk).
 #
 # prepare, before 90-loaderentry copies anything:
-#   1. kernels kept on the boot partition: the running one and the newest
+#   1. kernels kept on the boot partition: the running one (and the one the
+#      boot loader started, should uname -r name another) and the newest
 #      (this one, usually); every other kernel's boot entries (its recovery
 #      twin and boot-counted names too) and its directory go. Its package
 #      stays installed: Debian's files in /boot are not touched.
@@ -53,9 +54,10 @@
 #
 # kernel-install's environment: KERNEL_INSTALL_BOOT_ROOT,
 # KERNEL_INSTALL_ENTRY_TOKEN, KERNEL_INSTALL_STAGING_AREA. For the gate:
-# SG_BS_UNAME (the running kernel), SG_BS_FREE (free bytes, instead of df),
+# SG_BS_UNAME (the running kernel), SG_BS_CMDLINE, SG_BS_EFIVAR (the entry
+# the boot loader started), SG_BS_FREE (free bytes, instead of df),
 # SG_BS_NOTICE (the notice file), SG_BS_REFRESH=0 (no menu refresh), SG_BS_MARGIN,
-# SG_BS_MUTANT=NO_PRUNE|NO_CHECK.
+# SG_BS_MUTANT=NO_PRUNE|NO_CHECK|NO_BOOTED.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 set -u
@@ -86,6 +88,26 @@ our_entries() {
         [ -n "$(entry_ver "$_e")" ] && printf '%s\n' "$_e"
     done
 }
+# the kernel the boot loader started: its entry's directory -- GRUB names the
+# entry on the command line (sg.entry=), systemd-boot in LoaderEntrySelected.
+# Kept as the running kernel is: uname -r alone can name another entry's
+# kernel (the same kernel image under another version's directory).
+booted_ver() {
+    _id=$(tr ' ' '\n' < "${SG_BS_CMDLINE:-/proc/cmdline}" 2>/dev/null | sed -n 's/^sg.entry=//p' | head -1)
+    if [ -z "$_id" ]; then
+        _ev=${SG_BS_EFIVAR:-/sys/firmware/efi/efivars/LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f}
+        [ -r "$_ev" ] && _id=$(tail -c +5 "$_ev" 2>/dev/null | iconv -f UTF-16LE -t UTF-8 2>/dev/null | tr -d '\000')
+        _id=${_id%.conf}
+    fi
+    [ -n "$_id" ] || return 0
+    _id=$(printf '%s\n' "$_id" | sed 's/+[0-9]\{1,\}\(-[0-9]\{1,\}\)\{0,1\}$//')
+    for _e in "$ENTRIES/$_id.conf" "$ENTRIES/$_id"+*.conf; do
+        [ -f "$_e" ] && { entry_ver "$_e"; return 0; }
+    done
+    return 0
+}
+# never taken off: the running kernel, and the one the boot loader started
+is_running() { [ "$1" = "$RUNNING" ] || { [ -n "$BOOTED" ] && [ "$1" = "$BOOTED" ]; }; }
 versions() { our_entries | while read -r _e; do entry_ver "$_e"; done | sort -uV; }
 free_bytes() {
     if [ -n "${SG_BS_FREE:-}" ]; then
@@ -101,7 +123,7 @@ size_of() { _s=$(stat -L -c %s "$1" 2>/dev/null) && echo "$_s" || echo 0; }
 # a kernel's entries and directory go
 drop_kernel() {
     _v=$1
-    [ "$_v" != "$RUNNING" ] || return 1
+    ! is_running "$_v" || return 1
     [ "$_v" != "${ADDING:-}" ] || return 1
     our_entries | while read -r _e; do
         [ "$(entry_ver "$_e")" = "$_v" ] && rm -f "$_e"
@@ -174,7 +196,7 @@ reclaimable() {
         [ -f "$_e" ] || continue
         case "${_e##*/}" in Sg-*|sg-*) continue ;; esac
         _v=$(entry_ver "$_e")
-        [ -z "$_v" ] || [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || continue
+        [ -z "$_v" ] || is_running "$_v" || [ "$_v" = "$ADDING" ] || continue
         sed -n 's/^\(linux\|initrd\|efi\|devicetree\)[[:space:]]\{1,\}//p' "$_e" | sed 's/[[:space:]]*$//'
     done | sort -u > "$_keep"
     find "$BOOT/$TOKEN" -type f 2>/dev/null | while read -r _f; do
@@ -215,7 +237,7 @@ prepare() {
     if [ "${SG_BS_MUTANT:-}" != NO_PRUNE ]; then
         _newest=$( (versions; echo "$ADDING") | sort -V | tail -1)
         for _v in $(versions); do
-            [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || [ "$_v" = "$_newest" ] && continue
+            is_running "$_v" || [ "$_v" = "$ADDING" ] || [ "$_v" = "$_newest" ] && continue
             drop_kernel "$_v"
         done
         restore_entries
@@ -227,7 +249,7 @@ prepare() {
     _free=$(free_bytes)
     while [ "${_free:-0}" -lt "$_need" ]; do
         _old=$(versions | while read -r _v; do
-            [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || echo "$_v"; done | head -1)
+            is_running "$_v" || [ "$_v" = "$ADDING" ] || echo "$_v"; done | head -1)
         [ -n "$_old" ] || break
         drop_kernel "$_old" || break
         restore_entries
@@ -264,6 +286,8 @@ status() {
     return 0
 }
 
+BOOTED=$(booted_ver)
+[ "${SG_BS_MUTANT:-}" = NO_BOOTED ] && BOOTED=
 case "${1:-}" in
 prepare) shift; [ $# -ge 1 ] || { echo "usage: sg-boot-space prepare VER KERNEL [INITRD...]" >&2; exit 2; }
          prepare "$@"; exit $? ;;

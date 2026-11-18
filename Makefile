@@ -464,7 +464,7 @@ lint:
 	@sh test/grub-bios-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@for m in NO_FALLBACK NO_COUNT; do ! sh test/grub-bios-test.sh --mutant $$m >/dev/null 2>&1 || { echo "grub-bios-test: mutant $$m passed"; exit 1; }; done
 	@sh test/boot-space-test.sh
-	@for m in NO_PRUNE NO_CHECK; do ! SG_BS_MUTANT=$$m sh test/boot-space-test.sh >/dev/null 2>&1 || { echo "boot-space-test: mutant $$m passed"; exit 1; }; done
+	@for m in NO_PRUNE NO_CHECK NO_BOOTED; do ! SG_BS_MUTANT=$$m sh test/boot-space-test.sh >/dev/null 2>&1 || { echo "boot-space-test: mutant $$m passed"; exit 1; }; done
 	@sh test/netbrowse-test.sh
 	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
 	@sh test/boot-health-test.sh

@@ -3,3 +3,6 @@
 *	Windows programs	describes what the system runs (compatibility), not a name for our product
 setup/sg-setup.c	can't upgrade Windows|beside Windows or another system	Setup refers to Microsoft's operating system already on the disk (nominative)
 setup/sg-oobe.c	the Windows program|\(Windows\)	first-run setup's choice of a browser's build: its Windows program (run with Wine) or its Linux build -- what the system runs, not a name for our product
+setup/sg-setup.c	beside Windows on a PC|beside Windows\. Shrink a Windows partition in Windows' Disk Management	Setup tells where it installs on an MBR disk Microsoft's operating system already uses, and how to make room there (nominative)
+bin/sg-install	beside this Windows	the installer refuses an MBR disk layout of Microsoft's operating system already on the disk (nominative)
+bin/sg-grub-bios	^menuentry 'Windows' --id	GRUB's menu entry that starts Microsoft's operating system already on the disk (nominative), as systemd-boot lists it

@@ -196,6 +196,11 @@ usable_range() {
     total=$(( $(blockdev --getsize64 "$1") / ss ))
     first=$(sfdisk -d "$1" 2>/dev/null | sed -n 's/^first-lba: //p')
     last=$(sfdisk -d "$1" 2>/dev/null | sed -n 's/^last-lba: //p')
+    # an MBR table: to the end, or its 2 TiB limit; no table yet (GPT to be
+    # made): short of GPT's backup header at the end
+    if [ -z "$last" ] && [ "$(disk_label "$1")" = dos ]; then
+        last=$((total - 1)); [ "$last" -le 4294967295 ] || last=4294967295
+    fi
     echo "${first:-$((MIB / ss))} ${last:-$((total - 34))}"
 }
 # Unallocated space: START SECTORS, 1 MiB aligned, at least 16 MiB.
@@ -221,6 +226,9 @@ kind_of() {
         "$MSR_TYPE") echo msr ;;
         "$WINRE_TYPE") echo recovery ;;
         "$XBOOT_TYPE") echo boot ;;
+        ef) echo system ;;               # MBR types (sfdisk's hex)
+        27) echo recovery ;;
+        5|f|85) echo extended ;;
         *) echo primary ;;
     esac
 }
@@ -241,14 +249,17 @@ biosboot_of() { # the disk's BIOS boot partition
     lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$BIOSBOOT_TYPE" 'tolower($2) == t {print $1; exit}'
 }
 esp_of() { # the disk's first EFI system partition
-    lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$ESP_TYPE" 'tolower($2) == t {print $1; exit}'
+    lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$ESP_TYPE" 'tolower($2) == t || tolower($2) == "0xef" {print $1; exit}'
 }
 
 layout() {
     candidate_disks | while IFS="$TAB" read -r dev bytes model; do
         label=$(disk_label "$dev")
+        # an MBR disk with Windows on a BIOS PC: "mbr" -- Setup installs into
+        # its unallocated space only; any other MBR disk: listed, not usable
+        if [ "$label" = dos ] && mbr_ok "$dev"; then label=mbr; fi
         printf 'DISK %s\t%s\t%s\t%s\n' "$dev" "$bytes" "$model" "$label"
-        [ "$label" != dos ] || continue     # listed, but Setup cannot use it
+        [ "$label" != dos ] || continue
         ss=$(sector_size "$dev")
         {
             parts_of "$dev" | while read -r n start size type _uuid; do
@@ -280,6 +291,78 @@ check_part() {
     if lsblk -n -o MOUNTPOINTS "$1" | grep -q .; then die "$1 is in use"; fi
     PNUM=$(part_number "$1")
     [ -n "$PNUM" ] || die "cannot find the number of $1"
+}
+# Beside Windows on an MBR disk (a legacy BIOS PC whose Windows is on an MBR
+# partition table): the one MBR case Setup installs to -- into unallocated
+# space, never converting the table and never touching Windows' partitions.
+windows_on() { lsblk -n -r -o FSTYPE "$1" 2>/dev/null | grep -qx ntfs; }
+mbr_ok() { bios_mode && [ "$(disk_label "$1")" = dos ] && windows_on "$1"; }
+# Windows' boot partition (bootmgr): the active NTFS partition, else the first
+# NTFS one; its file system UUID, for GRUB's Windows entry
+windows_boot_uuid() {
+    _n=$(sfdisk -d "$1" 2>/dev/null | awk '/ : start=/ && /bootable/ { d = $1; sub(/.*[^0-9]/, "", d); print d; exit }')
+    for _p in ${_n:+"$(part_path "$1" "$_n")"} $(lsblk -n -r -o PATH,FSTYPE "$1" | awk '$2 == "ntfs" { print $1 }'); do
+        [ "$(lsblk -n -d -o FSTYPE "$_p" 2>/dev/null)" = ntfs ] || continue
+        blkid -o value -s UUID "$_p" 2>/dev/null && return 0
+    done
+    return 1
+}
+# a partition on an MBR disk (no names, never a new table)
+make_part_dos() {
+    before=$(parts_of "$1" | awk '{print $1}' | sort -n | tr '\n' ' ')
+    printf 'start=%s, size=%s, type=%s\n' "$2" "$3" "$4" \
+        | sfdisk -q --append --no-reread --wipe-partitions always "$1" >/dev/null 2>&1 \
+        || die "cannot create a partition on $1"
+    settle "$1"
+    n=$(parts_of "$1" | awk -v s="$2" '$2 == s {print $1; exit}')
+    case " $before " in *" $n "*) die "the new partition on $1 did not appear" ;; esac
+    t=0; p=""
+    while [ -z "$p" ] || [ ! -b "$p" ]; do
+        p=$(part_path "$1" "$n")
+        [ $t -lt 20 ] || die "the new partition on $1 did not appear"
+        if [ -z "$p" ] || [ ! -b "$p" ]; then sleep 0.5; settle "$1"; fi
+        t=$((t + 1))
+    done
+    wipefs -a -q "$p" 2>/dev/null || :
+    echo "$p"
+}
+# --free on an MBR disk beside Windows: our boot partition (vfat, MBR type
+# 0xEF -- Windows gives it no drive letter; kernels and GRUB in it, mounted at
+# /efi as a blank disk's own EFI partition is) and the system; primary
+# partitions while the table has two free slots, else an extended partition
+# over the space with both inside. GRUB's core goes into the gap before the
+# first partition (no BIOS boot partition on MBR): 1 MiB since Windows Vista.
+mbr_free() {   # DISK START SECTORS
+    _d=$1 _s=$2 _left=$3
+    ss=$(sector_size "$_d")
+    _first=$(parts_of "$_d" | awk 'NR == 1 { print $2 }')
+    [ "${_first:-0}" -ge $((MIB / ss)) ] \
+        || die "Stained Glass OS cannot be installed beside this Windows: its first partition starts too close to the beginning of the disk for a boot loader (an older layout)"
+    _need=$(( (XBOOT_BYTES + MIN_ROOT_BYTES) / ss ))
+    [ "$_left" -ge "$_need" ] || die "the unallocated space is too small: Stained Glass OS needs $(( _need * ss / GIB + 1 )) GB"
+    _used=$(parts_of "$_d" | awk '$1 <= 4' | wc -l)
+    _ext=$(parts_of "$_d" | awk '$4 == "5" || $4 == "f" || $4 == "85" { print $2, $3; exit }')
+    if [ -n "$_ext" ]; then
+        # (space inside an existing extended partition: not supported yet)
+        die "Stained Glass OS cannot be installed into this space: the disk already has an extended partition"
+    fi
+    progress 3 "Creating partitions"
+    _gap=0
+    if [ "$_used" -le 2 ]; then :
+    elif [ "$_used" = 3 ]; then
+        make_part_dos "$_d" "$_s" "$_left" 5 >/dev/null
+        _gap=$((MIB / ss))       # each logical partition's own table before it
+        _s=$((_s + _gap)); _left=$((_left - _gap))
+    else
+        die "Stained Glass OS cannot be installed beside this Windows: the disk's MBR partition table already holds four partitions"
+    fi
+    _xb=$((XBOOT_BYTES / ss))
+    ESP_PART=$(make_part_dos "$_d" "$_s" "$_xb" ef)
+    mkfs.vfat -F 32 -n SGBOOT "$ESP_PART" >/dev/null || die "cannot format the boot partition"
+    reprobe "$ESP_PART"
+    _s=$((_s + _xb + _gap)); _left=$((_left - _xb - _gap))
+    ROOT_PART=$(make_part_dos "$_d" "$_s" "$_left" 83)
+    OWN_ESP=1 TDISK=$_d
 }
 check_gpt() {
     case "$(disk_label "$1")" in
@@ -444,7 +527,7 @@ SRC_ESP_DIR=$(findmnt -n -r -o TARGET -t vfat -S "$SRC_ESP" | head -1)
 # --- where: a root partition, an EFI system partition, and a place for the
 # kernels ($BOOT: the ESP itself, or an extended boot loader partition of ours
 # when the ESP is another system's) -------------------------------------------
-ROOT_PART="" ESP_PART="" BOOT_PART="" OWN_ESP=0 CARVE=0
+ROOT_PART="" ESP_PART="" BOOT_PART="" OWN_ESP=0 CARVE=0 WINDOWS_FSUUID=""
 if [ -n "$DISK" ]; then
     check_disk "$DISK"
     size=$(lsblk -d -n -b -o SIZE "$DISK")
@@ -459,7 +542,18 @@ fi
 if [ -n "$FREE" ]; then
     fd=${FREE%%:*}; rest=${FREE#*:}; fs=${rest%%:*}; fn=${rest#*:}
     printf '%s%s' "$fs" "$fn" | grep -Eq '^[0-9]+$' || die "--free is DISK:START:SECTORS"
-    check_disk "$fd"; check_gpt "$fd"; check_free "$fd" "$fs" "$fn"
+    check_disk "$fd"
+    if mbr_ok "$fd"; then
+        check_free "$fd" "$fs" "$fn"
+        mbr_free "$fd" "$fs" "$fn"
+        WINDOWS_FSUUID=$(windows_boot_uuid "$fd") || WINDOWS_FSUUID=""
+        FREE=""
+    else
+        check_gpt "$fd"
+    fi
+fi
+if [ -n "$FREE" ]; then
+    check_free "$fd" "$fs" "$fn"
     ss=$(sector_size "$fd")
     s=$fs; left=$fn
     ESP_PART=$(esp_of "$fd")
@@ -656,6 +750,7 @@ if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/EFI/BOOT/BOOTX64.EFI" ]; then
 fi
 others=0
 [ -e "$E/EFI/Microsoft/Boot/bootmgfw.efi" ] && others=1
+[ -n "$WINDOWS_FSUUID" ] && others=1          # Windows on the MBR disk
 if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/loader/loader.conf" ] || grep -q '^# Stained Glass OS' "$E/loader/loader.conf"; then
     {
         echo "# Stained Glass OS"
@@ -672,7 +767,7 @@ rm -f "$E/loader/random-seed"
 # the same entries (sg-grub-bios; the kernel-install plugin keeps it current).
 if bios_mode; then
     progress 70 "Installing the boot loader"
-    sg-grub-bios --install --disk "$TDISK" --boot "$B" || die "cannot install the boot loader (GRUB) onto $TDISK"
+    sg-grub-bios --install --disk "$TDISK" --boot "$B" ${WINDOWS_FSUUID:+--windows "$WINDOWS_FSUUID"} || die "cannot install the boot loader (GRUB) onto $TDISK"
 fi
 # And the firmware is told, where it can be: first in its boot order, as
 # Windows Setup does.

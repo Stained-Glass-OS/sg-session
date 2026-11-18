@@ -2,7 +2,7 @@
 # sg-boot-space (the kernel-install plugin 85-sg-boot-space): a kernel update
 # never fills the boot partition. Offline, on a stand-in boot partition with
 # the image's layout (an entry named after the image, shared initrds) and a
-# fixed amount of room (SG_BS_FREE). SG_BS_MUTANT=NO_PRUNE / NO_CHECK must
+# fixed amount of room (SG_BS_FREE). SG_BS_MUTANT=NO_PRUNE / NO_CHECK / NO_BOOTED must
 # fail it.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # shellcheck disable=SC2015,SC2012
@@ -18,6 +18,9 @@ fail() { echo "FAIL  $*"; RC=1; }
 MB=$((1024 * 1024))
 A=6.12.117+deb13-amd64 B=6.12.118+deb13-amd64 C=6.12.119+deb13-amd64
 export SG_BS_REFRESH=0 KERNEL_INSTALL_ENTRY_TOKEN=tok KERNEL_INSTALL_LAYOUT=bls
+# the boot loader's word on the entry it started: none, unless a case says
+export SG_BS_CMDLINE="$T/cmdline" SG_BS_EFIVAR="$T/efivar"
+echo "root=x" > "$T/cmdline"
 
 mkfile() { mkdir -p "$(dirname "$1")"; truncate -s "$2" "$1"; }
 # the boot partition as Setup leaves it: the image's kernel A
@@ -143,6 +146,20 @@ KERNEL_INSTALL_BOOT_ROOT="$T/x" "$PLUGIN" add "$C" "$T/x/tok/$C" "$T/src/vmlinuz
 [ "$rc" = 0 ] && pass "no loader/entries: left alone (rc 0)" || fail "rc $rc without entries"
 KERNEL_INSTALL_LAYOUT=other "$PLUGIN" add "$C" "$T/b/tok/$C" 2>>"$T/log"; rc=$?
 [ "$rc" = 0 ] && pass "another layout: left alone" || fail "rc $rc for another layout"
+
+# 8b. uname -r names the image's kernel, but GRUB started another entry
+# (sg.entry=; the same kernel image under B's directory): B is kept too
+fresh; debian_kernel "$B" ""; export SG_BS_UNAME=$A SG_BS_FREE=$((1024 * MB))
+echo "root=x sg.entry=tok-$B" > "$T/cmdline"
+add "$C"
+[ -f "$E/tok-$B.conf" ] && [ -d "$T/b/tok/$B" ] && pass "the entry GRUB started (sg.entry=) is kept, whatever uname -r says" || fail "booted entry $B removed"
+echo "root=x" > "$T/cmdline"
+# ...and the one systemd-boot started (LoaderEntrySelected, UTF-16)
+fresh; debian_kernel "$B" "+2"; export SG_BS_UNAME=$A
+{ printf '\006\000\000\000'; printf 'tok-%s+2.conf' "$B" | iconv -f UTF-8 -t UTF-16LE; printf '\000\000'; } > "$T/efivar"
+add "$C"
+[ -f "$E/tok-$B+2.conf" ] && pass "the entry systemd-boot started (LoaderEntrySelected) is kept" || fail "systemd-boot's booted entry removed"
+rm -f "$T/efivar"
 
 # 9. the real kernel-install (90-loaderentry copies), on a real full
 # partition (a 6 MiB tmpfs in a user namespace): a kernel that fits gets its
