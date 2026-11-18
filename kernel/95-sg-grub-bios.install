@@ -1,0 +1,24 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): on a legacy BIOS PC (GRUB in the
+# boot partition, sg-grub-bios), GRUB's menu follows the boot entries: written
+# again whenever a kernel is added or removed. A new kernel's entry is on
+# trial (ENTRY+N.conf): GRUB counts its starts and goes back to the previous
+# kernel by itself if it never comes up (sg-grub-bios). Runs after the other
+# plugins (90-loaderentry, the counters, the recovery twins). UEFI PCs: nothing
+# to do. Never fails a kernel's installation.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+COMMAND=${1:-}
+KERNEL_VERSION=${2:-}
+case "$COMMAND" in add|remove) ;; *) exit 0 ;; esac
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+B=${KERNEL_INSTALL_BOOT_ROOT:-}
+[ -n "$B" ] && [ -d "$B/grub/i386-pc" ] || exit 0
+[ -x /usr/bin/sg-grub-bios ] || exit 0
+if [ "$COMMAND" = add ] && [ -n "${KERNEL_INSTALL_ENTRY_TOKEN:-}" ]; then
+    id="$KERNEL_INSTALL_ENTRY_TOKEN-$KERNEL_VERSION"
+    for e in "$B/loader/entries/$id"+*.conf; do
+        [ -f "$e" ] && { /usr/bin/sg-grub-bios --update --boot "$B" --trial "$id" || :; exit 0; }
+    done
+fi
+/usr/bin/sg-grub-bios --update --boot "$B" || :
+exit 0

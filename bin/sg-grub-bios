@@ -1,0 +1,204 @@
+#!/bin/sh
+# sg-grub-bios -- start Stained Glass OS on a legacy BIOS PC, with GRUB.
+#
+#   sg-grub-bios --install --disk DISK --boot DIR      (sg-install, BIOS mode)
+#   sg-grub-bios --update [--boot DIR] [--trial ID]    (kernel-install plugin)
+#   sg-grub-bios --bless                               (sg-grub-bless.service)
+#
+# A UEFI PC starts systemd-boot, which reads the boot entries (loader/entries,
+# Boot Loader Specification type 1) on the boot partition. A BIOS PC cannot
+# run it: GRUB (i386-pc) starts instead -- its first stage in the MBR, the
+# rest in the disk's 1 MiB BIOS boot partition -- and its menu is made from
+# the very same entries (grub.cfg, written again whenever they change). GRUB
+# and its files live in the boot partition (vfat, BOOT/grub), the one file
+# system here GRUB can write: the root is btrfs, where save_env does not work.
+#
+# Boot counting, as systemd-boot does it: a new kernel's entry is on trial
+# (kernel-install names it ENTRY+3.conf, /etc/kernel/tries). GRUB keeps the
+# count in grubenv: sg_trial (the entry), sg_tries (starts left) and
+# sg_fallback (the entry that was the default before). Each start of the trial
+# entry takes a try off (save_env); with none left GRUB starts the fallback,
+# with nobody at the keyboard. Once the system is up (boot-complete.target),
+# --bless ends the trial as systemd-bless-boot does: the new entry is good
+# once it started and came up (its counter dropped); with its tries used up
+# (GRUB started the previous kernel) it is marked bad (ENTRY+0.conf, sorted
+# last). Which entry started: sg.entry= on the command line (grub.cfg adds
+# it). Another entry chosen by hand -- the previous kernel too -- neither
+# spends a try nor ends the trial. A new kernel GRUB cannot even load falls
+# back at once (GRUB's fallback), its try spent.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# grub.cfg lines carry GRUB variables, written as they are:
+# shellcheck disable=SC2016
+set -u
+PATH="$PATH:/usr/sbin:/sbin"
+MODE="" DISK="" BOOT="" TRIAL=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --install|--update|--bless) MODE=${1#--} ;;
+        --disk) DISK=${2:?}; shift ;;
+        --boot) BOOT=${2:?}; shift ;;
+        --trial) TRIAL=${2:?}; shift ;;
+        *) echo "usage: sg-grub-bios --install --disk DISK --boot DIR | --update [--boot DIR] [--trial ID] | --bless" >&2; exit 2 ;;
+    esac
+    shift
+done
+say() { printf 'sg-grub-bios: %s\n' "$*" >&2; }
+die() { say "$*"; exit 1; }
+EDITENV=${SG_GRUB_EDITENV:-grub-editenv}
+
+# The boot partition with our GRUB in it: BOOT/grub/i386-pc. On a running
+# system, the one kernel-install writes to (sg-boot-layout's /efi or
+# /xbootldr), or any mounted one that has it.
+find_boot() {
+    if [ -n "$BOOT" ]; then echo "$BOOT"; return; fi
+    _br=$(sed -n 's/^BOOT_ROOT=//p' /etc/kernel/install.conf 2>/dev/null | tail -1)
+    for _d in "$_br" /efi /xbootldr /boot/efi /boot; do
+        [ -n "$_d" ] || continue
+        ls "$_d" >/dev/null 2>&1 || :     # automounts
+        [ -d "$_d/grub/i386-pc" ] && { echo "$_d"; return; }
+    done
+    return 1
+}
+
+# An entry's id: its file name without .conf and without a boot counter
+# (+LEFT or +LEFT-DONE at the end -- a Debian kernel's version has a + of its
+# own: 6.12.117+deb13-amd64).
+entry_id() { printf '%s\n' "${1##*/}" | sed -e 's/\.conf$//' -e 's/+[0-9]\{1,\}\(-[0-9]\{1,\}\)\{0,1\}$//'; }
+# Tries left in an entry's name (ENTRY+LEFT[-DONE].conf); empty if none.
+entry_left() { printf '%s\n' "${1##*/}" | sed -n 's/.*+\([0-9]\{1,\}\)\(-[0-9]\{1,\}\)\{0,1\}\.conf$/\1/p'; }
+field() { sed -n "s/^$2[[:space:]]\{1,\}//p" "$1" | head -1; }
+
+# The entries in menu order, as systemd-boot shows them: the kernels by
+# version, newest first; one with no tries left after them; their recovery
+# twins; the restore points (sg-snapshot's Sg-*, sorted last there too).
+kind() {
+    case "${1##*/}" in
+        [Ss]g-*) echo 3 ;;
+        *-recovery.conf) echo 2 ;;
+        *) if [ "$(entry_left "$1")" = 0 ]; then echo 1; else echo 0; fi ;;
+    esac
+}
+sorted_entries() {
+    for _e in "$1"/loader/entries/*.conf; do
+        [ -f "$_e" ] || continue
+        case "$_e" in *-live.conf) continue ;; esac
+        _v=$(field "$_e" version); [ -n "$_v" ] || _v=0
+        printf '%s\t%s\t%s\n' "$(kind "$_e")" "$_v" "$_e"
+    done | sort -t "$(printf '\t')" -k1,1n -k2,2Vr | cut -f3
+}
+
+write_cfg() {
+    _boot=$1
+    _cfg="$_boot/grub/grub.cfg"
+    # the device under the mount (an automount, /efi, also lists systemd-1)
+    _dev=$(findmnt -n -o SOURCE -T "$_boot" 2>/dev/null | grep '^/dev/' | tail -1)
+    _uuid=${SG_GRUB_FSUUID:-$(blkid -o value -s UUID "$_dev" 2>/dev/null)}
+    [ -n "$_uuid" ] || die "cannot find the boot partition's file system UUID ($_boot)"
+    _timeout=$(sed -n 's/^timeout[[:space:]]\{1,\}//p' "$_boot/loader/loader.conf" 2>/dev/null | head -1)
+    _default="" _second=""
+    {
+        echo "# Stained Glass OS: made by sg-grub-bios from loader/entries -- do not edit"
+        echo "insmod part_gpt"
+        echo "insmod part_msdos"
+        echo "insmod fat"
+        echo "search --no-floppy --fs-uuid --set=root $_uuid"
+        echo "set timeout=${_timeout:-3}"
+        echo "load_env"
+        for _e in $(sorted_entries "$_boot"); do
+            _id=$(entry_id "$_e")
+            if [ "$(kind "$_e")" -le 1 ]; then          # a kernel's own entry
+                if [ -z "$_default" ]; then _default=$_id
+                elif [ -z "$_second" ]; then _second=$_id; fi
+            fi
+            _t=$(field "$_e" title); _v=$(field "$_e" version)
+            # the version in the menu, as systemd-boot shows it
+            [ -n "$_v" ] && _t="$_t ($_v)"
+            _t=$(printf '%s' "$_t" | sed "s/'/'\\\\''/g")
+            printf "menuentry '%s' --id '%s' {\n" "$_t" "$_id"
+            # sg.entry=: which entry started (--bless reads it back). A kernel on
+            # trial that GRUB cannot even load (GRUB's own fallback stops at an
+            # error message and the menu, waiting for a key) has its tries used
+            # up, and the menu is read again: the previous kernel starts.
+            printf '    if linux %s %s sg.entry=%s; then\n' "$(field "$_e" linux)" "$(field "$_e" options)" "$_id"
+            _i=$(sed -n 's/^initrd[[:space:]]\{1,\}//p' "$_e" | tr '\n' ' ')
+            [ -z "$_i" ] || printf '        initrd %s\n' "${_i% }"
+            printf '    elif [ "$sg_trial" = "%s" ]; then\n' "$_id"
+            echo '        set sg_tries=0; save_env sg_tries; configfile "$prefix/grub.cfg"'
+            echo '    fi'
+            echo "}"
+        done
+        echo "set default=\"$_default\""
+        # an entry GRUB cannot even load (a kernel file it cannot read) falls
+        # back at once: to the entry before the trial, else the next one
+        [ -n "$_second" ] && echo "set fallback=\"$_second\""
+        echo 'if [ -n "$sg_trial" ]; then if [ -n "$sg_fallback" ]; then set fallback="$sg_fallback"; fi; fi'
+        # boot counting (above): a try taken off before the trial entry starts
+        echo 'if [ -n "$sg_trial" ]; then'
+        _n=9
+        _first=1
+        while [ "$_n" -ge 1 ]; do
+            if [ "$_first" = 1 ]; then _kw=if; _first=0; else _kw=elif; fi
+            echo "    $_kw [ \"\$sg_tries\" = \"$_n\" ]; then set sg_tries=$((_n - 1)); save_env sg_tries; set default=\"\$sg_trial\""
+            _n=$((_n - 1))
+        done
+        echo '    elif [ -n "$sg_fallback" ]; then set default="$sg_fallback"; fi'
+        echo 'fi'
+    } > "$_cfg.new" && mv -f "$_cfg.new" "$_cfg"
+}
+
+case "$MODE" in
+install)
+    if [ -z "$DISK" ] || [ -z "$BOOT" ]; then die "--install needs --disk and --boot"; fi
+    grub-install --target=i386-pc --boot-directory="$BOOT" --no-floppy \
+        --modules="part_gpt part_msdos fat search_fs_uuid" "$DISK" >&2 || die "grub-install onto $DISK failed"
+    "$EDITENV" "$BOOT/grub/grubenv" create || die "cannot create $BOOT/grub/grubenv"
+    write_cfg "$BOOT"
+    ;;
+update)
+    B=$(find_boot) || exit 0       # not a BIOS machine: nothing to do
+    if [ -n "$TRIAL" ]; then
+        # the entry that is the default now: what to fall back to
+        fb=""
+        for e in $(sorted_entries "$B"); do
+            id=$(entry_id "$e"); [ "$id" = "$TRIAL" ] && continue
+            [ "$(kind "$e")" = 0 ] || continue            # a kernel's own, good entry
+            [ -n "$(entry_left "$e")" ] && continue    # another kernel on trial
+            fb=$id; break
+        done
+        left=""
+        for e in "$B/loader/entries/$TRIAL"+*.conf; do [ -f "$e" ] && left=$(entry_left "$e"); done
+        if [ -n "$left" ] && [ "$left" != 0 ] && [ -n "$fb" ]; then
+            "$EDITENV" "$B/grub/grubenv" set "sg_trial=$TRIAL" "sg_tries=$left" "sg_fallback=$fb" \
+                || say "cannot start the trial of $TRIAL"
+        fi
+    fi
+    write_cfg "$B"
+    ;;
+bless)
+    B=$(find_boot) || exit 0
+    env=$("$EDITENV" "$B/grub/grubenv" list 2>/dev/null)
+    trial=$(printf '%s\n' "$env" | sed -n 's/^sg_trial=//p')
+    [ -n "$trial" ] || exit 0
+    tries=$(printf '%s\n' "$env" | sed -n 's/^sg_tries=//p')
+    # the entry GRUB started (sg.entry= in grub.cfg)
+    started=$(tr ' ' '\n' < "${SG_GRUB_CMDLINE:-/proc/cmdline}" | sed -n 's/^sg.entry=//p' | head -1)
+    for e in "$B/loader/entries/$trial"+*.conf; do
+        [ -f "$e" ] || continue
+        if [ "$started" = "$trial" ]; then
+            mv -f "$e" "$B/loader/entries/$trial.conf"        # good: no counter any more
+            say "$trial started: it is the default from now on"
+        elif [ "${tries:-0}" = 0 ]; then
+            # its tries used up: GRUB started the previous kernel
+            mv -f "$e" "$B/loader/entries/$trial+0.conf"      # bad: sorted last
+            say "$trial did not start: the previous kernel stays the default"
+        else
+            exit 0       # another entry was chosen by hand: the trial goes on
+        fi
+    done
+    "$EDITENV" "$B/grub/grubenv" unset sg_trial sg_tries sg_fallback || :
+    write_cfg "$B"
+    ;;
+*) echo "usage: sg-grub-bios --install --disk DISK --boot DIR | --update [--boot DIR] [--trial ID] | --bless" >&2; exit 2 ;;
+esac
+exit 0

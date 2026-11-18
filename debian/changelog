@@ -1,3 +1,28 @@
+sg-session (0.1.0-267) unstable; urgency=medium
+
+  * Legacy BIOS PCs: Setup installs a system they can start. Booted without
+    UEFI, sg-install makes the disk GPT with a 1 MiB BIOS boot partition
+    (beside the system partition and the root, as before) and installs GRUB
+    (i386-pc) into the boot partition (sg-grub-bios). GRUB's menu is made
+    from the same boot entries systemd-boot reads, and a kernel-install
+    plugin (95-sg-grub-bios) writes it again whenever kernels change, so
+    kernel updates through apt keep it in step. Boot counting as on UEFI: a
+    new kernel is on trial (grubenv: tries, and the previous kernel to fall
+    back to); GRUB takes a try off at each start and goes back to the
+    previous kernel by itself; sg-grub-bless.service (after
+    boot-complete.target) marks it good, or bad if the fallback came up.
+    A new kernel GRUB cannot even load uses up its tries at once and the
+    menu is read again, so that very start comes up on the previous kernel.
+    Hand-picked entries neither spend a try nor end a trial, as with
+    systemd-boot. UEFI PCs are unchanged. Depends: grub-pc-bin, grub2-common.
+    Test grub-bios-test (in make lint, mutants NO_FALLBACK, NO_COUNT);
+    sg-image's bios-test boots it all under SeaBIOS.
+  * sg-boot-splash: a recovery entry is written, flushed, then renamed, and a
+    write that fails (the boot partition full) leaves no .tmp behind (one
+    was left beside every entry on a full partition). Tested.
+
+ -- Stained Glass OS <dev@stained-glass.example>  Tue, 17 Nov 2026 12:05:31 -0800
+
 sg-session (0.1.0-266) unstable; urgency=medium
 
   * The greeter and key-typing tests start their own Xvfb on a display it

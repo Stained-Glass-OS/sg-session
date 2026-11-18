@@ -76,10 +76,16 @@ recovery_entry() {
     if printf '%s\n' "$e" | grep -q '+[0-9][0-9]*\(-[0-9][0-9]*\)\{0,1\}\.conf$'; then return 0; fi
     twin="${e%.conf}-recovery.conf"
     opts=$(sed -n 's/^options[[:space:]]*//p' "$e" | head -1)
-    {
+    # written beside it, on the disk, then put in place; a write that fails (the
+    # boot partition full) leaves nothing behind -- no half twin, no .tmp
+    if {
         sed -e '/^options[[:space:]]/d' -e 's/^\(title[[:space:]]*\)\(.*\)$/\1\2 (recovery mode)/' "$e"
         printf 'options    %s\n' "$(loud_line "$opts")"
-    } > "$twin.tmp" && mv -f "$twin.tmp" "$twin"
+    } > "$twin.tmp" && sync "$twin.tmp" && mv -f "$twin.tmp" "$twin"; then
+        return 0
+    fi
+    rm -f "$twin.tmp"
+    return 1
 }
 
 apply() {

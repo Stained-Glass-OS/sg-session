@@ -71,6 +71,19 @@ grep -q '(recovery mode)' "$E/loader/entries/debian-6.12.2-recovery.conf" 2>/dev
 KERNEL_INSTALL_LAYOUT=bls KERNEL_INSTALL_BOOT_ROOT="$E" KERNEL_INSTALL_ENTRY_TOKEN=debian sh "$T/plugin" remove 6.12.2 /x
 [ ! -e "$E/loader/entries/debian-6.12.2-recovery.conf" ] && pass "and loses it when the kernel goes" || fail "plugin remove"
 
+# a twin that cannot be written (the boot partition full: the write or its
+# flush fails) leaves nothing behind -- no .tmp, no half twin
+sed 's/6\.12\.1/6.12.3/g' "$E/loader/entries/debian-6.12.1.conf" > "$E/loader/entries/debian-6.12.3.conf"
+mkdir -p "$T/failbin"; printf '#!/bin/sh\nexit 1\n' > "$T/failbin/sync"; chmod 755 "$T/failbin/sync"
+PATH="$T/failbin:$PATH" sh "$HERE/bin/sg-boot-splash" recovery-entry "$E/loader/entries/debian-6.12.3.conf"
+if ls "$E"/loader/entries/ | grep -q '\.tmp$' || [ -e "$E/loader/entries/debian-6.12.3-recovery.conf" ]; then
+    fail "a failed twin left files behind: $(ls "$E/loader/entries" | tr '\n' ' ')"
+else pass "a twin that cannot be written leaves nothing behind (no .tmp)"; fi
+sh "$HERE/bin/sg-boot-splash" recovery-entry "$E/loader/entries/debian-6.12.3.conf"
+[ -f "$E/loader/entries/debian-6.12.3-recovery.conf" ] && ! ls "$E"/loader/entries/ | grep -q '\.tmp$' \
+    && pass "a twin written normally leaves no .tmp" || fail "after a normal write: $(ls "$E/loader/entries" | tr '\n' ' ')"
+rm -f "$E/loader/entries/debian-6.12.3.conf" "$E/loader/entries/debian-6.12.3-recovery.conf"
+
 # mutant: without the quiet arguments added, the gate must fail
 sed 's/^        line="\$line \$a "$/        :/' "$HERE/bin/sg-boot-splash" > "$T/mut"
 grep -q '^        :$' "$T/mut" || fail "the mutant did not apply"

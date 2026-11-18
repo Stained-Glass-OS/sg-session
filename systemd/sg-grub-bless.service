@@ -1,0 +1,22 @@
+# Legacy BIOS PCs (GRUB, sg-grub-bios): the boot reached boot-complete.target,
+# so a kernel on trial is good -- or, if the system came up on the previous
+# kernel, the new one is marked bad. What systemd-bless-boot does for
+# systemd-boot on a UEFI PC; it does nothing here (no boot loader variable).
+[Unit]
+Description=Stained Glass OS: mark this boot good for GRUB (legacy BIOS)
+Requires=boot-complete.target
+After=local-fs.target boot-complete.target
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionKernelCommandLine=!systemd.volatile
+ConditionKernelCommandLine=!sg.live
+ConditionPathExists=!/sys/firmware/efi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/sg-grub-bios --bless
+ExecStartPost=-/usr/bin/sg-boot-splash entries
+
+[Install]
+WantedBy=basic.target

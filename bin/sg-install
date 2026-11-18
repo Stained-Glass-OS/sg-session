@@ -59,10 +59,20 @@ XBOOT_TYPE=bc13c2ff-59e6-4262-a352-b275fd6f7172   # extended boot loader
 MSR_TYPE=e3c9e316-0b5c-4db8-817d-f92df00215ae
 WINRE_TYPE=de94bba4-06d1-4d40-a16a-bfd50179d6ac
 LINUX_TYPE=0fc63daf-8483-4772-8e79-3d69d8477de4
+BIOSBOOT_TYPE=21686148-6449-6e6f-744e-656564454649  # GRUB's core image (legacy BIOS)
+BIOSBOOT_BYTES=$((1 * MIB))
 TOKEN_SHARED=stained-glass     # our directory in an EFI partition we share
 TAB=$(printf '\t')
 
 die() { printf 'sg-install: %s\n' "$*" >&2; exit 1; }
+# Legacy BIOS: this PC started without UEFI (the live system was booted by the
+# BIOS). The disk is GPT all the same, with a 1 MiB BIOS boot partition for
+# GRUB, which starts the very boot entries systemd-boot does (sg-grub-bios).
+# SG_INSTALL_FIRMWARE=bios|uefi (tests only) says so instead.
+bios_mode() {
+    case "${SG_INSTALL_FIRMWARE:-}" in bios) return 0 ;; uefi) return 1 ;; esac
+    [ ! -d /sys/firmware/efi ]
+}
 progress() { printf 'PROGRESS %s %s\n' "$1" "$2"; }
 lower() { tr '[:upper:]' '[:lower:]'; }
 
@@ -205,7 +215,7 @@ free_regions() {
 }
 kind_of() {
     case "$1" in
-        "$ESP_TYPE") echo system ;;
+        "$ESP_TYPE"|"$BIOSBOOT_TYPE") echo system ;;
         "$MSR_TYPE") echo msr ;;
         "$WINRE_TYPE") echo recovery ;;
         "$XBOOT_TYPE") echo boot ;;
@@ -224,6 +234,9 @@ fs_free() {
                 END { if (f != "" && b != "") printf "%.0f\n", f * b; else print "-" }' ;;
         *) echo - ;;
     esac
+}
+biosboot_of() { # the disk's BIOS boot partition
+    lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$BIOSBOOT_TYPE" 'tolower($2) == t {print $1; exit}'
 }
 esp_of() { # the disk's first EFI system partition
     lsblk -n -r -o PATH,PARTTYPE "$1" | awk -v t="$ESP_TYPE" 'tolower($2) == t {print $1; exit}'
@@ -269,7 +282,8 @@ check_part() {
 check_gpt() {
     case "$(disk_label "$1")" in
         gpt|none) ;;
-        dos) die "Stained Glass OS cannot be installed to this disk: it has an MBR partition table, and on UEFI systems it installs to GPT disks only" ;;
+        dos) if bios_mode; then die "Stained Glass OS cannot be installed to this disk: it has an MBR partition table, and it installs to GPT disks only"
+             else die "Stained Glass OS cannot be installed to this disk: it has an MBR partition table, and on UEFI systems it installs to GPT disks only"; fi ;;
         *) die "$1 has a partition table Setup does not know" ;;
     esac
 }
@@ -344,6 +358,11 @@ new)
     want=$(( BYTES / ss / align * align ))
     [ "$want" -le "$region" ] || want=$region
     s=$START
+    if bios_mode && [ -z "$(biosboot_of "$DISK")" ]; then
+        bb=$(make_part "$DISK" "$s" $((BIOSBOOT_BYTES / ss)) "$BIOSBOOT_TYPE" "BIOS boot partition")
+        s=$((s + BIOSBOOT_BYTES / ss)); want=$((want - BIOSBOOT_BYTES / ss))
+        echo "CREATED $bb system"
+    fi
     if [ -z "$(esp_of "$DISK")" ]; then
         # As Windows Setup: a disk to boot from needs a system partition.
         esp_sectors=$((ESP_BYTES / ss))
@@ -430,6 +449,10 @@ if [ -n "$FREE" ]; then
     else need=$(( (XBOOT_BYTES + MIN_ROOT_BYTES) / ss )); fi
     [ "$left" -ge "$need" ] || die "the unallocated space is too small: Stained Glass OS needs $(( need * ss / GIB + 1 )) GB"
     progress 3 "Creating partitions"
+    if bios_mode && [ -z "$(biosboot_of "$fd")" ]; then
+        make_part "$fd" "$s" $((BIOSBOOT_BYTES / ss)) "$BIOSBOOT_TYPE" "BIOS boot partition" >/dev/null
+        s=$((s + BIOSBOOT_BYTES / ss)); left=$((left - BIOSBOOT_BYTES / ss))
+    fi
     if [ -z "$ESP_PART" ]; then
         ESP_PART=$(make_part "$fd" "$s" $((ESP_BYTES / ss)) "$ESP_TYPE" "EFI system partition")
         mkfs.vfat -F 32 -n SYSTEM "$ESP_PART" >/dev/null || die "cannot format the system partition"
@@ -452,6 +475,9 @@ if [ -n "$TARGET" ]; then
     [ "$size" -ge "$MIN_ROOT_BYTES" ] || die "this partition is too small: Stained Glass OS needs $((MIN_ROOT_BYTES / GIB)) GB"
     ESP_PART=$(esp_of "$PDISK")
     [ -n "$ESP_PART" ] || die "Setup was unable to create a new system partition or locate an existing system partition"
+    if bios_mode && [ -z "$(biosboot_of "$PDISK")" ]; then
+        die "Setup was unable to locate a BIOS boot partition on this disk: install into unallocated space, or onto the whole disk"
+    fi
     sfdisk -q --part-type --no-reread "$PDISK" "$PNUM" "$ROOT_TYPE" >/dev/null 2>&1 || die "cannot set the type of $TARGET"
     sfdisk -q --part-label --no-reread "$PDISK" "$PNUM" "Stained Glass OS" >/dev/null 2>&1 || :
     settle "$PDISK"
@@ -597,9 +623,15 @@ if [ "$OWN_ESP" = 1 ] || [ ! -e "$E/loader/loader.conf" ] || grep -q '^# Stained
     } > "$E/loader/loader.conf"
 fi
 rm -f "$E/loader/random-seed"
+# Legacy BIOS: GRUB in the MBR and the BIOS boot partition, its menu made from
+# the same entries (sg-grub-bios; the kernel-install plugin keeps it current).
+if bios_mode; then
+    progress 70 "Installing the boot loader"
+    sg-grub-bios --install --disk "$TDISK" --boot "$B" || die "cannot install the boot loader (GRUB) onto $TDISK"
+fi
 # And the firmware is told, where it can be: first in its boot order, as
 # Windows Setup does.
-if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null; then
+if ! bios_mode && [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null; then
     for b in $(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\{0,1\} Stained Glass OS.*/\1/p'); do
         efibootmgr -q -b "$b" -B >/dev/null 2>&1 || :
     done
