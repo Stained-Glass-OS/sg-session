@@ -1,0 +1,27 @@
+#!/bin/sh
+# sg-boot-space-notify -- tell this person a kernel update did not fit on the
+# boot partition, once a boot.
+#
+# sg-boot-space (a kernel-install plugin, root) leaves
+# /var/lib/stained-glass/notices/boot-space when a new kernel would not fit
+# even with every other kernel taken off: nothing was copied, the PC keeps
+# starting the kernel it has, and sg-boot-space-retry.service tries again at
+# each start; a kernel that fits removes the file. The session's helper loop
+# (sg-run-explorer) runs this every few seconds: while the file is there, its
+# popup (sg-shell's sg-bootspace-notice64.exe: "An update could not be
+# installed", Settings, Dismiss) is shown once per boot, never behind the
+# lock screen -- sg-restart-notify's rules, with this file, this memory and
+# this popup.
+#
+#   SG_BOOTSPACE_FILE  SG_BOOTSPACE_SEEN  SG_BOOTSPACE_NOTICE_CMD   for the test
+#   (and sg-restart-notify's SG_BOOT_ID, SG_LOCK_STATUS_CMD)
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
+SG_REBOOT_REQUIRED="${SG_BOOTSPACE_FILE:-/var/lib/stained-glass/notices/boot-space}"
+SG_RESTART_SEEN="${SG_BOOTSPACE_SEEN:-${XDG_STATE_HOME:-$HOME/.local/state}/stained-glass/bootspace-seen}"
+SG_RESTART_NOTICE_CMD="${SG_BOOTSPACE_NOTICE_CMD:-wine ${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-bootspace-notice64.exe}"
+export SG_REBOOT_REQUIRED SG_RESTART_SEEN SG_RESTART_NOTICE_CMD
+[ -f "$SG_REBOOT_REQUIRED" ] || exit 0
+exec sh "${SG_RESTART_NOTIFY:-$SG_LIB/sg-restart-notify}"

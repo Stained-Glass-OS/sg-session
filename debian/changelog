@@ -1,3 +1,48 @@
+sg-session (0.1.0-268) unstable; urgency=medium
+
+  * A kernel update never fills the boot partition, and never fails for want
+    of room on it (sg-boot-space, the kernel-install plugin
+    85-sg-boot-space). Measured on an installed disk: the image's kernel set
+    takes 220 MB of the 512 MiB ESP, each Debian kernel update adds about
+    88 MB, and nothing removed old kernels -- the third or fourth kernel
+    update stopped with ENOSPC inside dpkg, apt broken until repaired by
+    hand. Now, before anything is copied: only the running kernel and the
+    newest stay on the boot partition (the others' entries, recovery twins
+    and directories go; their packages and /boot files stay); files no entry
+    names go (the image's shared initrds once its kernel has gone); short of
+    room, the oldest kernel that is neither running nor the new one goes too.
+    A kernel that cannot fit even with every other kernel gone touches
+    nothing: kernel-install stops cleanly (77), the package installs, every
+    entry stays, the PC keeps starting its kernel, and a notice is left
+    (/var/lib/stained-glass/notices/boot-space): sg-boot-space-notify shows
+    it once a boot (sg-shell 0.1.0-285's sg-bootspace-notice), and
+    sg-boot-space-retry.service tries again at each start
+    (sg-kernel-entries --add-missing). A kernel removed takes the image's
+    own entry with it (named after the image, kernel-install left it
+    pointing at nothing). Gates: test/boot-space-test.sh (also with the real
+    kernel-install on a full partition; mutants NO_PRUNE, NO_CHECK),
+    test/boot-space-notify-test.sh; sg-image test/esp-space-test.sh (a real
+    apt kernel update on a nearly full ESP).
+  * sg-kernel-entries asks for a restart only when kernel-install really made
+    the new kernel's entry.
+  * Setup: the EFI system partition it creates on a disk is 1 GiB (was
+    512 MiB): room for the image's kernel set and two Debian kernels.
+  * Kernels never go into another system's EFI partition. Installing onto an
+    existing partition beside Windows (sg-install --target) put the image's
+    220 MB kernel set into Windows' ESP: on its usual 100 MB Setup stopped
+    ("not enough space"), on a larger one it installed but no kernel update
+    could ever fit. Now, beside an ESP that is not ours (anything of another
+    system's in it, or smaller than the 1 GiB we make), the first 1 GiB of
+    the chosen partition (formatted anyway) becomes our boot partition
+    (XBOOTLDR) and the rest the system, as in unallocated space beside
+    Windows; only the boot loader goes into Windows' ESP. A partition too
+    small for that is refused up front, by Setup's partition page (11 GB)
+    and by sg-install, before anything is changed. Beside the ESP Setup's
+    New has just made, nothing changes.
+    Gate: sg-image install-test's dualtarget scenario (a 100 MB Windows ESP).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 17 Nov 2026 21:50:00 -0800
+
 sg-session (0.1.0-267) unstable; urgency=medium
 
   * Legacy BIOS PCs: Setup installs a system they can start. Booted without

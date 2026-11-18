@@ -50,7 +50,9 @@ PATH="$PATH:/usr/sbin:/sbin"
 GIB=$((1024 * 1024 * 1024))
 MIB=$((1024 * 1024))
 MIN_ROOT_BYTES=$((10 * GIB))
-ESP_BYTES=$((512 * MIB))
+# 1 GiB (512 MiB before 0.1.0-268): room for the image's kernel set (220 MB)
+# and two Debian kernels (88 MB each) with margin; sg-boot-space keeps it so
+ESP_BYTES=$((1 * GIB))
 XBOOT_BYTES=$((1 * GIB))
 MIN_DISK_BYTES=$((1 * GIB))
 ESP_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
@@ -287,6 +289,22 @@ check_gpt() {
         *) die "$1 has a partition table Setup does not know" ;;
     esac
 }
+# An EFI system partition we may keep kernels in: about the size we make
+# (ESP_BYTES) and holding nothing of another system's -- empty (Setup's New
+# made it a moment ago), or only a boot loader's and our own files. Windows'
+# (EFI/Microsoft; 100 or 260 MB), another Linux's, anything unreadable: not.
+esp_is_ours() {
+    _sz=$(lsblk -d -n -b -o SIZE "$1" 2>/dev/null)
+    [ "${_sz:-0}" -ge $((ESP_BYTES * 9 / 10)) ] || return 1
+    _m=$(mktemp -d /run/sg-install-esp.XXXXXX) || return 1
+    mount -o ro "$1" "$_m" 2>/dev/null || { rmdir "$_m"; return 1; }
+    _ok=0
+    _other=$(cd "$_m" && for _f in * EFI/*; do [ -e "$_f" ] && printf '%s\n' "$_f"; done \
+        | grep -v -x -e EFI -e loader -e debian -e "$TOKEN_SHARED" -e EFI/BOOT -e EFI/systemd -e EFI/Linux -e 'System Volume Information')
+    [ -z "$_other" ] && _ok=1
+    umount "$_m"; rmdir "$_m"
+    [ "$_ok" = 1 ]
+}
 settle() { partx -u "$1" >/dev/null 2>&1 || :; udevadm settle >/dev/null 2>&1 || :; }
 # udev's view of a partition (what lsblk reports) after its file system changed
 reprobe() { udevadm trigger --action=change --settle "$1" >/dev/null 2>&1 || udevadm settle >/dev/null 2>&1 || :; }
@@ -426,7 +444,7 @@ SRC_ESP_DIR=$(findmnt -n -r -o TARGET -t vfat -S "$SRC_ESP" | head -1)
 # --- where: a root partition, an EFI system partition, and a place for the
 # kernels ($BOOT: the ESP itself, or an extended boot loader partition of ours
 # when the ESP is another system's) -------------------------------------------
-ROOT_PART="" ESP_PART="" BOOT_PART="" OWN_ESP=0
+ROOT_PART="" ESP_PART="" BOOT_PART="" OWN_ESP=0 CARVE=0
 if [ -n "$DISK" ]; then
     check_disk "$DISK"
     size=$(lsblk -d -n -b -o SIZE "$DISK")
@@ -472,16 +490,43 @@ if [ -n "$TARGET" ]; then
         system|msr|boot|recovery) die "Stained Glass OS cannot be installed to this partition: it is used by the system" ;;
     esac
     size=$(lsblk -d -n -b -o SIZE "$TARGET")
-    [ "$size" -ge "$MIN_ROOT_BYTES" ] || die "this partition is too small: Stained Glass OS needs $((MIN_ROOT_BYTES / GIB)) GB"
     ESP_PART=$(esp_of "$PDISK")
     [ -n "$ESP_PART" ] || die "Setup was unable to create a new system partition or locate an existing system partition"
     if bios_mode && [ -z "$(biosboot_of "$PDISK")" ]; then
         die "Setup was unable to locate a BIOS boot partition on this disk: install into unallocated space, or onto the whole disk"
     fi
-    sfdisk -q --part-type --no-reread "$PDISK" "$PNUM" "$ROOT_TYPE" >/dev/null 2>&1 || die "cannot set the type of $TARGET"
-    sfdisk -q --part-label --no-reread "$PDISK" "$PNUM" "Stained Glass OS" >/dev/null 2>&1 || :
+    # Kernels never go into another system's EFI partition (Windows' is
+    # 100 MB, 260 MB on 4K disks; the image's kernel set alone is 220 MB, and
+    # every kernel update needs room beside it): beside one, the first 1 GiB
+    # of the partition -- formatted anyway -- becomes our boot partition
+    # (XBOOTLDR), as in unallocated space beside a foreign ESP; only the boot
+    # loader goes into the EFI partition. Checked before anything is changed.
+    CARVE=1
+    esp_is_ours "$ESP_PART" && CARVE=0
+    if [ "$CARVE" = 1 ]; then
+        [ "$size" -ge $((MIN_ROOT_BYTES + XBOOT_BYTES)) ] \
+            || die "this partition is too small: Stained Glass OS needs $(( (MIN_ROOT_BYTES + XBOOT_BYTES) / GIB )) GB here ($((XBOOT_BYTES / GIB)) GB of it for its boot files, beside another system's)"
+    else
+        [ "$size" -ge "$MIN_ROOT_BYTES" ] || die "this partition is too small: Stained Glass OS needs $((MIN_ROOT_BYTES / GIB)) GB"
+        sfdisk -q --part-type --no-reread "$PDISK" "$PNUM" "$ROOT_TYPE" >/dev/null 2>&1 || die "cannot set the type of $TARGET"
+        sfdisk -q --part-label --no-reread "$PDISK" "$PNUM" "Stained Glass OS" >/dev/null 2>&1 || :
+        settle "$PDISK"
+        ROOT_PART=$TARGET TDISK=$PDISK
+    fi
+fi
+if [ -n "$TARGET" ] && [ "$CARVE" = 1 ]; then
+    ss=$(sector_size "$PDISK")
+    read -r tstart tsize <<EOS
+$(parts_of "$PDISK" | awk -v n="$PNUM" '$1 == n { print $2, $3 }')
+EOS
+    printf '%s%s' "$tstart" "$tsize" | grep -Eq '^[0-9]+$' || die "cannot read where $TARGET is on $PDISK"
+    progress 3 "Creating partitions"
+    sfdisk -q --delete --no-reread "$PDISK" "$PNUM" >/dev/null 2>&1 || die "cannot change the partition $TARGET"
     settle "$PDISK"
-    ROOT_PART=$TARGET TDISK=$PDISK
+    BOOT_PART=$(make_part "$PDISK" "$tstart" $((XBOOT_BYTES / ss)) "$XBOOT_TYPE" "Stained Glass OS boot")
+    mkfs.vfat -F 32 -n SGBOOT "$BOOT_PART" >/dev/null || die "cannot format the boot partition"
+    ROOT_PART=$(make_part "$PDISK" $((tstart + XBOOT_BYTES / ss)) $((tsize - XBOOT_BYTES / ss)) "$ROOT_TYPE" "Stained Glass OS")
+    TDISK=$PDISK
 fi
 # The root is named on the kernel command line (root=PARTUUID=), so another
 # root partition on the same disk cannot be mistaken for this one.

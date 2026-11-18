@@ -3,6 +3,7 @@
 #
 #   sg-kernel-entries --configure [--root DIR]   (sg-install, a new system)
 #   sg-kernel-entries --apply                    (sg-session's postinst)
+#   sg-kernel-entries --add-missing              (sg-boot-space-retry.service)
 #
 # kernel-install (Debian's kernel packages run it through systemd-boot's
 # hook) decides the layout from loader/entries.srel or a directory named after
@@ -42,13 +43,13 @@ TRIES=3
 MODE="" ROOT=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --configure|--apply) MODE=${1#--} ;;
+        --configure|--apply|--add-missing) MODE=${1#--} ;;
         --root) ROOT=${2:?}; shift ;;
-        *) echo "usage: sg-kernel-entries --configure [--root DIR] | --apply" >&2; exit 2 ;;
+        *) echo "usage: sg-kernel-entries --configure [--root DIR] | --apply | --add-missing" >&2; exit 2 ;;
     esac
     shift
 done
-[ -n "$MODE" ] || { echo "usage: sg-kernel-entries --configure [--root DIR] | --apply" >&2; exit 2; }
+[ -n "$MODE" ] || { echo "usage: sg-kernel-entries --configure [--root DIR] | --apply | --add-missing" >&2; exit 2; }
 ETC=${SG_KE_ETC:-$ROOT/etc/kernel}
 say() { printf 'sg-kernel-entries: %s\n' "$*" >&2; }
 
@@ -85,16 +86,11 @@ name_root() {
     done
 }
 
-apply() {
-    cmdline=$(cat "${SG_KE_CMDLINE:-/proc/cmdline}" 2>/dev/null)
-    case " $cmdline " in *" systemd.volatile="*|*" sg.live="*) return 0 ;; esac   # the live medium
-    [ -f "$ETC/entry-token" ] || return 0                                           # not a machine Setup installed
-    B=$(boot_path) || return 0
-    [ -n "$B" ] && [ -d "$B/loader/entries" ] || return 0                           # not systemd-boot
-    name_root "$B"
-    grep -q '^layout=' "$ETC/install.conf" 2>/dev/null && return 0                 # set already: not ours to change
-    configure || return 0
-    token=$(cat "$ETC/entry-token")
+# each installed kernel newer than the running one with no boot entry gets
+# one (kernel-install add, so with its tries); $1 the boot partition
+add_missing() {
+    B=$1
+    token=$(cat "$ETC/entry-token" 2>/dev/null)
     files=${SG_KE_FILES:-/boot}
     running=${SG_KE_UNAME:-$(uname -r)}
     for k in $(for f in "$files"/vmlinuz-*; do [ -f "$f" ] && printf '%s\n' "${f##*/vmlinuz-}"; done | sort -V); do
@@ -111,16 +107,45 @@ apply() {
         say "kernel $k has no boot entry: adding it (on trial: $TRIES tries)"
         set -- "$files/vmlinuz-$k"
         [ -f "$files/initrd.img-$k" ] && set -- "$@" "$files/initrd.img-$k"
-        if ${SG_KE_KERNEL_INSTALL:-kernel-install} add "$k" "$@" >&2; then
-            # the session says so (sg-restart-notify)
-            printf '*** System restart required: a new Linux kernel (%s) ***\n' "$k" > "${SG_REBOOT_REQUIRED:-/run/reboot-required}" 2>/dev/null || :
-        else say "kernel-install could not add $k ($token)"; fi
+        if ! ${SG_KE_KERNEL_INSTALL:-kernel-install} add "$k" "$@" >&2; then
+            say "kernel-install could not add $k ($token)"; continue
+        fi
+        # an entry now? (no room on the boot partition: kernel-install
+        # succeeds without one -- sg-boot-space left its notice instead)
+        have=0
+        for e in "$B"/loader/entries/*"-$k.conf" "$B"/loader/entries/*"-$k+"*.conf; do [ -f "$e" ] && have=1; done
+        [ "$have" = 1 ] || { say "kernel $k: no entry made (sg-boot-space status)"; continue; }
+        # the session says so (sg-restart-notify)
+        printf '*** System restart required: a new Linux kernel (%s) ***\n' "$k" > "${SG_REBOOT_REQUIRED:-/run/reboot-required}" 2>/dev/null || :
     done
     return 0
+}
+
+apply() {
+    cmdline=$(cat "${SG_KE_CMDLINE:-/proc/cmdline}" 2>/dev/null)
+    case " $cmdline " in *" systemd.volatile="*|*" sg.live="*) return 0 ;; esac   # the live medium
+    [ -f "$ETC/entry-token" ] || return 0                                           # not a machine Setup installed
+    B=$(boot_path) || return 0
+    [ -n "$B" ] && [ -d "$B/loader/entries" ] || return 0                           # not systemd-boot
+    name_root "$B"
+    grep -q '^layout=' "$ETC/install.conf" 2>/dev/null && return 0                 # set already: not ours to change
+    configure || return 0
+    add_missing "$B"
+    return 0
+}
+
+# --add-missing (sg-boot-space-retry.service, while sg-boot-space's notice is
+# there: a kernel that did not fit on the boot partition is tried again)
+retry() {
+    [ -f "$ETC/entry-token" ] || return 0
+    B=$(boot_path) || return 0
+    [ -n "$B" ] && [ -d "$B/loader/entries" ] || return 0
+    add_missing "$B"
 }
 
 case "$MODE" in
 configure) configure ;;
 apply) apply ;;
+add-missing) retry ;;
 esac
 exit 0

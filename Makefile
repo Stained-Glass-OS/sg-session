@@ -18,10 +18,10 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-multiuser-check bin/sg-wineserver bin/sg-services-start \
                bin/sg-install-d3d bin/sg-d3d-check bin/sg-firmware-retry bin/sg-open-windows-file \
                bin/sg-install-apps bin/sg-apps-check \
-               bin/sg-update-prepare bin/sg-boot-splash bin/sg-boot-health bin/sg-kernel-entries bin/sg-grub-bios bin/sg-boot-layout bin/sg-file-access-check \
+               bin/sg-update-prepare bin/sg-boot-splash bin/sg-boot-health bin/sg-kernel-entries bin/sg-grub-bios bin/sg-boot-space bin/sg-boot-layout bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check \
                bin/sg-firewall-check
-LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-boot-space-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale lib/sg-btrfs-layout.sh
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
@@ -55,7 +55,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -m 0644 systemd/sg-snapshot-rebalance.service systemd/sg-snapshot-rebalance.timer $(UNITDIR)
 	@# A start that does not finish shows the boot menu at the next one (sg-boot-health).
 	install -m 0755 bin/sg-boot-health $(BINDIR)
-	install -m 0644 systemd/sg-boot-health.service systemd/sg-boot-ok.service systemd/sg-grub-bless.service $(UNITDIR)
+	install -m 0644 systemd/sg-boot-health.service systemd/sg-boot-ok.service systemd/sg-grub-bless.service systemd/sg-boot-space-retry.service $(UNITDIR)
 	install -D -m 0755 kernel/94-sg-restore-points.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/94-sg-restore-points.install
 	install -m 0755 convert/sg-convert-root $(LIBDIR)
 	install -d $(SHAREDIR)/convert-initramfs/hooks $(SHAREDIR)/convert-initramfs/scripts/local-premount
@@ -274,6 +274,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -D -m 0755 kernel/92-sg-firmware.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/92-sg-firmware.install
 	install -D -m 0755 kernel/93-sg-reboot-required.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/93-sg-reboot-required.install
 	install -D -m 0755 kernel/95-sg-grub-bios.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/95-sg-grub-bios.install
+	install -D -m 0755 kernel/85-sg-boot-space.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/85-sg-boot-space.install
 	install -m 0644 systemd/sg-brokerd.service \
 	    systemd/sg-prefix-init.service systemd/sg-wineserver.service \
 	    systemd/sg-lockd.service systemd/sg-update-prepare.service systemd/sg-defender.service systemd/sg-firewall.service \
@@ -334,7 +335,7 @@ lint:
 	    sed -n 2p "$$f" | grep -q '^\. "$$(dirname "$$0")/scratch-home.sh"$$' || \
 	    { echo "$$f: line 2 must be: . \"\$$(dirname \"\$$0\")/scratch-home.sh\""; exit 1; }; done
 	@for f in $(BINS) $(LIBS) bin/sg-profile-create bin/sg-app-defaults test/app-defaults-test.sh bin/sg-shared-home bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon \
-	    convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install kernel/95-sg-grub-bios.install; do sh -n $$f || exit 1; done
+	    convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/85-sg-boot-space.install kernel/94-sg-restore-points.install kernel/95-sg-grub-bios.install; do sh -n $$f || exit 1; done
 	@echo "syntax OK"
 	@sh test/smooth-glyphs-test.sh
 	@sh test/xdg-profile-test.sh
@@ -389,6 +390,7 @@ lint:
 	@sh test/freshclam-once-test.sh
 	@sh test/defender-notify-test.sh
 	@sh test/restart-notify-test.sh
+	@sh test/boot-space-notify-test.sh
 	@sh test/polimport-test.sh
 	@sh test/detattoo-test.sh
 	@sh test/netlock-deps-test.sh
@@ -461,6 +463,8 @@ lint:
 	@! sh test/procagent-supervise-test.sh --mutant >/dev/null 2>&1
 	@sh test/grub-bios-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
 	@for m in NO_FALLBACK NO_COUNT; do ! sh test/grub-bios-test.sh --mutant $$m >/dev/null 2>&1 || { echo "grub-bios-test: mutant $$m passed"; exit 1; }; done
+	@sh test/boot-space-test.sh
+	@for m in NO_PRUNE NO_CHECK; do ! SG_BS_MUTANT=$$m sh test/boot-space-test.sh >/dev/null 2>&1 || { echo "boot-space-test: mutant $$m passed"; exit 1; }; done
 	@sh test/netbrowse-test.sh
 	@! sh test/netbrowse-test.sh --mutant >/dev/null 2>&1
 	@sh test/boot-health-test.sh
@@ -485,7 +489,7 @@ lint:
 	@# no user-visible "Windows" as our name (Microsoft's trademark); tools/trademark-allow.txt for exceptions
 	@python3 tools/trademark-check.py --allow tools/trademark-allow.txt greeter setup bin lib pdf speech domain rdp broker admin procagent config systemd
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/94-sg-restore-points.install kernel/95-sg-grub-bios.install test/grub-bios-test.sh test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-app-defaults bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/polkit-admins-test.sh test/programdata-repair-test.sh test/programfiles-repair-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
+		shellcheck -s sh -e SC1091 $(BINS) $(LIBS) convert/sg-convert-root convert/hooks/sg-convert convert/scripts/local-premount/sg-convert kernel/85-sg-boot-space.install kernel/94-sg-restore-points.install kernel/95-sg-grub-bios.install test/grub-bios-test.sh test/boot-space-test.sh test/restore-points-test.sh test/boot-health-test.sh test/snapshot-test.sh bin/sg-profile-create bin/sg-app-defaults bin/sg-shared-home bin/sg-eject bin/sg-netbrowse test/netbrowse-test.sh bin/sg-rdp-cert setup/sg-installd setup/sg-live-setup setup/sg-oobed domain/sg-domain-groups domain/sg-domain-logon test/setup-e2e.sh test/oobe-e2e.sh test/oobe-early-input-test.sh test/oobe-fallback-test.sh test/oobe-user-test.sh test/media-test.sh test/polkit-admins-test.sh test/programdata-repair-test.sh test/programfiles-repair-test.sh test/netmount-guest-test.sh test/netmount-logon-test.sh test/netmount-listing-test.sh test/netmount-signout-test.sh test/netmount-unreachable-test.sh \
 		    test/rdp-stream-e2e.sh test/rdp-shadow-e2e.sh test/scratch-home.sh || exit 1; \
 		echo "shellcheck OK"; \
 	else \

@@ -1,0 +1,18 @@
+# A kernel update that did not fit on the boot partition (sg-boot-space left
+# its notice, the machine kept starting the kernel it had): tried again at
+# each start while the notice is there -- sg-kernel-entries --add-missing
+# runs kernel-install for an installed kernel newer than the running one with
+# no boot entry; sg-boot-space takes the notice away once it fits.
+[Unit]
+Description=Stained Glass OS: try again to put a new kernel on the boot partition
+After=local-fs.target boot-complete.target
+ConditionKernelCommandLine=!systemd.volatile
+ConditionKernelCommandLine=!sg.live
+ConditionPathExists=/var/lib/stained-glass/notices/boot-space
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/sg-kernel-entries --add-missing
+
+[Install]
+WantedBy=multi-user.target

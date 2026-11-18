@@ -294,7 +294,8 @@ static const char *row_problem( const struct row *r, char *buf, size_t len )
         return "This disk has an MBR partition table. On UEFI PCs Stained Glass OS installs to GPT disks only.";
     if (r->kind == R_FREE)
     {
-        unsigned long long need = MIN_ROOT + (r->disk_has_esp ? GIB : 512ULL * 1024 * 1024);
+        /* our boot partition beside an EFI partition, or our own EFI partition: 1 GiB either way */
+        unsigned long long need = MIN_ROOT + GIB;
         if (r->bytes < need)
         {
             snprintf( buf, len, "This space is too small. Stained Glass OS needs %llu GB.", need / GIB + 1 );
@@ -304,9 +305,11 @@ static const char *row_problem( const struct row *r, char *buf, size_t len )
     }
     if (strcmp( r->type, "primary" ))
         return "This partition is used by the system to start the PC. Choose another place.";
-    if (r->bytes < MIN_ROOT)
+    /* its first 1 GiB becomes our boot partition (kernels never go into
+     * another system's EFI partition): sg-install --target */
+    if (r->bytes < MIN_ROOT + GIB)
     {
-        snprintf( buf, len, "This partition is too small. Stained Glass OS needs %llu GB.", MIN_ROOT / GIB );
+        snprintf( buf, len, "This partition is too small. Stained Glass OS needs %llu GB.", (MIN_ROOT + GIB) / GIB );
         return buf;
     }
     if (!r->disk_has_esp)

@@ -1,0 +1,26 @@
+#!/bin/sh
+# kernel-install plugin (Stained Glass OS): a kernel update never fills the
+# boot partition (sg-boot-space). On add, before 90-loaderentry copies
+# anything: only the running kernel and the newest stay on it, and a kernel
+# that would not fit is not copied (77: kernel-install stops cleanly, the
+# package's installation succeeds, the existing entries stay). On remove:
+# entries left pointing at the removed kernel, and files nothing names, go.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+COMMAND=${1:-}
+KERNEL_VERSION=${2:-}
+[ "${KERNEL_INSTALL_LAYOUT:-bls}" = bls ] || exit 0
+[ -n "${KERNEL_INSTALL_BOOT_ROOT:-}" ] && [ -n "${KERNEL_INSTALL_ENTRY_TOKEN:-}" ] || exit 0
+BS=${SG_BOOT_SPACE:-/usr/bin/sg-boot-space}
+[ -x "$BS" ] || exit 0
+case "$COMMAND" in
+add)
+    shift 3 2>/dev/null || shift $#      # ENTRY_DIR_ABS, then KERNEL_IMAGE [INITRD...]
+    "$BS" prepare "$KERNEL_VERSION" "$@"
+    rc=$?
+    [ "$rc" = 77 ] && exit 77
+    exit 0 ;;                         # never fail a kernel's installation otherwise
+remove)
+    "$BS" tidy "$KERNEL_VERSION"
+    exit 0 ;;
+esac
+exit 0

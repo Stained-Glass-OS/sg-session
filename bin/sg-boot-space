@@ -1,0 +1,273 @@
+#!/bin/sh
+# sg-boot-space -- a kernel update never fills the boot partition, and never
+# fails for want of room on it.
+#
+#   sg-boot-space prepare VER KERNEL [INITRD...]   (85-sg-boot-space.install, add)
+#   sg-boot-space tidy [VER]                       (85-sg-boot-space.install, remove VER)
+#   sg-boot-space status                           what is on it, what is free
+#
+# The boot partition kernel-install copies kernels and initrds to is the EFI
+# system partition (512 MiB on disks Setup partitioned before 0.1.0-268, 1 GiB
+# since) or our own 1 GiB XBOOTLDR beside another system's ESP. The image's
+# kernel set takes 220 MB of it (its kernel, a 171 MB modules initrd, a 37 MB
+# shared initrd); each Debian kernel update adds about 88 MB (vmlinuz and
+# initramfs-tools' initrd). apt removes no kernel by itself, and nothing here
+# ran autoremove: on a 512 MiB ESP the third or fourth kernel update stopped
+# with ENOSPC inside dpkg -- a half-configured kernel package, apt broken until
+# someone repaired it by hand (measured 2026-11-17, install-test disk).
+#
+# prepare, before 90-loaderentry copies anything:
+#   1. kernels kept on the boot partition: the running one and the newest
+#      (this one, usually); every other kernel's boot entries (its recovery
+#      twin and boot-counted names too) and its directory go. Its package
+#      stays installed: Debian's files in /boot are not touched.
+#   2. files in our token directory no entry names any more go (the image's
+#      shared initrds once the image's kernel has gone).
+#   3. the room this kernel needs (kernel, initrds, a margin) against what is
+#      free; short of it, the oldest kept kernel that is neither running nor
+#      this one goes too.
+#   4. still short -- or short from the start, counting what taking every
+#      other kernel off would free (then nothing at all is removed): nothing
+#      is copied. kernel-install is stopped cleanly (77:
+#      the later plugins skipped, kernel-install and the package's postinst
+#      succeed) after its empty directory is removed, every existing entry
+#      intact, and the machine keeps starting the kernel it has. A notice is
+#      left (NOTICE, below) that the session shows; sg-boot-space-retry.service
+#      tries again at each start while it is there (sg-kernel-entries
+#      --add-missing). That kernel (or a newer one) fitting takes the notice away.
+# Should kernels have gone and it still not fit (the estimate wrong), the
+# menu is made again here (restore points: sg-snapshot entries; GRUB:
+# sg-grub-bios --update), since the plugins that would do it are skipped.
+#
+# tidy VER (kernel VER being removed: kernel-install deletes the entries named
+# TOKEN-VER*.conf and, after the plugins, its directory): every other entry
+# starting VER -- the image's own entry is named after the image, not
+# TOKEN-VER, so kernel-install never removed it and it was left pointing at
+# nothing -- and entries whose kernel file is gone, and files no entry names
+# any more, go.
+#
+# Only ever touched: loader/entries/*.conf whose linux line is in our token
+# directory (never Sg-* entries, which sg-snapshot makes again; never another
+# system's entries), and files under BOOT/TOKEN/. Never the running kernel,
+# never the kernel being added.
+#
+# kernel-install's environment: KERNEL_INSTALL_BOOT_ROOT,
+# KERNEL_INSTALL_ENTRY_TOKEN, KERNEL_INSTALL_STAGING_AREA. For the gate:
+# SG_BS_UNAME (the running kernel), SG_BS_FREE (free bytes, instead of df),
+# SG_BS_NOTICE (the notice file), SG_BS_REFRESH=0 (no menu refresh), SG_BS_MARGIN,
+# SG_BS_MUTANT=NO_PRUNE|NO_CHECK.
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -u
+PATH="$PATH:/usr/sbin:/sbin"
+MARGIN=${SG_BS_MARGIN:-$((8 * 1024 * 1024))}   # entry, firmware initrd, FAT clusters
+NOTICE=${SG_BS_NOTICE:-/var/lib/stained-glass/notices/boot-space}
+say() { printf 'sg-boot-space: %s\n' "$*" >&2; }
+
+BOOT=${KERNEL_INSTALL_BOOT_ROOT:-}
+TOKEN=${KERNEL_INSTALL_ENTRY_TOKEN:-}
+if [ -z "$BOOT" ]; then
+    BOOT=$(sed -n 's/^BOOT_ROOT=//p' /etc/kernel/install.conf 2>/dev/null | tail -1)
+fi
+[ -n "$TOKEN" ] || TOKEN=$(cat /etc/kernel/entry-token 2>/dev/null)
+RUNNING=${SG_BS_UNAME:-$(uname -r)}
+ENTRIES="$BOOT/loader/entries"
+
+# the kernel version an entry starts: the directory its linux line names in
+# our token directory; nothing for an entry that is not ours
+entry_ver() {
+    sed -n "s#^linux[[:space:]]\{1,\}/$TOKEN/\([^/]\{1,\}\)/[^/]\{1,\}[[:space:]]*\$#\1#p" "$1" | head -1
+}
+# our kernel entries (not Sg-*: sg-snapshot's, made again from these)
+our_entries() {
+    for _e in "$ENTRIES"/*.conf; do
+        [ -f "$_e" ] || continue
+        case "${_e##*/}" in Sg-*|sg-*) continue ;; esac
+        [ -n "$(entry_ver "$_e")" ] && printf '%s\n' "$_e"
+    done
+}
+versions() { our_entries | while read -r _e; do entry_ver "$_e"; done | sort -uV; }
+free_bytes() {
+    if [ -n "${SG_BS_FREE:-}" ]; then
+        # the gate: a fixed amount less what has been written since
+        _used=$(du -sb "$BOOT" 2>/dev/null | cut -f1)
+        echo $((SG_BS_FREE - _used))
+        return
+    fi
+    df -B1 --output=avail "$BOOT" 2>/dev/null | tail -1 | tr -d ' '
+}
+size_of() { _s=$(stat -L -c %s "$1" 2>/dev/null) && echo "$_s" || echo 0; }
+
+# a kernel's entries and directory go
+drop_kernel() {
+    _v=$1
+    [ "$_v" != "$RUNNING" ] || return 1
+    [ "$_v" != "${ADDING:-}" ] || return 1
+    our_entries | while read -r _e; do
+        [ "$(entry_ver "$_e")" = "$_v" ] && rm -f "$_e"
+    done
+    [ -n "$TOKEN" ] && [ -n "$_v" ] && rm -rf "${BOOT:?}/$TOKEN/$_v"
+    say "kernel $_v taken off the boot partition (its package stays installed)"
+    return 0
+}
+
+# entries pointing at a kernel that is gone, and files no entry names
+tidy() {
+    [ -n "$BOOT" ] && [ -n "$TOKEN" ] && [ -d "$ENTRIES" ] || return 0
+    _gone=${1:-}
+    our_entries | while read -r _e; do
+        _l=$(sed -n 's/^linux[[:space:]]\{1,\}//p' "$_e" | head -1 | sed 's/[[:space:]]*$//')
+        if [ ! -f "$BOOT$_l" ] || { [ -n "$_gone" ] && [ "$(entry_ver "$_e")" = "$_gone" ]; }; then
+            rm -f "$_e" && say "${_e##*/}: its kernel is gone, entry removed"
+        fi
+    done
+    _named=$(mktemp) || return 0
+    for _e in "$ENTRIES"/*.conf; do
+        [ -f "$_e" ] || continue
+        sed -n 's/^\(linux\|initrd\|efi\|devicetree\)[[:space:]]\{1,\}//p' "$_e" | sed 's/[[:space:]]*$//'
+    done | sort -u > "$_named"
+    # never with no entry at all: that is not a boot partition we understand
+    if [ -s "$_named" ]; then
+        find "$BOOT/$TOKEN" -type f 2>/dev/null | while read -r _f; do
+            _rel=${_f#"$BOOT"}
+            grep -qxF "$_rel" "$_named" && continue
+            # this kernel's own files, copied a moment ago and not yet named
+            case "$_rel" in "/$TOKEN/${ADDING:-//}/"*) continue ;; esac
+            # the removed kernel's directory: kernel-install deletes it itself
+            case "$_rel" in "/$TOKEN/${_gone:-//}/"*) continue ;; esac
+            rm -f "$_f" && say "$_rel: no entry uses it, removed"
+        done
+        # (never the directory kernel-install has just made for this kernel)
+        find "$BOOT/$TOKEN" -mindepth 1 -type d -empty ! -path "$BOOT/$TOKEN/${ADDING:-//}" -delete 2>/dev/null
+    fi
+    rm -f "$_named"
+}
+
+# restore points' entries name a kernel on the boot partition: made again
+# once kernels went (before tidy, so the files only they named go too)
+restore_entries() {
+    [ "${SG_BS_REFRESH:-1}" = 1 ] || return 0
+    [ -x /usr/bin/sg-snapshot ] && /usr/bin/sg-snapshot entries >/dev/null 2>&1
+    return 0
+}
+refresh_menu() {
+    [ "${SG_BS_REFRESH:-1}" = 1 ] || return 0
+    restore_entries
+    [ -d "$BOOT/grub/i386-pc" ] && [ -x /usr/bin/sg-grub-bios ] && /usr/bin/sg-grub-bios --update --boot "$BOOT" >&2
+    return 0
+}
+
+notice() {
+    mkdir -p "$(dirname "$NOTICE")" 2>/dev/null
+    _tmp="$NOTICE.tmp"
+    if printf 'kernel=%s\nrunning=%s\nneed=%s\nfree=%s\n' "$1" "$RUNNING" "$2" "$3" > "$_tmp" && mv -f "$_tmp" "$NOTICE"; then :
+    else rm -f "$_tmp"; fi
+}
+
+# bytes that taking every kernel but the running one and this one off would
+# free: the files under our token directory no remaining entry names
+# (restore points' entries left out: sg-snapshot makes them again from the
+# kernels that stay)
+reclaimable() {
+    _keep=$(mktemp) || { echo 0; return; }
+    for _e in "$ENTRIES"/*.conf; do
+        [ -f "$_e" ] || continue
+        case "${_e##*/}" in Sg-*|sg-*) continue ;; esac
+        _v=$(entry_ver "$_e")
+        [ -z "$_v" ] || [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || continue
+        sed -n 's/^\(linux\|initrd\|efi\|devicetree\)[[:space:]]\{1,\}//p' "$_e" | sed 's/[[:space:]]*$//'
+    done | sort -u > "$_keep"
+    find "$BOOT/$TOKEN" -type f 2>/dev/null | while read -r _f; do
+        _rel=${_f#"$BOOT"}
+        case "$_rel" in "/$TOKEN/$ADDING/"*) continue ;; esac
+        grep -qxF "$_rel" "$_keep" || size_of "$_f"
+    done | awk '{ t += $1 } END { print t + 0 }'
+    rm -f "$_keep"
+}
+
+prepare() {
+    ADDING=$1; shift
+    _kimg=${1:-}; [ $# -gt 0 ] && shift
+    [ -n "$BOOT" ] && [ -n "$TOKEN" ] && [ -d "$ENTRIES" ] || return 0
+    _dir="$BOOT/$TOKEN/$ADDING"
+    # the room this kernel needs: kernel, initrds, a margin, less what it
+    # overwrites in its own directory (the same version again)
+    _need=$MARGIN
+    for _f in "$_kimg" "$@" "${KERNEL_INSTALL_STAGING_AREA:-/nonexistent}"/*; do
+        if [ -z "$_f" ] || [ ! -e "$_f" ]; then continue; fi
+        _need=$((_need + $(size_of "$_f")))
+    done
+    _over=$(size_of "$_dir/linux")
+    for _f in "$@" "${KERNEL_INSTALL_STAGING_AREA:-/nonexistent}"/*; do
+        [ -e "$_f" ] && _over=$((_over + $(size_of "$_dir/${_f##*/}")))
+    done
+    _need=$((_need - _over))
+    # it cannot fit even with every other kernel gone: nothing is touched
+    if [ "${SG_BS_MUTANT:-}" != NO_CHECK ]; then
+        _free=$(free_bytes)
+        _can=$(reclaimable)
+        if [ $(( ${_free:-0} + ${_can:-0} )) -lt "$_need" ]; then
+            no_room "$_need" "$_free"
+            return 77
+        fi
+    fi
+    # 1. the running kernel and the newest
+    if [ "${SG_BS_MUTANT:-}" != NO_PRUNE ]; then
+        _newest=$( (versions; echo "$ADDING") | sort -V | tail -1)
+        for _v in $(versions); do
+            [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || [ "$_v" = "$_newest" ] && continue
+            drop_kernel "$_v"
+        done
+        restore_entries
+        # 2. files nothing names
+        tidy
+    fi
+    [ "${SG_BS_MUTANT:-}" = NO_CHECK ] && return 0
+    # 3. short of room: the oldest kernel that is neither running nor this one
+    _free=$(free_bytes)
+    while [ "${_free:-0}" -lt "$_need" ]; do
+        _old=$(versions | while read -r _v; do
+            [ "$_v" = "$RUNNING" ] || [ "$_v" = "$ADDING" ] || echo "$_v"; done | head -1)
+        [ -n "$_old" ] || break
+        drop_kernel "$_old" || break
+        restore_entries
+        tidy
+        _free=$(free_bytes)
+    done
+    if [ "${_free:-0}" -lt "$_need" ]; then
+        # (the estimate was wrong: the menu is made again for what went)
+        no_room "$_need" "$_free"
+        refresh_menu
+        return 77
+    fi
+    # the kernel the notice names -- or a newer one -- fitting ends it
+    # (another kernel's initrd made again does not)
+    _left=$(sed -n 's/^kernel=//p' "$NOTICE" 2>/dev/null)
+    if [ -n "$_left" ] && [ "$(printf '%s\n%s\n' "$_left" "$ADDING" | sort -V | tail -1)" = "$ADDING" ]; then
+        rm -f "$NOTICE"
+    fi
+    return 0
+}
+
+# 4. it does not fit: nothing copied, the machine keeps its kernels, a notice
+no_room() {
+    say "kernel $ADDING needs $1 bytes on $BOOT and $2 are free: not installed there; the machine keeps starting $RUNNING"
+    rmdir "$_dir" 2>/dev/null
+    notice "$ADDING" "$1" "$2"
+}
+
+status() {
+    echo "boot partition: $BOOT (token $TOKEN), running $RUNNING"
+    echo "free: $(free_bytes) bytes"
+    for _v in $(versions); do echo "kernel on it: $_v"; done
+    [ -f "$NOTICE" ] && { echo "notice:"; cat "$NOTICE"; }
+    return 0
+}
+
+case "${1:-}" in
+prepare) shift; [ $# -ge 1 ] || { echo "usage: sg-boot-space prepare VER KERNEL [INITRD...]" >&2; exit 2; }
+         prepare "$@"; exit $? ;;
+tidy) tidy "${2:-}"; exit 0 ;;
+status) status; exit 0 ;;
+*) echo "usage: sg-boot-space prepare VER KERNEL [INITRD...] | tidy [VER] | status" >&2; exit 2 ;;
+esac
