@@ -488,26 +488,39 @@ static void layout_done( void )
     for (i = 0; i < g_nrows; i++) add_row_item( i );
     log_line( "sg-setup: layout %d rows", g_nrows );
 
-    /* After New, the partition it made; otherwise the largest place Stained
-     * Glass OS fits, as Windows Setup preselects. */
+    /* After New, the partition it made (empty: no file system); otherwise the
+     * largest unallocated space Stained Glass OS fits in -- never a partition
+     * that holds anything (Windows' C: was the largest place on a Windows
+     * PC, a blind Next away from being formatted). No such space: nothing
+     * is selected, and Next waits for the person to choose. */
     if (g_after_new)
         for (i = 0; i < g_nrows && pick < 0; i++)
         {
-            if (g_row[i].kind != R_PART || strcmp( g_row[i].type, "primary" )) continue;
+            if (g_row[i].kind != R_PART || strcmp( g_row[i].type, "primary" ) || strcmp( g_row[i].fstype, "-" )) continue;
             for (j = 0; j < g_nold && strcmp( g_old_paths[j], g_row[i].path ); j++) ;
             if (j == g_nold) pick = i;
         }
     g_after_new = FALSE;
     if (pick < 0)
         for (i = 0; i < g_nrows; i++)
+        {
+#ifndef SG_MUTANT_PRESELECT_ANY
+            if (g_row[i].kind != R_FREE) continue;
+#endif
             if (!row_problem( &g_row[i], buf, sizeof(buf) ) && (largest < 0 || g_row[i].bytes > g_row[largest].bytes))
                 largest = i;
-    if (pick < 0) pick = largest >= 0 ? largest : (g_nrows ? 0 : -1);
+        }
+    if (pick < 0) pick = largest;
     if (pick >= 0)
     {
         select_row( pick );
         row_name( &g_row[pick], name, sizeof(name) );
         log_line( "sg-setup: selected %s", name );
+    }
+    else
+    {
+        g_sel = -1;
+        log_line( "sg-setup: nothing preselected" );
     }
     update_disk_buttons();
 }
@@ -799,6 +812,50 @@ static void start_install( void )
     SetWindowTextA( g_pass2, "" );
 }
 
+/* A partition that holds a file system is erased only once the person says
+ * so, as Windows Setup warns before it formats: what is on it, by name, size
+ * and file system -- and plainly when it looks like Windows (NTFS, BitLocker,
+ * a Windows label). The answer is No unless Yes is chosen. */
+static BOOL has_word_ci( const char *s, const char *w )
+{
+    size_t n = strlen( w );
+    for (; *s; s++) if (!_strnicmp( s, w, n )) return TRUE;
+    return FALSE;
+}
+
+static BOOL confirm_erase( const struct row *r )
+{
+    char name[64], size[32], msg[640], what[160];
+    BOOL windows;
+    int answer;
+
+    if (r->kind != R_PART || !strcmp( r->fstype, "-" )) return TRUE;
+#ifdef SG_MUTANT_NO_ERASE_CONFIRM
+    return TRUE;
+#endif
+    row_name( r, name, sizeof(name) );
+    size_text( r->bytes, size, sizeof(size) );
+    /* (the row's name carries its label already) */
+    snprintf( what, sizeof(what), "%s (%s, %s)", name, size,
+              !_stricmp( r->fstype, "ntfs" ) ? "NTFS" : !_stricmp( r->fstype, "vfat" ) ? "FAT32" : r->fstype );
+    windows = !_stricmp( r->fstype, "ntfs" ) || !_stricmp( r->fstype, "BitLocker" )
+              || has_word_ci( r->label, "windows" ) || !_stricmp( r->label, "OS" );
+    if (windows)
+        snprintf( msg, sizeof(msg),
+                  "%s looks like it holds Windows%s.\n\n"
+                  "If you install Stained Glass OS here, Windows and everything on this partition -- programs, "
+                  "documents, photos -- will be erased, and this copy of Windows will no longer start.\n\n"
+                  "Install here anyway?",
+                  what, !_stricmp( r->fstype, "BitLocker" ) ? " (it is encrypted with BitLocker)" : "" );
+    else
+        snprintf( msg, sizeof(msg),
+                  "Everything on %s will be erased.\n\nInstall Stained Glass OS here anyway?", what );
+    log_line( "sg-setup: confirm erase %s%s", name, windows ? " (Windows)" : "" );
+    answer = MessageBoxA( g_main, msg, "Stained Glass OS Setup", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 );
+    log_line( "sg-setup: erase %s: %s", name, answer == IDYES ? "yes" : "no" );
+    return answer == IDYES;
+}
+
 static void go_next( void )
 {
     LRESULT k;
@@ -819,7 +876,7 @@ static void go_next( void )
     case P_ACCOUNT: if (account_page_done()) set_page( P_DISK ); break;
     case P_DISK:
         if (g_new_mode) { do_apply_new(); break; }
-        if (IsWindowEnabled( g_next ) && g_sel >= 0) set_page( P_READY );
+        if (IsWindowEnabled( g_next ) && g_sel >= 0 && confirm_erase( &g_row[g_sel] )) set_page( P_READY );
         break;
     case P_READY: start_install(); break;
     case P_INSTALLING: break;

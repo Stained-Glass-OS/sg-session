@@ -1,3 +1,25 @@
+sg-session (0.1.0-270) unstable; urgency=medium
+
+  * Setup never preselects a partition that holds anything. It preselected
+    the largest place Stained Glass OS fits -- on a Windows PC with little
+    unallocated space that was C:, a blind Next away from being formatted.
+    Now: the partition New has just made (empty), else the largest
+    unallocated space it fits in, else nothing -- Next waits until the
+    person chooses ("sg-setup: nothing preselected").
+  * A partition with a file system is installed onto only after a warning
+    that names it (its name, label, size and file system), opening on No,
+    as Windows Setup warns before formatting: "Everything on ... will be
+    erased". One that looks like Windows (NTFS, BitLocker, a Windows or OS
+    label) is said to hold Windows, which would be erased and no longer
+    start. Gates: test/setup-e2e.sh (a Windows PC's drive whose C: is the
+    largest place: never preselected; no unallocated space: nothing
+    selected, Next does nothing; C: chosen: the Windows warning, No stays,
+    Yes goes on; mutants SG_MUTANT_PRESELECT_ANY, SG_MUTANT_NO_ERASE_CONFIRM);
+    sg-image install-test dualtarget (its leftover partition now holds
+    ext4: chosen by hand, warned, answered Yes).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 18 Nov 2026 03:10:00 -0800
+
 sg-session (0.1.0-269) unstable; urgency=medium
 
   * Beside Windows on an MBR disk, on a legacy BIOS PC: Setup installs into

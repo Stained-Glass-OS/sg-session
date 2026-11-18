@@ -11,7 +11,13 @@
 #   - Tab and Shift+Tab move in and out of the license text (it kept Tab;
 #     mutant SG_MUTANT_LICENSE_TAB_TRAP)
 #   - a password typed twice differently is refused, and nothing is installed
-#   - the partitioner preselects the largest place Stained Glass OS fits; New
+#   - the partitioner preselects the largest unallocated space Stained Glass
+#     OS fits in -- never a partition that holds anything, though a Windows
+#     drive's C: is larger (mutant SG_MUTANT_PRESELECT_ANY); with no such
+#     space nothing is selected and Next waits; a partition with a file
+#     system is installed to only after a warning that names it -- as
+#     Windows when it looks like Windows -- is answered Yes (it opens on No;
+#     mutant SG_MUTANT_NO_ERASE_CONFIRM); New
 #     makes a partition of the size typed in the space chosen, and selects it;
 #     Delete, confirmed, deletes the selected partition; nothing else is touched
 #   - Enter on the "Ready to install" page presses Back, where the focus is
@@ -58,7 +64,15 @@ PART /dev/vdz3\t/dev/vdz\t3\t4294967296\t4000000000\tprimary\tntfs\tWindows
 FREE /dev/vdz\t8628224\t43800576\t22425894912
 DISK /dev/vdy\t32212254720\tQEMU HARDDISK\tnone
 FREE /dev/vdy\t2048\t62910464\t32210157568
+DISK /dev/vdx\t128849018880\tQEMU HARDDISK\tgpt
+PART /dev/vdx1\t/dev/vdx\t1\t104857600\t-\tsystem\tvfat\tSYSTEM
+PART /dev/vdx2\t/dev/vdx\t2\t128000000000\t60000000000\tprimary\tntfs\tOS
 ' > "$T/layout"
+# A Windows PC's only drive: its system partition and C:, no unallocated space
+printf 'DISK /dev/vdx\t128849018880\tQEMU HARDDISK\tgpt
+PART /dev/vdx1\t/dev/vdx\t1\t104857600\t-\tsystem\tvfat\tSYSTEM
+PART /dev/vdx2\t/dev/vdx\t2\t128000000000\t60000000000\tprimary\tntfs\tOS
+' > "$T/layout-windows-only"
 cat > "$T/sg-install" <<'EOS'
 #!/bin/sh
 case "$1" in
@@ -241,9 +255,41 @@ w=0; until grep -q 'sg-setup: drivers' "$T/bridge.log" || [ "$w" -gt 30 ]; do sl
 sleep 0.5; shot type-thinkpad
 kill $B 2>/dev/null; wait $B 2>/dev/null
 mv "$T/bridge.log" "$T/bridge-thinkpad.log"
+# A Windows PC with no unallocated space: nothing preselected, Next does
+# nothing; C: chosen by hand asks first (No stays, Yes goes on)
+cp "$T/layout-windows-only" "$T/layout"
+SG_SETUP_RESULT="$T/result4" SG_INSTALLD_SOCK="$SOCK" "$BRIDGE" "wine $EXE" 2>"$T/bridge.log" &
+B=$!
+page welcome; k Return
+page start; k Return
+page license; k shift+Tab; k Tab; k space; k Return
+page type; k Return
+page account
+ty 'Bob Owner'; k Tab; ty bob; k Tab; ty 'right4pass'; k Tab; ty 'right4pass'; k Tab; ty sg-bob
+k Return
+page disk
+w=0; until grep -q 'sg-setup: nothing preselected\|sg-setup: selected' "$T/bridge.log" || [ "$w" -gt 40 ]; do sleep 0.3; w=$((w + 1)); done
+sleep 1; shot disk-windows-only
+k Return; sleep 1                # Next: nothing chosen, nothing happens
+grep -c 'page ready$\|confirm erase' "$T/bridge.log" > "$T/next-without-choice"
+k End                            # C: (Drive 0 Partition 2), by hand
+w=0; until grep -q 'selected Drive 0 Partition 2' "$T/bridge.log" || [ "$w" -gt 40 ]; do sleep 0.3; w=$((w + 1)); done
+sleep 0.5
+k Return                         # Next: the warning
+w=0; until grep -q 'confirm erase' "$T/bridge.log" || [ "$w" -gt 40 ]; do sleep 0.3; w=$((w + 1)); done
+sleep 1; shot erase-warning
+k Return                         # it opens on No
+sleep 1
+grep -c 'page ready$' "$T/bridge.log" > "$T/ready-after-no"
+k Return                         # Next again: the warning again
+w=0; until [ "$(grep -c 'confirm erase' "$T/bridge.log")" -ge 2 ] || [ "$w" -gt 40 ]; do sleep 0.3; w=$((w + 1)); done
+sleep 1; k y                     # Yes
+page ready; shot ready-windows
+kill $B 2>/dev/null; wait $B 2>/dev/null
+mv "$T/bridge.log" "$T/bridge-windows.log"
 EOS
 chmod +x "$T/drive.sh"
-export T SOCK BRIDGE="$BUILD/sg-setup-bridge" EXE="$BUILD/sg-setup64.exe"
+export T SOCK BRIDGE="$BUILD/sg-setup-bridge" EXE="${SG_SETUP_EXE:-$BUILD/sg-setup64.exe}"
 timeout 300 xvfb-run -a -s "-screen 0 1280x800x24" "$T/drive.sh"
 rm -rf "$BUILD/artifacts-setup"; mkdir -p "$BUILD/artifacts-setup"; cp "$T"/*.png "$BUILD/artifacts-setup/" 2>/dev/null
 
@@ -262,6 +308,16 @@ else fail "mismatched passwords reached the disk page"; fi
 if grep -m1 'sg-setup: selected' "$T/bridge-install.log" | grep -q 'selected Drive 1 Unallocated Space$'; then
     pass "the largest place Stained Glass OS fits is preselected"
 else fail "preselection: $(grep 'selected' "$T/bridge-install.log" | head -1)"; fi
+if grep -q 'sg-setup: nothing preselected$' "$T/bridge-windows.log" 2>/dev/null && [ "$(cat "$T/next-without-choice" 2>/dev/null)" = 0 ]; then
+    pass "a Windows PC with no unallocated space: nothing preselected, and Next does nothing until a place is chosen"
+else fail "no unallocated space: $(grep 'selected\|preselected' "$T/bridge-windows.log" 2>/dev/null | head -2) next=$(cat "$T/next-without-choice" 2>/dev/null)"; fi
+if grep -q 'sg-setup: confirm erase Drive 0 Partition 2: OS (Windows)$' "$T/bridge-windows.log" 2>/dev/null \
+        && grep -q 'sg-setup: erase Drive 0 Partition 2: OS: no$' "$T/bridge-windows.log" && [ "$(cat "$T/ready-after-no" 2>/dev/null)" = 0 ]; then
+    pass "C: chosen by hand: a warning that it holds Windows, opening on No -- No stays on the partitioner"
+else fail "erase warning (No): $(grep 'erase' "$T/bridge-windows.log" 2>/dev/null | tr '\n' ' ') ready=$(cat "$T/ready-after-no" 2>/dev/null)"; fi
+if grep -q 'sg-setup: erase Drive 0 Partition 2: OS: yes$' "$T/bridge-windows.log" 2>/dev/null && grep -q 'page ready$' "$T/bridge-windows.log"; then
+    pass "...and Yes goes on to 'Ready to install'"
+else fail "erase warning (Yes): $(grep 'erase\|page ready' "$T/bridge-windows.log" 2>/dev/null | tr '\n' ' ')"; fi
 if grep -qx 'new /dev/vdz 8628224 15728640000' "$T/ops" 2>/dev/null; then pass "New made a 15000 MB partition in the unallocated space it was given"
 else fail "New: $(cat "$T/ops" 2>/dev/null)"; fi
 if grep -q 'selected Drive 0 Partition 4$' "$T/bridge-install.log"; then pass "the new partition is selected after New"

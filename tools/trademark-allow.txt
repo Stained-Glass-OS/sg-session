@@ -6,3 +6,5 @@ setup/sg-oobe.c	the Windows program|\(Windows\)	first-run setup's choice of a br
 setup/sg-setup.c	beside Windows on a PC|beside Windows\. Shrink a Windows partition in Windows' Disk Management	Setup tells where it installs on an MBR disk Microsoft's operating system already uses, and how to make room there (nominative)
 bin/sg-install	beside this Windows	the installer refuses an MBR disk layout of Microsoft's operating system already on the disk (nominative)
 bin/sg-grub-bios	^menuentry 'Windows' --id	GRUB's menu entry that starts Microsoft's operating system already on the disk (nominative), as systemd-boot lists it
+setup/sg-setup.c	looks like it holds Windows|Windows and everything on this partition|this copy of Windows will no longer start	Setup warns that a partition chosen to install onto holds Microsoft's operating system, before erasing it (nominative)
+setup/sg-setup.c	^BitLocker$|^ \(it is encrypted with BitLocker\)$|^ \(Windows\)$	the file system name lsblk reports for a BitLocker volume, the erase warning saying so, and the log tag for a partition that looks like Microsoft's operating system (nominative)
