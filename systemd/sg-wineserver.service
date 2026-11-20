@@ -61,8 +61,12 @@ TimeoutStartSec=5min
 # registry is written out, as wineserver -k does. Left to SIGTERM alone, the
 # USB driver host (winedevice with libusb) outlived the server and held
 # shutdown for the whole 90 s default before its SIGKILL.
-ExecStop=/bin/sh -c '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; timeout 20 wineserver -k'
-TimeoutStopSec=30s
+ExecStop=/bin/sh -c '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; timeout 10 wineserver -k'
+# ...and not 30 s either: after a failed start (no ExecStop then) the services'
+# processes waited out the whole stop timeout, and the restart that followed came
+# after the first-run setup had connected and cut it off (release next15). The
+# server writes the registry out at once; what is left after 15 s is killed.
+TimeoutStopSec=15s
 Restart=on-failure
 RestartSec=5s
 

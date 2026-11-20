@@ -27,6 +27,51 @@ export HOME XDG_RUNTIME_DIR
 SG_WINSTATION='__wineservice_winstation\Default'
 export SG_WINSTATION
 
+# The unit is Type=exec, so this runs as soon as sg-wineserver's script starts
+# -- while it is still stopping and waiting out an old server, before it execs
+# the machine's own. A Wine command run then started a transient server, which
+# took the prefix: the machine's server exited with status 2, the unit stopped
+# (30 s) and restarted, and that restart killed whatever had connected
+# meanwhile -- the first-run setup, in release next15's install gate. So nothing
+# here runs Wine until the unit's main process is the wineserver and holds the
+# prefix: its server directory's lock open, and the socket made.
+sg_wait_machine_server() {
+    [ -n "${MAINPID:-}" ] || return 0      # run by hand: there is no unit to wait for
+    _limit=${SG_SERVER_WAIT:-120}   # sg-wineserver may spend 30 s stopping and 30 s waiting first
+    _start=$(date +%s)
+    while [ $(( $(date +%s) - _start )) -lt "$_limit" ]; do
+        if [ ! -d "/proc/$MAINPID" ]; then
+            sg_log "WARNING: the machine's wineserver (pid $MAINPID) ended before it was up; not starting services"
+            return 1
+        fi
+        if [ -r "/proc/$MAINPID/fd" ] && [ -x "/proc/$MAINPID/fd" ]; then
+            for _fd in "/proc/$MAINPID/fd/"*; do
+                _f=$(readlink "$_fd" 2>/dev/null) || continue
+                case "$_f" in
+                */server-*/lock)
+                    if [ -S "${_f%/lock}/socket" ]; then
+                        sg_log "the machine's wineserver is up after $(( $(date +%s) - _start ))s"
+                        return 0
+                    fi ;;
+                esac
+            done
+        elif [ "$(cat "/proc/$MAINPID/comm" 2>/dev/null)" = wineserver ]; then
+            # its descriptors are not ours to read: the prefix's server socket, where Wine puts it
+            _d=$(printf %x "$(stat -c %d "$SG_PREFIX")"); _i=$(printf %x "$(stat -c %i "$SG_PREFIX")")
+            for _s in "/tmp/.wine-sg-$_d-$_i/server-$_d-$_i/socket" "/tmp/.wine-$(id -u)/server-$_d-$_i/socket"; do
+                if [ -S "$_s" ]; then
+                    sg_log "the machine's wineserver is up after $(( $(date +%s) - _start ))s"
+                    return 0
+                fi
+            done
+        fi
+        sleep 0.2
+    done
+    sg_log "WARNING: the machine's wineserver did not take the prefix within ${_limit}s; not starting services"
+    return 1
+}
+sg_wait_machine_server || exit 1
+
 # Protect the machine registry branches on the running machine server, before
 # any user logs in. See sg_protect_machine_registry.
 sg_log "protecting machine registry branches"

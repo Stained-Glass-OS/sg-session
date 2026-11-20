@@ -126,6 +126,20 @@ sg-wineserver stops any server holding the prefix before it starts. **The
 tell:** `sg-wineserver.service: Main process exited, status=2` at boot, and a
 second `wineserver` without `-p -f` in `pgrep -a wineserver`.
 
+**The second way into the same trap (release next15):** the unit is
+`Type=exec`, so `ExecStartPost=sg-services-start` starts while sg-wineserver's
+script is still stopping and waiting out an old server, before it execs the
+machine's own; sg-services-start's first `wine reg` then started a transient
+server, the machine's exited 2, the failed unit's stop waited out its timeout on
+the services' processes, and the restart ~35 s later cut off the first-run setup,
+which had connected meanwhile (zombie main thread, a reader thread in
+`pipe_read`). sg-services-start now runs no Wine command until `$MAINPID` holds
+the prefix's server lock and the socket exists (bounded, `SG_SERVER_WAIT`,
+default 120 s; it gives up at once, with a log line, if the main process ends),
+and the stop timeout is 15 s. Gate: `test/wineserver-race-test.sh` (`make
+test-wineserver-start`, in `make test`; a main process slow to become the
+server; mutant NOWAIT).
+
 ## The shared system prefix
 
 `sg-prefix-init` marks the prefix with `.sg-system-prefix`, which puts `wine-sg`

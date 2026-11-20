@@ -1,3 +1,14 @@
+sg-session (0.1.0-271) unstable; urgency=medium
+
+  * The Windows system starts reliably at boot: its services were started
+    while the machine's wineserver was still coming up, started a server of
+    their own, and the machine's one could not start; its restart half a
+    minute later cut off the first-run setup (release next15's install
+    test). sg-services-start now waits until the machine's wineserver holds
+    the prefix, and stopping the Windows system takes at most 15 s.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 20 Nov 2026 05:00:00 -0800
+
 sg-session (0.1.0-270) unstable; urgency=medium
 
   * Setup never preselects a partition that holds anything. It preselected

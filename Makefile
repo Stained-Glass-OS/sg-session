@@ -570,6 +570,8 @@ test-calendar-keeper:
 test-wineserver-start:
 	@sh test/wineserver-start-test.sh
 	@! sh test/wineserver-start-test.sh --mutant NOWAIT >/dev/null && echo "PASS  mutant NOWAIT caught"
+	@sh test/wineserver-race-test.sh
+	@! sh test/wineserver-race-test.sh --mutant NOWAIT >/dev/null && echo "PASS  mutant NOWAIT (race) caught"
 
 .PHONY: test-polkit-keeper
 test-polkit-keeper:
