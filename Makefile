@@ -496,7 +496,7 @@ lint:
 		echo "shellcheck not installed; skipping (advisory)"; \
 	fi
 
-test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start test-consent-describe test-greeter-clock
+test: lint test-linuxappenv test-deskcomp-start test-firmware-retry test-session test-notify-helper test-polkit-keeper test-codesign-roots-hook test-calendar-keeper test-wineserver-start test-consent-describe test-greeter-clock test-greeter-fit
 
 # The session's polkit agent and the broker's polkit path, on a private bus
 # with a stand-in polkitd: pkexec's request through the consent (mutants: the
@@ -793,6 +793,10 @@ test-elevate-look:
 	@sh test/elevate-look-test.sh
 
 # The sign-in and lock screens' clock in the region's own way (en-GB, en-US).
+.PHONY: test-greeter-fit
+test-greeter-fit:
+	@sh test/greeter-fit-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]
+
 .PHONY: test-greeter-clock
 test-greeter-clock:
 	@sh test/greeter-clock-test.sh; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ]

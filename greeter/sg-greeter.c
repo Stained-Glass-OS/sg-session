@@ -667,10 +667,83 @@ static void draw_link( HWND hwnd, const DRAWITEMSTRUCT *di )
     }
 }
 
+static HFONT make_font( int height, int weight );
+
+/* The fonts that follow the screen's height. */
+static void make_screen_fonts( void )
+{
+    if (g_font_clock) DeleteObject( g_font_clock );
+    if (g_font_date) DeleteObject( g_font_date );
+    if (g_font_avatar) DeleteObject( g_font_avatar );
+    g_font_clock  = make_font( g_sh * 16 / 100, FW_LIGHT );
+    g_font_date   = make_font( g_sh * 6 / 100, FW_LIGHT );
+    g_font_avatar = make_font( g_sh / 13, FW_LIGHT );
+}
+
+static void place( HWND c, int x, int y, int w, int h )
+{
+    if (c) SetWindowPos( c, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE );
+}
+
+/* Where every control goes on a g_sw x g_sh screen (the same places WinMain
+ * creates them at). */
+static void layout( HWND hwnd )
+{
+    int sw = g_sw, sh = g_sh, cx = sw / 2, cy = sh / 2 - 60, i;
+
+    if (g_sas)
+    {
+        for (i = 0; i < 3; i++) place( GetDlgItem( hwnd, ID_SAS_LOCK + i ), cx - 160, cy - 90 + i * 56, 320, 46 );
+        place( GetDlgItem( hwnd, ID_SAS_CANCEL ), cx - 75, sh - 120, 150, 34 );
+        place( g_power, sw - 72, sh - 72, 48, 48 );
+        return;
+    }
+    place( g_title, cx - 300, cy - 130, 600, 52 );
+    place( g_user_label, cx - 150, cy - 40, 300, 22 );
+    place( g_user, cx - 150, cy - 16, 300, 30 );
+    place( g_prompt, cx - 150, cy + 26, 300, 22 );
+    place( g_secret, cx - 150, cy + 50, 300, 30 );
+    place( g_submit, cx - 150, cy + 94, 300, 32 );
+    place( g_status, cx - 300, cy + 140, 600, 44 );
+    place( g_power, sw - 72, sh - 72, 48, 48 );
+    place( GetDlgItem( hwnd, ID_EASE ), sw - 132, sh - 72, 48, 48 );
+    place( g_other, 24, sh - 76, 220, 52 );
+    for (i = 0; i < g_nlocal; i++) place( g_local_btn[i], 24, sh - 76 - 52 * (g_nlocal - i), 220, 48 );
+}
+
+/* The screen changed size: fill it again. The lock screen is often started
+ * while the monitor is asleep -- a DisplayPort monitor that sleeps leaves the
+ * system altogether, so the lock screen's X server comes up at a stand-in size
+ * -- and the monitor comes back after. Measured once, the lock screen then sat
+ * in the top-left corner of the real screen (David 2026-11-20). Windows'
+ * LogonUI follows display changes the same way. */
+static void fit_screen( HWND hwnd )
+{
+    int sw = GetSystemMetrics( SM_CXSCREEN ), sh = GetSystemMetrics( SM_CYSCREEN );
+
+#ifdef SG_MUTANT_GREETER_FIXED_SIZE
+    return;
+#endif
+    if (sw <= 0 || sh <= 0 || (sw == g_sw && sh == g_sh)) return;
+    g_sw = sw;
+    g_sh = sh;
+    make_screen_fonts();
+    if (g_pattern) { DeleteObject( g_pattern ); g_pattern = NULL; }
+    if (g_bmp_sharp) { DeleteObject( g_bmp_sharp ); g_bmp_sharp = NULL; }
+    if (g_bmp_blur) { DeleteObject( g_bmp_blur ); g_bmp_blur = NULL; }
+    prepare_picture();
+    SetWindowPos( hwnd, NULL, 0, 0, sw, sh, SWP_NOZORDER | SWP_NOACTIVATE );
+    layout( hwnd );
+    InvalidateRect( hwnd, NULL, TRUE );
+}
+
 static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
 {
     switch (msg)
     {
+    case WM_DISPLAYCHANGE:
+        fit_screen( hwnd );
+        break;
     case WM_DRAWITEM:
         if (wp == ID_POWER) { draw_power( (const DRAWITEMSTRUCT *)lp ); return TRUE; }
         if (wp == ID_EASE)
@@ -720,6 +793,8 @@ static LRESULT CALLBACK wndproc( HWND hwnd, UINT msg, WPARAM wp, LPARAM lp )
         paint( hwnd );
         return 0;
     case WM_TIMER:
+        /* and in case the change came with no WM_DISPLAYCHANGE */
+        fit_screen( hwnd );
         if (g_curtain)
         {
             char t[64], d[128];
@@ -798,9 +873,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 
     sw = g_sw = GetSystemMetrics( SM_CXSCREEN );
     sh = g_sh = GetSystemMetrics( SM_CYSCREEN );
-    g_font_clock  = make_font( sh * 16 / 100, FW_LIGHT );
-    g_font_date   = make_font( sh * 6 / 100, FW_LIGHT );
-    g_font_avatar = make_font( sh / 13, FW_LIGHT );
+    make_screen_fonts();
     prepare_picture();
     g_curtain = !(curtain && !strcmp( curtain, "0" )) && !g_sas;
     g_font_link = make_font( 26, FW_NORMAL );
@@ -828,6 +901,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
                                    sw - 72, sh - 72, 48, 48, hwnd, (HMENU)ID_POWER, inst, NULL );
         ShowWindow( hwnd, SW_SHOW );
         UpdateWindow( hwnd );
+        SetTimer( hwnd, 1, 1000, NULL );   /* fit_screen */
         SetFocus( GetDlgItem( hwnd, ID_SAS_LOCK ) );
         CloseHandle( CreateThread( NULL, 0, reader_thread, hwnd, 0, NULL ) );
         send_line( "HELLO" );

@@ -1,3 +1,13 @@
+sg-session (0.1.0-272) unstable; urgency=medium
+
+  * The lock screen fills the screen again when the screen changes size:
+    started while a sleeping monitor was disconnected, it came up at a
+    stand-in size and stayed in the top-left corner when the monitor came
+    back (David 2026-11-20). The greeter follows WM_DISPLAYCHANGE, and
+    checks every second, as Windows' LogonUI does. Gate test-greeter-fit.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 20 Nov 2026 08:14:22 -0800
+
 sg-session (0.1.0-271) unstable; urgency=medium
 
   * The Windows system starts reliably at boot: its services were started
