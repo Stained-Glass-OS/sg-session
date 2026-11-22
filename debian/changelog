@@ -1,3 +1,20 @@
+sg-session (0.1.0-275) unstable; urgency=medium
+
+  * The touch keyboard types a character no key gives (an e with an accent)
+    into a Linux program reliably, also when the program is busy: sg-xtype
+    maps a spare key code to it, and put the map back 150 ms after the key.
+    A program reads the key's symbol from the map as the server has it when
+    it gets round to the key press, so a busy one found the key empty again
+    and saw nothing ("no eacute" in xtype-test under make lint's load). The
+    spare keys in use are now listed on the root window and emptied 2 s
+    later by a detached child of the last sg-xtype to use one. xtype-test
+    stops xev while the keys go in (fails before; 0 of 10 under load now,
+    3 of 10 before), uses a display of its own number (never -displayfd: in
+    a private network namespace it took :0 and unlinked the host's X0
+    socket), and make lint runs mutant XTYPE_REVERT_AT_ONCE.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 22 Nov 2026 15:10:46 -0800
+
 sg-session (0.1.0-274) unstable; urgency=medium
 
   * Tests can no longer power off or restart the computer they run on:

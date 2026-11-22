@@ -438,6 +438,9 @@ lint:
 	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
 	@sh test/greeter-ease-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine, the PE builds or sg-shell's)
 	@sh test/xtype-test.sh || [ $$? -eq 77 ]
+	@$(CC) $(CFLAGS_BRIDGE) -DSG_MUTANT_XTYPE_REVERT_AT_ONCE -o build/sg-xtype-mut greeter/sg-xtype.c -lX11 -lXtst && \
+	 SG_XTYPE=build/sg-xtype-mut sh test/xtype-test.sh >/dev/null 2>&1; rc=$$?; rm -f build/sg-xtype-mut; \
+	 [ $$rc -ne 0 ] || { echo "xtype-test: the mutant XTYPE_REVERT_AT_ONCE passed"; exit 1; }
 	@sh test/greeter-lastuser-test.sh || [ $$? -eq 77 ]
 	@sh test/live-autologin-test.sh || [ $$? -eq 77 ]
 	@! SG_BRIDGE_CFLAGS=-DSG_MUTANT_AUTOLOGIN_NO_ANSWER sh test/live-autologin-test.sh >/dev/null
