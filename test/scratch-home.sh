@@ -35,6 +35,10 @@ if [ -z "${SG_GATE_HOME:-}" ]; then
     export XDG_RUNTIME_DIR
     unset WAYLAND_DISPLAY DISPLAY
 fi
+# A Windows program that listens tells the firewall (wine-sg 1500), and the firewall asks the
+# person on their desktop. A gate's probes must never do that (David 2026-11-21: prompts popped
+# up from an agent's gate sweep). Gates that test the notice set their own SG_FIREWALL_NOTIFY.
+export SG_FIREWALL_NOTIFY="$SG_GATE_HOME/no-firewall-notify"
 # sg_prefix_safe PREFIX: fail when any folder of PREFIX's user profiles
 # resolves outside the prefix and the gate's HOME (an old prefix made on the
 # real HOME). Gates that reuse a prefix call it before starting Wine.
