@@ -1,3 +1,14 @@
+sg-session (0.1.0-274) unstable; urgency=medium
+
+  * Tests can no longer power off or restart the computer they run on:
+    test/scratch-home.sh points SG_POWERCTL at a helper that does not exist,
+    so Shut down or Restart from a test's Windows program runs nothing. An
+    agent's gate run powered David's desktop off twice (shutdown-gate's
+    relative-path check fell back to the real sg-settingsctl). Gates that
+    test shutting down set their own stand-in, as before.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 22 Nov 2026 13:59:04 -0800
+
 sg-session (0.1.0-273) unstable; urgency=medium
 
   * Tests: Windows programs a test starts no longer ask the firewall, so an

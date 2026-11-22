@@ -39,6 +39,11 @@ fi
 # person on their desktop. A gate's probes must never do that (David 2026-11-21: prompts popped
 # up from an agent's gate sweep). Gates that test the notice set their own SG_FIREWALL_NOTIFY.
 export SG_FIREWALL_NOTIFY="$SG_GATE_HOME/no-firewall-notify"
+# Shut down / Restart from a Windows program (ExitWindowsEx, InitiateSystemShutdown, shutdown.exe) runs
+# SG_POWERCTL, else sg-session's /usr/bin/sg-settingsctl, which asks logind -- as the person running the
+# gate, that powers off the real PC (David's desktop went down twice, 2026-11-21/22, from shutdown-gate
+# in an agent's sweep). A path that does not exist: nothing is run. Gates that test it set their own.
+export SG_POWERCTL="$SG_GATE_HOME/no-power-helper"
 # sg_prefix_safe PREFIX: fail when any folder of PREFIX's user profiles
 # resolves outside the prefix and the gate's HOME (an old prefix made on the
 # real HOME). Gates that reuse a prefix call it before starting Wine.
