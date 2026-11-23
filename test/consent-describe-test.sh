@@ -10,6 +10,14 @@
 #  5. one of the system's own programs: "Publisher: Stained Glass (part of the system)"
 #  6. msiexec /i <package>: the package is what is checked
 #  7. a Linux program (pkexec): no publisher line
+#  8. the command line as sg-brokerd shows it (broker/sg-describe.h) and the prompt then shows it:
+#     wine-sg 8400's /sg-raw-args: marker is not shown, quotes are quotes (they were "?"), a
+#     program path with blanks is quoted (and still checked), a quote in the program's name is not
+#     taken. Mutants SG_MUTANT_DESCRIBE_MARKER, SG_MUTANT_DESCRIBE_QUOTES (broker) and
+#     SG_MUTANT_CONSENT_RAW_PROGRAM (prompt: Wine's \" shown) must fail 8.
+#  9. one of Stained Glass's own programs in /usr/libexec/stained-glass (SG Store's elevated uninstall
+#     step): "Publisher: Stained Glass (part of the system)"; mutant SG_MUTANT_CONSENT_LIBEXEC_UNKNOWN.
+#     Only where the machine has one (sg-shell's sg-store64.exe).
 # Mutant SG_MUTANT_CONSENT_TRUSTS_UNSIGNED (an unsigned program shown as verified) must fail 2.
 # A check that takes 6 s (SG_CONSENT_TEST_VERIFY_DELAY_MS) still ends verified; mutant
 # SG_MUTANT_CONSENT_SHORT_WAIT (the old 4 s limit) must not.
@@ -32,7 +40,7 @@ RC=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; RC=1; }
 cd "$T" || exit 1
-L="-lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi"
+L="-lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi -lshell32"
 "$MINGW" -O2 -mwindows -Wall -o consent.exe "$HERE/greeter/sg-consent.c" $L || { echo "FAIL  build"; exit 1; }
 "$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_TRUSTS_UNSIGNED -o mutant.exe "$HERE/greeter/sg-consent.c" $L || exit 1
 "$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_SHORT_WAIT -o mutant-wait.exe "$HERE/greeter/sg-consent.c" $L || exit 1
@@ -121,6 +129,48 @@ out=$(desc consent.exe 'msiexec.exe /i C:\gate\pkg.msi /qn')
 out=$(desc consent.exe '/usr/sbin/gsmartcontrol')
 [ "$(v "$out" name)" = "gsmartcontrol" ] && [ -z "$(v "$out" publisher)" ] \
     && pass "a Linux program: no publisher line" || fail "linux: $out"
+# 8. the command line, from sg-brokerd's text to the prompt's "Program location"
+printf '#include <stdio.h>\n#include "sg-describe.h"\nint main(int c, char **v){char o[256];(void)c;describe_program(v + 1, o, sizeof(o));puts(o);return 0;}\n' > describe.c
+for m in "" DESCRIBE_MARKER DESCRIBE_QUOTES; do
+    cc -O2 -Wall -I"$HERE/broker" ${m:+-DSG_MUTANT_$m} -o "describe$m" describe.c || { echo "FAIL  build describe$m"; exit 1; }
+done
+"$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_RAW_PROGRAM -o mutant-raw.exe "$HERE/greeter/sg-consent.c" $L || exit 1
+RAWPROG='Z:\usr\libexec\stained-glass\sg-control64.exe'
+RAWARGS='/admin firewall-allow public "Z:\home\a b\WinBox.exe" "RouterOS management tool"'
+WANT="$RAWPROG $RAWARGS"
+shown() { "./describe${1:-}" wine "$RAWPROG" "/sg-raw-args:$RAWARGS"; }
+loc() { w "$1" /describe "$2" | sed -n 's/^location //p' | head -1; }
+[ "$(shown)" = "$WANT" ] && [ "$(loc consent.exe "$(shown)")" = "$WANT" ] \
+    && pass "the real command line: no /sg-raw-args: marker, quotes as written" || fail "raw args: broker '$(shown)' prompt '$(loc consent.exe "$(shown)")'"
+out=$("./describe" wine 'C:\Program Files\Gate Tool\gate tool.exe' '/D=C:\x y' /S)
+WANT2='"C:\Program Files\Gate Tool\gate tool.exe" "/D=C:\x y" /S'
+[ "$out" = "$WANT2" ] && [ "$(v "$(desc consent.exe "$out")" publisher)" = "Verified publisher: SG Gate Publisher" ] \
+    && pass "a program path with blanks: quoted, and still the file that is checked" || fail "quoted path: '$out'"
+out=$("./describe" wine 'C:\gate\signed.exe" C:\gate\unsigned.exe' /S)
+[ "$out" = '"C:\gate\signed.exe? C:\gate\unsigned.exe" /S' ] \
+    && pass "a quote in the program's name is not taken for one" || fail "quote in name: '$out'"
+[ "$(shown DESCRIBE_MARKER)" != "$WANT" ] && pass "MUTANT DESCRIBE_MARKER: marker shown (gate catches it)" || fail "mutant marker"
+[ "$(shown DESCRIBE_QUOTES)" != "$WANT" ] && pass "MUTANT DESCRIBE_QUOTES: quotes as ? (gate catches it)" || fail "mutant quotes"
+[ "$(loc mutant-raw.exe "$WANT")" != "$WANT" ] && pass "MUTANT CONSENT_RAW_PROGRAM: Wine's quoting shown (gate catches it)" || fail "mutant raw"
+
+# 9. Stained Glass's own programs
+SGSTORE=/usr/libexec/stained-glass/shell/sg-store64.exe
+if [ -f "$SGSTORE" ]; then
+    "$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_LIBEXEC_UNKNOWN -o mutant-libexec.exe "$HERE/greeter/sg-consent.c" $L || exit 1
+    ZSTORE='Z:\usr\libexec\stained-glass\shell\sg-store64.exe'
+    out=$(desc consent.exe "\"$ZSTORE\" --elevated-uninstall-run \"C:\\Program Files\\X\" \"C:\\Program Files\\X\\u.exe\" /S")
+    [ "$(v "$out" publisher)" = "Publisher: Stained Glass (part of the system)" ] \
+        && pass "Stained Glass's own program (SG Store's elevated step): the system's" || fail "libexec: $out"
+    out=$(desc mutant-libexec.exe "\"$ZSTORE\" --elevated-uninstall-run")
+    [ "$(v "$out" publisher)" != "Publisher: Stained Glass (part of the system)" ] \
+        && pass "MUTANT CONSENT_LIBEXEC_UNKNOWN: not the system's (gate catches it)" || fail "mutant libexec: $out"
+    out=$(desc consent.exe 'Z:\var\tmp\sg-store64.exe')
+    [ "$(v "$out" publisher)" != "Publisher: Stained Glass (part of the system)" ] \
+        && pass "a program of that name elsewhere is not the system's" || fail "elsewhere: $out"
+else
+    echo "SKIP  9: no $SGSTORE on this machine"
+fi
+
 # a slow check (a large installer's first read: Dropbox's 300 MB, 5.5 s on
 # qa5) still ends "Verified publisher", as Windows' prompt waits for it
 slow() { env SG_CONSENT_TEST_VERIFY_DELAY_MS=6000 timeout -s KILL 60 "$WINE" "$1" /describe "$2" 2>/dev/null | tr -d '\r'; }

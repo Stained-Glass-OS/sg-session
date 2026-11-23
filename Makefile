@@ -663,7 +663,7 @@ greeter:
 	@mkdir -p build
 	$(MINGW64) -O2 -mwindows -o build/sg-greeter64.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
 	$(MINGW32) -O2 -mwindows -o build/sg-greeter32.exe greeter/sg-greeter.c -lole32 -luuid -lgdi32 -luser32
-	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi
+	$(MINGW64) -O2 -mwindows -Wall -o build/sg-consent64.exe greeter/sg-consent.c -lgdi32 -luser32 -lwintrust -lcrypt32 -lversion -lshlwapi -lshell32
 	python3 setup/make-icon.py build/sg-setup.ico
 	$(MINGW64:gcc=windres) -o build/sg-setup-res.o setup/sg-setup.rc
 	$(MINGW64) -O2 -mwindows -Wall -Wextra -o build/sg-setup64.exe setup/sg-setup.c build/sg-setup-res.o -lcomctl32 -lgdi32 -luser32

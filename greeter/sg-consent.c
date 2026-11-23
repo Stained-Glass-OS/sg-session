@@ -327,9 +327,9 @@ static BOOL program_file( WCHAR *out, DWORD cch )
     return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-/* Is the file one of the system's own programs: in the system folders, or
- * directly in the Windows folder (not in its Temp)? Only an administrator
- * can put a file there. */
+/* Is the file one of the system's own programs: in the system folders,
+ * directly in the Windows folder (not in its Temp), or in Stained Glass's
+ * /usr/libexec/stained-glass? Only an administrator can put a file there. */
 static BOOL is_system_file( const WCHAR *path )
 {
     WCHAR full[MAX_PATH], dir[MAX_PATH], *base = NULL;
@@ -340,6 +340,26 @@ static BOOL is_system_file( const WCHAR *path )
     if ((n = GetSystemDirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
     if ((n = GetSystemWow64DirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
     if ((n = GetWindowsDirectoryW( dir, MAX_PATH )) && !lstrcmpiW( full, dir )) return TRUE;
+#ifndef SG_MUTANT_CONSENT_LIBEXEC_UNKNOWN
+    /* or one of Stained Glass's own programs: /usr/libexec/stained-glass, root's alone (SG Store's
+     * elevated uninstall step, sg-store64.exe --elevated-uninstall-run, said "Publisher: Unknown") */
+    {
+        typedef char * (CDECL *unix_name_t)( const WCHAR * );
+        static const char ours[] = "/usr/libexec/stained-glass/";
+        unix_name_t unix_name = (unix_name_t)(void *)GetProcAddress( GetModuleHandleA( "kernel32.dll" ),
+                                                                     "wine_get_unix_file_name" );
+        char *name;
+        BOOL ret = FALSE;
+
+        base[-1] = '\\';   /* the whole path again */
+        if (unix_name && (name = unix_name( full )))
+        {
+            ret = !strncmp( name, ours, sizeof(ours) - 1 ) && !strstr( name, "/../" );
+            HeapFree( GetProcessHeap(), 0, name );
+        }
+        if (ret) return TRUE;
+    }
+#endif
     return FALSE;
 }
 
@@ -462,6 +482,36 @@ static void describe_program( void )
     else free( d );
 }
 
+/* The program's command, as it was handed over: argument index and those
+ * after it, unescaped as CommandLineToArgvW reads Wine's command line. The
+ * command was cut at its first quote: Wine writes a quote inside an argument
+ * as \", which the prompt then showed (sg-brokerd showed quotes as "?"). */
+static BOOL program_from_argv( int index )
+{
+    WCHAR **argv;
+    int argc, i;
+    size_t n = 0;
+
+#ifdef SG_MUTANT_CONSENT_RAW_PROGRAM
+    return FALSE;
+#endif
+    if (!(argv = CommandLineToArgvW( GetCommandLineW(), &argc ))) return FALSE;
+    if (argc <= index) { LocalFree( argv ); return FALSE; }
+    g_program[0] = 0;
+    for (i = index; i < argc && n + 1 < sizeof(g_program); i++)
+    {
+        int got;
+        if (i > index) g_program[n++] = ' ';
+        got = WideCharToMultiByte( CP_ACP, 0, argv[i], -1, g_program + n, (int)(sizeof(g_program) - n), NULL, NULL );
+        if (got <= 0) break;
+        n += (size_t)got - 1;
+    }
+    g_program[n < sizeof(g_program) ? n : sizeof(g_program) - 1] = 0;
+    LocalFree( argv );
+    if (!g_program[0]) snprintf( g_program, sizeof(g_program), "(unknown program)" );
+    return TRUE;
+}
+
 /* Parse "/consent admin|cred <requester> <program...>". */
 static BOOL parse_cmdline( const char *cmd )
 {
@@ -489,6 +539,8 @@ static BOOL parse_cmdline( const char *cmd )
         memmove( g_program, g_program + 1, n - 2 );
         g_program[n - 2] = 0;
     }
+    /* exe, /consent, mode, requester, program */
+    program_from_argv( 4 );
     return TRUE;
 }
 
@@ -516,9 +568,11 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
             memmove( g_program, g_program + 1, n - 2 );
             g_program[n - 2] = 0;
         }
+        program_from_argv( 2 );   /* exe, /describe, program */
         describe_program();
         send_line( "name %s", g_desc.name );
         send_line( "publisher %s", g_desc.publisher );
+        send_line( "location %s", g_program );
         return 0;
     }
     if (!parse_cmdline( cmdline ))

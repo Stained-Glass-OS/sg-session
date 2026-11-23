@@ -38,6 +38,7 @@
 #include <sys/random.h>
 #include <sys/wait.h>
 #include <syslog.h>
+#include "sg-describe.h"
 
 #define MAXFIELD 256
 #define MAXBLOB  65536
@@ -760,23 +761,7 @@ static int find_surface(uid_t uid, struct surface *sf)
     return find_surface_in(uid, sf, 0);
 }
 
-/* What the prompt shows as the program. The requester chose every byte of it,
- * so it is shown, never trusted: control characters and quotes are replaced,
- * and it is cut short rather than allowed to push the real text off the panel. */
-static void describe_program(char **argv, char *out, size_t max)
-{
-    size_t n = 0;
-    int i = (!strcmp(argv[0], "wine") && argv[1]) ? 1 : 0;
-    out[0] = 0;
-    for (; argv[i] && n + 1 < max; i++) {
-        const char *p;
-        if (n && n + 1 < max) out[n++] = ' ';
-        for (p = argv[i]; *p && n + 1 < max; p++)
-            out[n++] = ((unsigned char)*p < 0x20 || *p == 0x7f || *p == '"') ? '?' : *p;
-    }
-    out[n] = 0;
-    if (n > 200) strcpy(out + 197, "...");
-}
+/* What the prompt shows as the program: sg-describe.h */
 
 struct consent_ui { pid_t pid; int to, from; };
 

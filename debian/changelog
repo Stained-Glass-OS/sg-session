@@ -1,3 +1,25 @@
+sg-session (0.1.0-279) unstable; urgency=medium
+
+  * The permission prompt shows the real command line. It showed wine-sg
+    8400's internal "/sg-raw-args:" marker, and every quote as "?"
+    (sg-control64's firewall-allow: "/sg-raw-args:/admin firewall-allow
+    public ?Z:\...\WinBox.exe? ?RouterOS management tool?"). sg-brokerd's
+    text of the request (broker/sg-describe.h) now leaves the marker out,
+    keeps quotes, and quotes an argument with blanks as the program gets it;
+    a quote inside the program's own name is still shown as "?", so nothing
+    after it can pass for part of it. sg-consent.exe reads that text as one
+    argument (CommandLineToArgvW) instead of cutting Wine's quoting by hand,
+    which left \" in it. Stained Glass's own programs in
+    /usr/libexec/stained-glass (SG Store's elevated uninstall step) show
+    "Publisher: Stained Glass (part of the system)", not "Unknown". Who is
+    asked, the prompt's input and its timeout are unchanged. Gate
+    consent-describe-test.sh (cases 8, 9); mutants
+    SG_MUTANT_DESCRIBE_MARKER, SG_MUTANT_DESCRIBE_QUOTES,
+    SG_MUTANT_CONSENT_RAW_PROGRAM, SG_MUTANT_CONSENT_LIBEXEC_UNKNOWN.
+    Verified on qa5 (a runas with quoted arguments, Mixxx's MSI, SG Store).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 23 Nov 2026 08:05:00 -0800
+
 sg-session (0.1.0-278) unstable; urgency=medium
 
   * Security: every user's TEMP is the user's own again (multi-user debt
