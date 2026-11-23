@@ -902,6 +902,12 @@ sg_systemroot_temp() {
 # single link: never through a link, never a file a person planted (wine-sg
 # 1475 moves those aside). Nothing else reads them: people reach their HKCU
 # through the server. Safe while the server runs (a mode, not the content).
+# The machine's hive, system.reg, too (wine-sg 9101): on Windows the
+# SOFTWARE and SYSTEM hive files are SYSTEM's and Administrators', and people
+# read HKLM through the registry, key by key as each key's descriptor
+# allows. Root's readers (sg-firewall's daemon, sg-location, run by
+# sg-admind and the package scripts) keep reading it; userdef.reg, the
+# Default User template, stays readable (Windows' Default profile is).
 # Echoes the files it closed.
 #   sg_hive_private PREFIX
 sg_hive_private() {
@@ -909,9 +915,52 @@ sg_hive_private() {
     _hp=$1
     [ -d "$_hp" ] || return 0
     _ho=$(stat -c %u "$_hp" 2>/dev/null) || return 0
+    _hm=system.reg
+    [ "${SG_MUTANT_SYSTEM_HIVE_OPEN:-}" = 1 ] && _hm=user-none.reg
     find "$_hp" -mindepth 1 -maxdepth 1 -type f -links 1 \( -uid "$_ho" -o -uid 0 \) -perm /077 \
-        \( -name 'user-*.reg' -o -name user.reg -o -name 'reg*.tmp' -o -name '*.reg.sg-temp-repair' \) \
+        \( -name 'user-*.reg' -o -name user.reg -o -name 'reg*.tmp' -o -name '*.reg.sg-temp-repair' -o -name "$_hm" \) \
         -print -exec chmod go= {} + 2>/dev/null || :
+    return 0
+}
+
+# The SYSTEM account's profile, C:\users\<system>, is SYSTEM's alone, as
+# Windows' %SystemRoot%\System32\config\systemprofile is (David 2026-11-23).
+# It was 2775 in the Wine group: every person could read SYSTEM's settings
+# and files and put their own among them -- in AppData, which programs run as
+# SYSTEM (services, the Store's and the first-run setup's installs) read and
+# load from. Nothing of a person's needs it: an elevated program is the
+# elevating person, with their profile (wine-sg 7601), runs as the SYSTEM
+# account on disk and keeps its access; people's own hives name only their
+# own profile; the one machine-wide setting that named it, Common Favorites,
+# is each person's own Favorites (wine-sg 9102, as on Windows). The profile
+# root is closed to group and others (no ACL entries), which closes all of
+# it; SYSTEM's Temp is made so too (sg_system_temp_private). What another
+# account put anywhere in it is moved aside where it is
+# (.untrusted.<time>.<name>, said in the log), so no SYSTEM program finds it
+# by its name; never removed. C:\users\SYSTEM, Wine's own empty cache
+# folders for the SYSTEM name, likewise.
+#   sg_system_profile_private DRIVE_C SYSTEM_USER
+sg_system_profile_private() {
+    [ "${SG_MUTANT_SYSTEM_PROFILE_OPEN:-}" = 1 ] && { sg_system_temp_private "$@"; return 0; }
+    _pp="$1/users/$2"
+    if [ ! -d "$_pp" ] || [ -L "$_pp" ]; then return 0; fi
+    _pu=$(id -u "$2" 2>/dev/null) || return 0
+    case "$(stat -c %u "$_pp" 2>/dev/null)" in "$_pu"|0) ;; *) return 0 ;; esac
+    chmod go= "$_pp" 2>/dev/null || :
+    command -v setfacl >/dev/null 2>&1 && setfacl -b "$_pp" 2>/dev/null
+    if [ -d "$1/users/SYSTEM" ] && [ ! -L "$1/users/SYSTEM" ] && [ "$(stat -c %u "$1/users/SYSTEM")" = "$_pu" ]; then
+        chmod go= "$1/users/SYSTEM" 2>/dev/null || :
+        command -v setfacl >/dev/null 2>&1 && setfacl -b "$1/users/SYSTEM" 2>/dev/null
+    fi
+    # what other accounts put there: the top-most of theirs, wherever it is
+    find "$_pp" -xdev -mindepth 1 -name '.untrusted.*' -prune -o \( ! -uid "$_pu" ! -uid 0 \) -prune -print 2>/dev/null |
+    while IFS= read -r _px; do
+        _pn=${_px##*/} _pw=$(stat -c %U "$_px" 2>/dev/null)
+        if mv -f -- "$_px" "${_px%/*}/.untrusted.$(date +%s).$_pn" 2>/dev/null; then
+            sg_log "moved aside '$_px' ($_pw's), another account's file in SYSTEM's profile"
+        fi
+    done
+    sg_system_temp_private "$@"
     return 0
 }
 

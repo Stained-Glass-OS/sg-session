@@ -1,3 +1,29 @@
+sg-session (0.1.0-281) unstable; urgency=medium
+
+  * Security: the SYSTEM account's profile and the machine's registry
+    hive are closed to people, as on Windows (David 2026-11-23).
+    C:\users\<system> was 2775 in the Wine group: every person could read
+    SYSTEM's files and put their own among them, in the AppData that
+    programs run as SYSTEM read and load from. sg_system_profile_private
+    (sg-prefix-init at every boot and update, sg-services-start) closes
+    the profile root to group and others with no ACL entries -- which
+    closes all of it, as Windows' systemprofile is -- and Wine's
+    C:\users\SYSTEM cache folders; what another account put anywhere in it
+    is moved aside where it is (.untrusted.<time>.<name>, logged, never
+    removed). Nothing of a person's needed it: elevated programs are the
+    elevating person with their own profile and run as SYSTEM on disk;
+    people's hives name only their own profiles; Common Favorites, the one
+    machine-wide folder that named it, is each person's own Favorites
+    (wine-sg 9102). system.reg is now closed to others at boot like the
+    people's hives (wine-sg 9101 writes it so); its readers outside the
+    server run as root (sg-firewall's daemon; sg-location, from sg-admind
+    and the package scripts). userdef.reg, the Default User template,
+    stays readable, as Windows' Default profile is. Test
+    hive-private-test, mutants SG_MUTANT_SYSTEM_PROFILE_OPEN and
+    SG_MUTANT_SYSTEM_HIVE_OPEN added.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 23 Nov 2026 10:00:00 -0800
+
 sg-session (0.1.0-280) unstable; urgency=medium
 
   * Security: a person's registry hive and the SYSTEM account's Temp are
