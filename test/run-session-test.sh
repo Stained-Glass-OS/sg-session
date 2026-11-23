@@ -158,8 +158,20 @@ if [ "${SG_TEST_MACHINE_SERVER:-1}" = "1" ]; then
     echo "== starting the machine-level wineserver"
     $RUN "$SG_BIN/sg-wineserver" >"$SG_LOG_DIR/machine.log" 2>&1 &
     MACHINE_PID=$!
-    SG_SERVICES_TIMEOUT=60 $RUN "$SG_BIN/sg-services-start" >"$SG_LOG_DIR/services.log" 2>&1 \
+    # MAINPID, as systemd gives the unit's ExecStartPost: services-start runs no Wine command until
+    # this server holds the prefix. Without it the first "wine reg add" started a transient server
+    # while sg-wineserver was still stopping old ones, sg-wineserver's "wineserver -k" killed that
+    # server before it answered the new process's first request, and the process waited on its
+    # reply pipe for ever (it holds the pipe's write end itself until the reply): the gate hung
+    # for over an hour at this step (2026-11-22; one run in three by hand). Bounded by the clock
+    # as well: a gate must never wait for good.
+    MAINPID=$MACHINE_PID SG_SERVICES_TIMEOUT=60 timeout -k 10 300 $RUN "$SG_BIN/sg-services-start" >"$SG_LOG_DIR/services.log" 2>&1 \
         || echo "   (services.exe did not report ready; continuing)"
+    if ! grep -q "the machine's wineserver is up" "$SG_LOG_DIR/services.log"; then
+        echo "FAIL  sg-services-start did not wait for the machine's wineserver (MAINPID)"
+        sed 's/^/   /' "$SG_LOG_DIR/services.log" | tail -5
+        exit 1
+    fi
 fi
 
 echo "== starting session (display path: $SG_DISPLAY_PATH)"

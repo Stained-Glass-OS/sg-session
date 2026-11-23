@@ -1,3 +1,19 @@
+sg-session (0.1.0-277) unstable; urgency=medium
+
+  * Tests: the session gate (run-session-test.sh) can no longer hang at
+    "starting the machine-level wineserver". It started sg-services-start
+    without MAINPID, so services-start ran Wine at once, while
+    sg-wineserver was still stopping old servers: its "wineserver -k"
+    killed the transient server the first "wine reg add" had just started
+    before that server answered, and the process waited on its reply pipe
+    for good (one run in three by hand; none in six with MAINPID). The gate
+    now passes MAINPID as systemd does, bounds the step at 300 s, and fails
+    when services-start did not wait for the machine's server. Proven on
+    the host with the services step alone; the full gate runs in a QA VM
+    only (2026-11-22 rule) and is still to be run there.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 22 Nov 2026 19:22:41 -0800
+
 sg-session (0.1.0-276) unstable; urgency=medium
 
   * Tests never use the real seat directory: test/scratch-home.sh exports
