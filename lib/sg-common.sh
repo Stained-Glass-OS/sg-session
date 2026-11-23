@@ -890,6 +890,60 @@ sg_systemroot_temp() {
     return 0
 }
 
+# A person's registry hive file is closed to every other account, as
+# Windows' NTUSER.DAT is (David 2026-11-23). The machine's server writes each
+# user-<uid>.reg (and the prefix owner's user.reg) into the shared prefix; it
+# made them with its umask, 0644, so anyone in the Wine group could read
+# another person's HKCU. wine-sg 9100 makes them 0600 and closes an open one
+# when it loads it; this closes them at every boot (and on an update, which
+# runs sg-prefix-init) whatever server wrote them -- with the server's
+# temporary copies of a hive (reg*.tmp, left by a crash) and the TEMP
+# repair's. Only the machine account's (or root's) own regular files with a
+# single link: never through a link, never a file a person planted (wine-sg
+# 1475 moves those aside). Nothing else reads them: people reach their HKCU
+# through the server. Safe while the server runs (a mode, not the content).
+# Echoes the files it closed.
+#   sg_hive_private PREFIX
+sg_hive_private() {
+    [ "${SG_MUTANT_HIVE_OPEN:-}" = 1 ] && return 0
+    _hp=$1
+    [ -d "$_hp" ] || return 0
+    _ho=$(stat -c %u "$_hp" 2>/dev/null) || return 0
+    find "$_hp" -mindepth 1 -maxdepth 1 -type f -links 1 \( -uid "$_ho" -o -uid 0 \) -perm /077 \
+        \( -name 'user-*.reg' -o -name user.reg -o -name 'reg*.tmp' -o -name '*.reg.sg-temp-repair' \) \
+        -print -exec chmod go= {} + 2>/dev/null || :
+    return 0
+}
+
+# The SYSTEM account's temporary folder in its profile,
+# C:\users\<system>\AppData\Local\Temp -- the TEMP of what runs as SYSTEM
+# (services, the Store's and the first-run setup's installs) -- is SYSTEM's
+# alone, as Windows' is (David 2026-11-23). It was 2775 in the Wine group:
+# every person could read what an installer unpacked there and put files
+# where an installer was about to unpack and run them. An elevated program
+# uses the elevating person's own TEMP (wine-sg 7601, as on Windows), so
+# nothing hands files over through this folder. What other accounts put
+# there before -- people's TEMP named it until sg-session 278 -- is moved
+# aside (.untrusted.<time>.<name>, said in the log), so no SYSTEM program
+# finds it by its name; never removed.
+#   sg_system_temp_private DRIVE_C SYSTEM_USER
+sg_system_temp_private() {
+    [ "${SG_MUTANT_SYSTEM_TEMP_OPEN:-}" = 1 ] && return 0
+    _tt="$1/users/$2/AppData/Local/Temp"
+    if [ ! -d "$_tt" ] || [ -L "$_tt" ]; then return 0; fi
+    chmod 0700 "$_tt" 2>/dev/null || :
+    command -v setfacl >/dev/null 2>&1 && setfacl -b "$_tt" 2>/dev/null
+    _tu=$(id -u "$2" 2>/dev/null) || return 0
+    find "$_tt" -mindepth 1 -maxdepth 1 ! -uid "$_tu" ! -uid 0 ! -name '.untrusted.*' -print 2>/dev/null |
+    while IFS= read -r _tx; do
+        _tn=${_tx##*/} _tw=$(stat -c %U "$_tx" 2>/dev/null)
+        if mv -f -- "$_tx" "$_tt/.untrusted.$(date +%s).$_tn" 2>/dev/null; then
+            sg_log "moved aside '$_tx' ($_tw's), another account's file in SYSTEM's Temp"
+        fi
+    done
+    return 0
+}
+
 # A user's TEMP and TMP name the user's own profile (multi-user debt D15,
 # security). Images built from 2026-11-16 (sg-image 54d96f0, the seed prefix
 # built as root with USER=sgsystem) seeded userdef.reg with the SYSTEM
@@ -918,6 +972,8 @@ sg_hive_temp_repair() {
             [ -n "$_owner" ] || continue ;;
         esac
         _new="$_h.sg-temp-repair"
+        # the hive's content: nobody else's to read, even for a moment (9100)
+        ( umask 077
         awk -v owner="$_owner" '
             /^\[/ { env = ($0 ~ /^\[Environment\]( |$)/) }
             env && /^"(TEMP|TMP)"=(str\(2\):)?"[Cc]:\\\\[Uu][Ss][Ee][Rr][Ss]\\\\/ {
@@ -933,7 +989,7 @@ sg_hive_temp_repair() {
                 }
             }
             { print }
-            END { exit changed ? 0 : 3 }' "$_h" > "$_new" && _rc=0 || _rc=$?
+            END { exit changed ? 0 : 3 }' "$_h" > "$_new" ) && _rc=0 || _rc=$?
         # (set -e callers: a hive with nothing to repair, awk's 3, ended the loop)
         if [ "$_rc" = 0 ]; then
             # the same file (owner, mode, ACL): its content replaced

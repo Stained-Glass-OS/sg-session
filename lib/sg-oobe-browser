@@ -41,7 +41,8 @@ esac
 sg_log "oobe-browser: installing $id"
 # SYSTEM's temporary folder: installers unpack there first (Firefox's did,
 # and failed without it). sg-services-start makes it too; this may run first.
-runuser -u "$SG_SYSTEM_USER" -- mkdir -p "$SG_PREFIX/drive_c/users/$SG_SYSTEM_USER/AppData/Local/Temp" 2>/dev/null
+# SYSTEM's alone (sg_system_temp_private), as on Windows.
+runuser -u "$SG_SYSTEM_USER" -- mkdir -p -m 0700 "$SG_PREFIX/drive_c/users/$SG_SYSTEM_USER/AppData/Local/Temp" 2>/dev/null
 # Get a web browser (sg-shell) installs what it offers -- from the
 # publisher's download in winget's manifests, checked against its SHA-256 --
 # with no window: /install ID. As SYSTEM, which needs no elevation

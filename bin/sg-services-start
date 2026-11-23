@@ -113,6 +113,8 @@ sg_system_temp() {
         AppData/Local/Temp AppData/LocalLow AppData/Roaming \
         Desktop Documents Downloads Music Pictures Videos Favorites Links \
         Contacts Searches "Saved Games") 2>/dev/null || sg_log "could not make the folders of $profile"
+    # ...and its Temp is SYSTEM's alone, as on Windows (from its first boot)
+    sg_system_temp_private "$SG_PREFIX/drive_c" "$(id -un)"
 }
 sg_system_temp
 

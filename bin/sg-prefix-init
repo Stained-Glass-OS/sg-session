@@ -187,6 +187,11 @@ if [ -e "$STAMP" ]; then
     sg_log "prefix already initialized at $SG_PREFIX"
     # first: nothing below may trust what a person put among these files
     sg_shared_state_hardened "$SG_ROOT" "$SG_PREFIX" "$SG_STATE"
+    # each person's registry hive is closed to every other account, as
+    # Windows' NTUSER.DAT is (David 2026-11-23; wine-sg 9100 writes them so)
+    for _f in $(sg_hive_private "$SG_PREFIX"); do
+        sg_log "$(basename "$_f") was open to other accounts: closed to them"
+    done
     repair_empty_system_files
     # Before any Wine starts here (the hives are files only while no server
     # has them); an update that runs this under the machine's server leaves
@@ -227,6 +232,7 @@ if [ -e "$STAMP" ]; then
     sg_dotnet_support "$SG_PREFIX/drive_c"
     sg_mono_support_refresh "$SG_STATE"
     sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
+    sg_system_temp_private "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
     exit 0
 fi
 
@@ -335,6 +341,7 @@ sg_c_root_users "$SG_PREFIX/drive_c" "$SG_WINE_GROUP" "$SG_STATE"
 sg_dotnet_support "$SG_PREFIX/drive_c"
 sg_mono_support_refresh "$SG_STATE"
 sg_systemroot_temp "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
+sg_system_temp_private "$SG_PREFIX/drive_c" "$SG_SYSTEM_USER"
 
 # The prefix is machine state, not user state.
 # MULTIUSER-DEBT: D1 — reduced but not retired. With wine-sg's shared prefix the
@@ -357,5 +364,7 @@ if getent passwd "$SG_USER" >/dev/null 2>&1 || getent passwd "$SG_SYSTEM_USER" >
 fi
 
 sg_shared_state_hardened "$SG_ROOT" "$SG_PREFIX" "$SG_STATE"
+# people's hives are closed to each other (wine-sg 9100 makes them so too)
+sg_hive_private "$SG_PREFIX" >/dev/null
 : > "$STAMP"
 sg_log "prefix initialized"

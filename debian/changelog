@@ -1,3 +1,28 @@
+sg-session (0.1.0-280) unstable; urgency=medium
+
+  * Security: a person's registry hive and the SYSTEM account's Temp are
+    closed to other accounts, as on Windows (David 2026-11-23). Every
+    user-<uid>.reg (and the prefix owner's user.reg) was 0644 in the Wine
+    group, so any account could read any other person's HKCU; SYSTEM's
+    profile Temp was 2775 in the Wine group, so people could read what
+    installers run as SYSTEM unpacked there and put files where they were
+    about to unpack and run them. At every boot (and on an update, which
+    restarts sg-prefix-init) sg_hive_private closes people's hives and the
+    server's temporary copies of one (reg*.tmp, the TEMP repair's) to group
+    and others -- only the machine account's own regular files, never
+    through a link (wine-sg 9100 writes them 0600 from now on);
+    sg_system_temp_private makes C:\users\<system>\AppData\Local\Temp 0700
+    with no ACL entries and moves what other accounts left there aside
+    (.untrusted.<time>.<name>, logged, never removed); sg-services-start
+    and the first-run browser install make it that way. An elevated
+    program keeps using the elevating person's own TEMP (wine-sg 7601, as
+    on Windows), so nothing handed files over through SYSTEM's Temp. The
+    TEMP repair's working copy of a hive is made 0600. Test
+    hive-private-test (in lint), mutants SG_MUTANT_HIVE_OPEN and
+    SG_MUTANT_SYSTEM_TEMP_OPEN.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 23 Nov 2026 09:00:00 -0800
+
 sg-session (0.1.0-279) unstable; urgency=medium
 
   * The permission prompt shows the real command line. It showed wine-sg

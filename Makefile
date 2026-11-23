@@ -341,6 +341,9 @@ lint:
 	@sh test/xdg-profile-test.sh
 	@sh test/hive-temp-test.sh
 	@! SG_MUTANT_TEMP_REPAIR_OFF=1 sh test/hive-temp-test.sh >/dev/null 2>&1
+	@sh test/hive-private-test.sh
+	@! SG_MUTANT_HIVE_OPEN=1 sh test/hive-private-test.sh >/dev/null 2>&1
+	@! SG_MUTANT_SYSTEM_TEMP_OPEN=1 sh test/hive-private-test.sh >/dev/null 2>&1
 	@sh test/shell-supervisor-test.sh
 	@sh test/desktop-follow-test.sh
 	@sh test/update-prepare-test.sh
