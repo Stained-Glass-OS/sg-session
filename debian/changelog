@@ -1,3 +1,21 @@
+sg-session (0.1.0-278) unstable; urgency=medium
+
+  * Security: every user's TEMP is the user's own again (multi-user debt
+    D15). Images built since 2026-11-16 seeded the Default User profile
+    with the SYSTEM account's literal C:\users\sgsystem\AppData\Local\Temp:
+    the seed prefix is built as root with USER=sgsystem, and sg-prefix-init
+    replaced only paths under "id -un". Every account made since, and
+    every elevated program, shared that one group-writable folder -- a
+    user could put files where an elevated installer unpacks and runs
+    them, and read the others' temporary files. The seed now replaces the
+    profile named by USER too, and at each boot, before Wine starts,
+    sg-prefix-init repairs userdef.reg and each user's hive: a TEMP or TMP
+    in [Environment] naming another account's profile becomes
+    %USERPROFILE%\AppData\Local\Temp (a user's own literal path is kept).
+    Test hive-temp-test (in lint), mutant SG_MUTANT_TEMP_REPAIR_OFF.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 22 Nov 2026 20:20:00 -0800
+
 sg-session (0.1.0-277) unstable; urgency=medium
 
   * Tests: the session gate (run-session-test.sh) can no longer hang at

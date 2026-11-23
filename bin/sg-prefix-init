@@ -188,6 +188,14 @@ if [ -e "$STAMP" ]; then
     # first: nothing below may trust what a person put among these files
     sg_shared_state_hardened "$SG_ROOT" "$SG_PREFIX" "$SG_STATE"
     repair_empty_system_files
+    # Before any Wine starts here (the hives are files only while no server
+    # has them); an update that runs this under the machine's server leaves
+    # it to the next boot. Users' TEMP that names another account (D15).
+    if ! sg_machine_wineserver_up; then
+        for _f in $(sg_hive_temp_repair "$SG_PREFIX"); do
+            sg_log "TEMP and TMP in $(basename "$_f") named another account's profile: they are the user's own again"
+        done
+    fi
     # If Wine was upgraded, the prefix is stale and Wine updates it inside
     # whatever process starts it first. Start one here -- at boot, as the
     # machine account, with the Mono/Gecko prompts suppressed -- rather than
@@ -285,11 +293,18 @@ if [ "${SG_SYSTEM_PREFIX:-1}" = "1" ]; then
         # name, drops the Shell Folders cache (shell32 rebuilds it from the
         # %USERPROFILE%-relative User Shell Folders) and the per-session
         # Volatile Environment (wineboot writes it at each session's start).
-        _me=$(id -un)
+        # The profile is named after USER when it is set (the image build runs
+        # this as root with USER=sgsystem, sg-image 54d96f0): only "id -un"
+        # was replaced, and every image since 2026-11-16 seeded the SYSTEM
+        # account's literal TEMP into every new user (D15 again, security).
+        _me=${USER:-$(id -un)}
+        _id=$(id -un)
         sed -e '/^\[Volatile Environment\]/,/^$/d' \
             -e '/^\[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Explorer\\\\Shell Folders\]/,/^$/d' \
             -e "s/=\"C:\\\\\\\\users\\\\\\\\$_me\([\\\\\"]\)/=str(2):\"%USERPROFILE%\\1/g" \
             -e "s/:\"C:\\\\\\\\users\\\\\\\\$_me\([\\\\\"]\)/:\"%USERPROFILE%\\1/g" \
+            -e "s/=\"C:\\\\\\\\users\\\\\\\\$_id\([\\\\\"]\)/=str(2):\"%USERPROFILE%\\1/g" \
+            -e "s/:\"C:\\\\\\\\users\\\\\\\\$_id\([\\\\\"]\)/:\"%USERPROFILE%\\1/g" \
             "$_hive" > "$SG_PREFIX/userdef.reg.new"
         mv -f "$SG_PREFIX/userdef.reg.new" "$SG_PREFIX/userdef.reg"
         _left=$(grep -ci "users\\\\\\\\$_me\\b" "$SG_PREFIX/userdef.reg" || true)

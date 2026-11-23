@@ -890,6 +890,60 @@ sg_systemroot_temp() {
     return 0
 }
 
+# A user's TEMP and TMP name the user's own profile (multi-user debt D15,
+# security). Images built from 2026-11-16 (sg-image 54d96f0, the seed prefix
+# built as root with USER=sgsystem) seeded userdef.reg with the SYSTEM
+# account's literal C:\users\sgsystem\AppData\Local\Temp: sg-prefix-init
+# turned only paths under "id -un" (root) into %USERPROFILE%. Every account
+# made since inherited it, so the users and elevated (SYSTEM) programs shared
+# one group-writable temporary folder -- another user could put files where an
+# elevated installer was about to unpack and run them, and read each other's
+# temporary files. In the Default User template (userdef.reg) and each user's
+# hive (user-<uid>.reg), a TEMP or TMP in [Environment] that names another
+# account's profile becomes %USERPROFILE%\AppData\Local\Temp, as Windows' own
+# default is; a user's own literal path is kept (Windows writes those too),
+# and so is anything that is not a profile path. Only while no wineserver has
+# the hives (sg-prefix-init, before it starts Wine): the server writes its own
+# copy back over an edited file. Echoes the files it changed.
+#   sg_hive_temp_repair PREFIX
+sg_hive_temp_repair() {
+    for _h in "$1"/userdef.reg "$1"/user-*.reg; do
+        [ -f "$_h" ] || continue
+        case "$_h" in
+        */userdef.reg) _owner= ;;
+        *)  _uid=${_h##*/user-}; _uid=${_uid%.reg}
+            case "$_uid" in ''|*[!0-9]*) continue ;; esac
+            _owner=$(getent passwd "$_uid" 2>/dev/null | cut -d: -f1)
+            # an account that no longer exists: its hive is nobody's to repair
+            [ -n "$_owner" ] || continue ;;
+        esac
+        _new="$_h.sg-temp-repair"
+        awk -v owner="$_owner" '
+            /^\[/ { env = ($0 ~ /^\[Environment\]( |$)/) }
+            env && /^"(TEMP|TMP)"=(str\(2\):)?"[Cc]:\\\\[Uu][Ss][Ee][Rr][Ss]\\\\/ {
+                name = $0
+                sub(/^"(TEMP|TMP)"=(str\(2\):)?"[Cc]:\\\\[Uu][Ss][Ee][Rr][Ss]\\\\/, "", name)
+                sub(/[\\"].*$/, "", name)
+                # SG_MUTANT_TEMP_REPAIR_OFF (the gate mutant): nothing is repaired
+                if (ENVIRON["SG_MUTANT_TEMP_REPAIR_OFF"] == "" && (owner == "" || tolower(name) != tolower(owner))) {
+                    v = $0; sub(/=.*$/, "", v)
+                    print v "=str(2):\"%USERPROFILE%\\\\AppData\\\\Local\\\\Temp\""
+                    changed = 1
+                    next
+                }
+            }
+            { print }
+            END { exit changed ? 0 : 3 }' "$_h" > "$_new" && _rc=0 || _rc=$?
+        # (set -e callers: a hive with nothing to repair, awk's 3, ended the loop)
+        if [ "$_rc" = 0 ]; then
+            # the same file (owner, mode, ACL): its content replaced
+            cat "$_new" > "$_h" && echo "$_h"
+        fi
+        rm -f "$_new"
+    done
+    return 0
+}
+
 # The words while a session starts (sg-compositor's backdrop, sg-shell's
 # gen-backdrop.py): "Getting things ready" at a person's first sign-in, when
 # the profile is being made, "Welcome" after (the default file) -- as Windows
