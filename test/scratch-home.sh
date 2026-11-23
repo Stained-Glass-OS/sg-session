@@ -44,6 +44,11 @@ export SG_FIREWALL_NOTIFY="$SG_GATE_HOME/no-firewall-notify"
 # gate, that powers off the real PC (David's desktop went down twice, 2026-11-21/22, from shutdown-gate
 # in an agent's sweep). A path that does not exist: nothing is run. Gates that test it set their own.
 export SG_POWERCTL="$SG_GATE_HOME/no-power-helper"
+# A test session's compositor binds its lock and control sockets under SG_SEAT_DIR, which sg-common.sh
+# defaults to the REAL /run/stained-glass-seat/seat0: run as the person, it replaced their live session's
+# sockets and left their locked desktop unlockable (David, 2026-11-22, run-session-test.sh). Its own here.
+export SG_SEAT_DIR="$SG_GATE_HOME/seat/seat0"
+mkdir -p "$SG_SEAT_DIR"
 # sg_prefix_safe PREFIX: fail when any folder of PREFIX's user profiles
 # resolves outside the prefix and the gate's HOME (an old prefix made on the
 # real HOME). Gates that reuse a prefix call it before starting Wine.

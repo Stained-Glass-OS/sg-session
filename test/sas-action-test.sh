@@ -2,6 +2,9 @@
 # sg-sas-action: the Ctrl+Alt+Del screen's Task Manager and Sign out, run in
 # the session by sg-compositor. A stand-in wine records what it was asked.
 set -u
+# Never the real seat directory (/run/stained-glass-seat/seat0): a test session's compositor would replace
+# the person's live session sockets (2026-11-22). A seat directory of this test's own.
+SG_SEAT_DIR=$(mktemp -d "${TMPDIR:-/var/tmp}/sg-seat.XXXXXX")/seat0; mkdir -p "$SG_SEAT_DIR"; export SG_SEAT_DIR
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT INT TERM
 pass() { echo "PASS  $*"; }

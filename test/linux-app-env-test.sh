@@ -23,6 +23,9 @@
 # the package gstreamer-plugin-pipewire" (Debian's package does not ask for it).
 # sg-session depends on it. Mutant: SG_CONTROL naming a control without it.
 set -u
+# Never the real seat directory (/run/stained-glass-seat/seat0): a test session's compositor would replace
+# the person's live session sockets (2026-11-22). A seat directory of this test's own.
+SG_SEAT_DIR=$(mktemp -d "${TMPDIR:-/var/tmp}/sg-seat.XXXXXX")/seat0; mkdir -p "$SG_SEAT_DIR"; export SG_SEAT_DIR
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 RC=0
 pass() { echo "PASS  $*"; }

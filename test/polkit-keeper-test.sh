@@ -6,6 +6,9 @@
 # sign-in. Not restarted with the shell: it does not talk to the shell.
 #   --mutant NOKEEP  the keeper without it (must FAIL)
 set -u
+# Never the real seat directory (/run/stained-glass-seat/seat0): a test session's compositor would replace
+# the person's live session sockets (2026-11-22). A seat directory of this test's own.
+SG_SEAT_DIR=$(mktemp -d "${TMPDIR:-/var/tmp}/sg-seat.XXXXXX")/seat0; mkdir -p "$SG_SEAT_DIR"; export SG_SEAT_DIR
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 F="$HERE/lib/sg-run-explorer"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT

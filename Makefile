@@ -437,6 +437,7 @@ lint:
 	@sh test/windows-file-test.sh
 	@sh test/greeter-selectall-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine or the PE build)
 	@sh test/greeter-ease-test.sh || [ $$? -eq 77 ]   # 77: skipped (no X, Wine, the PE builds or sg-shell's)
+	@mkdir -p build; [ build/sg-xtype -nt greeter/sg-xtype.c ] || $(CC) $(CFLAGS_BRIDGE) -o build/sg-xtype greeter/sg-xtype.c -lX11 -lXtst
 	@sh test/xtype-test.sh || [ $$? -eq 77 ]
 	@$(CC) $(CFLAGS_BRIDGE) -DSG_MUTANT_XTYPE_REVERT_AT_ONCE -o build/sg-xtype-mut greeter/sg-xtype.c -lX11 -lXtst && \
 	 SG_XTYPE=build/sg-xtype-mut sh test/xtype-test.sh >/dev/null 2>&1; rc=$$?; rm -f build/sg-xtype-mut; \

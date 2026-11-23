@@ -1,3 +1,16 @@
+sg-session (0.1.0-276) unstable; urgency=medium
+
+  * Tests never use the real seat directory: test/scratch-home.sh exports
+    SG_SEAT_DIR into the test's own home, and the six session tests that
+    start a compositor without it make a seat directory of their own. A
+    test session (run-session-test.sh) had replaced David's live session's
+    lock and control sockets, and his locked desktop could not be unlocked
+    (2026-11-22). sg-compositor sg79 also refuses to take over a live one.
+    make lint rebuilds build/sg-xtype when its source is newer, so
+    xtype-test never runs a stale build.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sun, 22 Nov 2026 18:23:41 -0800
+
 sg-session (0.1.0-275) unstable; urgency=medium
 
   * The touch keyboard types a character no key gives (an e with an accent)
