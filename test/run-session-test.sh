@@ -44,8 +44,14 @@ cleanup() {
         systemctl --user stop "$SLICE" 2>/dev/null || true
     fi
     reap_stale_wine "$SG_PREFIX" >/dev/null 2>&1 || true
+    # The HOME scratch-home.sh made for this run (the session's runtime directory is in it): one was
+    # left in /var/tmp per run (nine after nine runs on qa4, 2026-11-23).
+    rm -rf "$SG_GATE_HOME"
     exit "$rc"
 }
+# Until cleanup takes over (after the prefix is ready), an early exit -- a SKIP, a failed stage --
+# still removes that HOME.
+trap 'rm -rf "$SG_GATE_HOME"' EXIT
 
 # Stale Wine processes from an earlier run are the single most misleading
 # thing that can happen here. A persistent wineserver left over from a

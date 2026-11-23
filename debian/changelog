@@ -1,3 +1,12 @@
+sg-session (0.1.0-282) unstable; urgency=medium
+
+  * Tests: run-session-test.sh removes the HOME test/scratch-home.sh made
+    for it when it ends, also on an early exit (a SKIP, a failed stage).
+    One sg-gate-home.* was left in /var/tmp per run (nine after nine runs
+    of the end-to-end proof of 0.1.0-277 on qa4: 9/9 PASS, none hung).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 23 Nov 2026 12:30:00 -0800
+
 sg-session (0.1.0-281) unstable; urgency=medium
 
   * Security: the SYSTEM account's profile and the machine's registry
