@@ -1,3 +1,13 @@
+sg-session (0.1.0-284) unstable; urgency=medium
+
+  * test/scratch-home.sh: a gate no longer reaches the person's session bus
+    (DBUS_SESSION_BUS_ADDRESS under /run/user is replaced with a dead path), as
+    wine-sg's scratch-home.sh already does: Wine's Unix side used it for the
+    keyring, media controls and screen saver (census run, 2026-11-24).
+    A bus the gate starts itself is kept.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 24 Nov 2026 10:04:23 -0800
+
 sg-session (0.1.0-283) unstable; urgency=medium
 
   * Permission prompt: a long "Program location" lost its file name at the
