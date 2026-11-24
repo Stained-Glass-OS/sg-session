@@ -1,3 +1,12 @@
+sg-session (0.1.0-285) unstable; urgency=medium
+
+  * test/hive-temp-test.sh: run as root (the package build in CI), the user's
+    own hive and the hive with nothing to repair were both user-0.reg and one
+    overwrote the other (3 FAILs, sg-image CI red since 0.1.0-278); as root it
+    now uses another existing account's uid for the user's hive.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 24 Nov 2026 10:16:21 -0800
+
 sg-session (0.1.0-284) unstable; urgency=medium
 
   * test/scratch-home.sh: a gate no longer reaches the person's session bus

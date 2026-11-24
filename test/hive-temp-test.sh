@@ -16,6 +16,13 @@ fail() { echo "FAIL  $*"; RC=1; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/sg-hivetemp.XXXXXX")
 trap 'rm -rf "$T"' EXIT INT TERM
 ME=$(id -un); UID_=$(id -u)
+# user-0.reg below is the hive with nothing to repair. Run as root (the package build in CI), the
+# user's own hive would be user-0.reg too and one overwrote the other: the user's hive is then
+# another account's that exists (any non-root one: the function looks the owner up by uid).
+if [ "$UID_" = 0 ]; then
+    UID_=$(getent passwd | awk -F: '$3 > 0 { print $3; exit }')
+    ME=$(getent passwd "$UID_" | cut -d: -f1)
+fi
 cat > "$T/userdef.reg" <<'R'
 WINE REGISTRY Version 2
 
