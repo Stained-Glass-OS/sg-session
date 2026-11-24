@@ -18,6 +18,8 @@
 #  9. one of Stained Glass's own programs in /usr/libexec/stained-glass (SG Store's elevated uninstall
 #     step): "Publisher: Stained Glass (part of the system)"; mutant SG_MUTANT_CONSENT_LIBEXEC_UNKNOWN.
 #     Only where the machine has one (sg-shell's sg-store64.exe).
+# 10. a long "Program location" fits its box by losing the middle of its path, never the file name (as
+#     Windows' prompt); mutant SG_MUTANT_CONSENT_NO_ELIDE.
 # Mutant SG_MUTANT_CONSENT_TRUSTS_UNSIGNED (an unsigned program shown as verified) must fail 2.
 # A check that takes 6 s (SG_CONSENT_TEST_VERIFY_DELAY_MS) still ends verified; mutant
 # SG_MUTANT_CONSENT_SHORT_WAIT (the old 4 s limit) must not.
@@ -170,6 +172,34 @@ if [ -f "$SGSTORE" ]; then
 else
     echo "SKIP  9: no $SGSTORE on this machine"
 fi
+
+# 10. a long "Program location" gives way in the middle of its path, never at the file name
+#     (Notepad++'s installer from Temp showed "...005a389a\np"); mutant SG_MUTANT_CONSENT_NO_ELIDE
+"$MINGW" -O2 -mwindows -Wall -DSG_MUTANT_CONSENT_NO_ELIDE -o mutant-noelide.exe "$HERE/greeter/sg-consent.c" $L || exit 1
+NPP='C:\users\gate\AppData\Local\Temp\nsu7F3A.tmp\9b1f8a7c-2d3e-4f5a-8b6c-7d8e9f0a1b2c\Installer Cache\extracted\x64\8d4c2b1a-0e9f-4a3b-b2c1-d0e9f8a7b6c5\005a389a\npp.8.6.9.Installer.x64.exe'
+shownloc() { w "$1" /describe "$2" | sed -n 's/^shown //p' | head -1; }
+out=$(shownloc consent.exe "$NPP")
+case "$out" in
+    'Program location: C:\'*'\...\'*'\npp.8.6.9.Installer.x64.exe') pass "a long path: its middle gives way, the file name stays" ;;
+    *) fail "long path shown as '$out'" ;;
+esac
+[ ${#out} -lt ${#NPP} ] && pass "  ... and it is shorter than the path" || fail "long path not shortened"
+out=$(shownloc consent.exe "\"$NPP\" /S")
+case "$out" in
+    'Program location: "C:\'*'\...\'*'\npp.8.6.9.Installer.x64.exe" /S') pass "quoted, with an argument: the argument stays too" ;;
+    *) fail "quoted long path shown as '$out'" ;;
+esac
+out=$(shownloc consent.exe "msiexec.exe /i ${NPP%.exe}.msi /qn")
+case "$out" in
+    'Program location: msiexec.exe /i C:\'*'\...\'*'\npp.8.6.9.Installer.x64.msi /qn') pass "msiexec /i: the package's path gives way, msiexec and the package's name stay" ;;
+    *) fail "msiexec long path shown as '$out'" ;;
+esac
+out=$(shownloc consent.exe 'C:\gate\signed.exe /S')
+[ "$out" = 'Program location: C:\gate\signed.exe /S' ] && pass "a short one: as it is" || fail "short shown as '$out'"
+out=$(shownloc consent.exe 'C:\a&b\x.exe')
+[ "$out" = 'Program location: C:\a&b\x.exe' ] && pass "an & in a path: shown as it is" || fail "ampersand shown as '$out'"
+out=$(shownloc mutant-noelide.exe "$NPP")
+case "$out" in *'\...\'*) fail "mutant no-elide not caught: '$out'" ;; *) pass "MUTANT CONSENT_NO_ELIDE: whole path, cut by the box (gate catches it)" ;; esac
 
 # a slow check (a large installer's first read: Dropbox's 300 MB, 5.5 s on
 # qa5) still ends "Verified publisher", as Windows' prompt waits for it

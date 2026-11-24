@@ -1,3 +1,15 @@
+sg-session (0.1.0-283) unstable; urgency=medium
+
+  * Permission prompt: a long "Program location" lost its file name at the
+    bottom of its box (Notepad++'s installer from a Temp folder showed
+    "...005a389a\np"). As Windows' prompt does, the middle of the path now
+    gives way ("C:\users\...\Temp\...\npp.8.6.9.Installer.x64.exe"),
+    an argument's path too (msiexec /i <package>); the program's file name
+    is never cut, and an "&" in a path is no longer taken for a mnemonic.
+    Gate: test-consent-describe item 10 (mutant SG_MUTANT_CONSENT_NO_ELIDE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Mon, 23 Nov 2026 17:30:00 -0800
+
 sg-session (0.1.0-282) unstable; urgency=medium
 
   * Tests: run-session-test.sh removes the HOME test/scratch-home.sh made

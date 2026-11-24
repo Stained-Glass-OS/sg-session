@@ -544,6 +544,160 @@ static BOOL parse_cmdline( const char *cmd )
     return TRUE;
 }
 
+/* "Program location: <command>" in its box (LOC_W x LOC_H, wrapped as the
+ * label wraps it). A long one used to be cut at the box's bottom edge --
+ * Notepad++'s installer from a Temp folder showed "...005a389a\np", without
+ * its file name. As Windows' prompt does, the middle of a path gives way
+ * ("C:\Users\...\Temp\npp.8.6.Installer.x64.exe"); the program's file name is
+ * never cut. Each argument's path gives way too (msiexec /i <package>); only
+ * when every folder is gone do trailing arguments end in "...". */
+#define LOC_W (PANEL_W - 48)
+#define LOC_H 56
+#define LOC_FMT (DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX | DT_EXPANDTABS)
+#define LOC_PREFIX "Program location: "
+
+struct loc_piece { const char *s; int len; BOOL dir, elided; int token; };
+
+static BOOL loc_fits( HDC dc, const char *text )
+{
+    RECT rc = { 0, 0, LOC_W, 0 };
+    DrawTextA( dc, text, -1, &rc, LOC_FMT | DT_CALCRECT );
+    return rc.bottom <= LOC_H && rc.right <= LOC_W;
+}
+
+static void loc_render( const struct loc_piece *p, int n, char *out, size_t size )
+{
+    size_t o = 0;
+    int i;
+
+    for (i = 0; i < n; i++)
+    {
+        const char *s = p[i].s;
+        int len = p[i].len;
+        if (p[i].elided)
+        {
+            if (i && p[i - 1].elided) continue;   /* a run of folders is one "..." */
+            s = "...\\";
+            len = 4;
+        }
+        if (o + len + 1 > size) break;
+        memcpy( out + o, s, len );
+        o += len;
+    }
+    out[o] = 0;
+}
+
+/* where the program's own path ends: a quoted one at its quote; an unquoted
+ * one with blanks in it at the end of its ".exe" (as CreateProcess tries it),
+ * else at the first blank */
+static const char *program_end( const char *s )
+{
+    static const char *exts[] = { ".exe", ".com", ".msi", ".bat", ".cmd" };
+    const char *blank = strchr( s, ' ' ), *q;
+    unsigned int i;
+
+    if (*s == '"') return (q = strchr( s + 1, '"' )) ? q + 1 : s + strlen( s );
+    for (q = s; *q; q++)
+        for (i = 0; i < ARRAYSIZE(exts); i++)
+            if (!_strnicmp( q, exts[i], 4 ) && (!q[4] || q[4] == ' ')) return q + 4;
+    return blank ? blank : s + strlen( s );
+}
+
+/* the command shown in the prompt's box, fitted */
+static void fit_location( HDC dc, const char *program, char *out, size_t size )
+{
+    static struct loc_piece p[512];
+    char buf[1200];
+    const char *s = program;
+    int n = 0, token = 0, i;
+
+    snprintf( out, size, LOC_PREFIX "%s", program );
+#ifdef SG_MUTANT_CONSENT_NO_ELIDE
+    return;
+#endif
+    if (loc_fits( dc, out )) return;
+
+    /* tokens (a quoted one whole), each cut at its backslashes: the folders
+     * between the first piece (the drive, "/D=C:") and the last (the file) */
+    while (*s && n < (int)ARRAYSIZE(p) - 2)
+    {
+        const char *end = s, *seg;
+        BOOL quoted = FALSE;
+        if (*s == ' ')
+        {
+            while (*end == ' ') end++;
+            p[n].s = s; p[n].len = (int)(end - s); p[n].dir = p[n].elided = FALSE; p[n++].token = -1;
+            s = end;
+            continue;
+        }
+        if (!token) end = program_end( s );
+        else while (*end && (quoted || *end != ' ')) { if (*end == '"') quoted = !quoted; end++; }
+        token++;
+        for (seg = s; seg < end && n < (int)ARRAYSIZE(p) - 1;)
+        {
+            const char *bs = memchr( seg, '\\', end - seg );
+            const char *next = bs ? bs + 1 : end;
+            p[n].s = seg; p[n].len = (int)(next - seg); p[n].elided = FALSE; p[n].token = token;
+            /* a folder: between the first piece and the file after the last backslash */
+            p[n].dir = bs && seg != s;
+            n++;
+            seg = next;
+        }
+        s = end;
+    }
+
+    /* fold the middle folder of the token with the most folder text left,
+     * until it fits */
+    for (;;)
+    {
+        int best_tok = 0, best_len = 0, t, first, last, count, k, pick = -1, mid;
+        for (t = 1; t <= token; t++)
+        {
+            int len = 0;
+            for (i = 0; i < n; i++) if (p[i].token == t && p[i].dir && !p[i].elided) len += p[i].len;
+            if (len > best_len) { best_len = len; best_tok = t; }
+        }
+        if (!best_tok) break;
+        for (first = -1, last = -1, count = 0, i = 0; i < n; i++)
+            if (p[i].token == best_tok && p[i].dir) { if (first < 0) first = i; last = i; count++; }
+        /* the folder nearest the middle that is still shown */
+        mid = (first + last) / 2;
+        for (k = 0; k <= count && pick < 0; k++)
+        {
+            if (mid - k >= first && p[mid - k].dir && !p[mid - k].elided) pick = mid - k;
+            else if (mid + k <= last && p[mid + k].dir && !p[mid + k].elided) pick = mid + k;
+        }
+        if (pick < 0) break;
+        p[pick].elided = TRUE;
+        memcpy( buf, LOC_PREFIX, sizeof(LOC_PREFIX) - 1 );
+        loc_render( p, n, buf + sizeof(LOC_PREFIX) - 1, sizeof(buf) - sizeof(LOC_PREFIX) + 1 );
+        snprintf( out, size, "%s", buf );
+        if (loc_fits( dc, out )) return;
+    }
+
+    /* still too long: the arguments' end gives way, never the program */
+    {
+        size_t keep = sizeof(LOC_PREFIX) - 1, len = strlen( out );
+        char prog[1200];
+        for (i = 0; i < n && p[i].token == 1; i++) ;   /* the program token, as shown */
+        loc_render( p, i, prog, sizeof(prog) );
+        keep += strlen( prog );
+        snprintf( buf, sizeof(buf), "%s", out );
+        while (len > keep)
+        {
+            len--;
+            snprintf( out, size, "%.*s...", (int)len, buf );
+            if (loc_fits( dc, out )) return;
+        }
+        snprintf( out, size, "%.*s", (int)keep, buf );
+    }
+}
+
+static HFONT location_font( void )
+{
+    return CreateFontA( -15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI" );
+}
+
 int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
 {
     WNDCLASSA wc = {0};
@@ -573,6 +727,15 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
         send_line( "name %s", g_desc.name );
         send_line( "publisher %s", g_desc.publisher );
         send_line( "location %s", g_program );
+        {   /* and as the box shows it, in the box's font */
+            HDC dc = CreateCompatibleDC( NULL );
+            HFONT font = location_font(), old = SelectObject( dc, font );
+            fit_location( dc, g_program, line, sizeof(line) );
+            SelectObject( dc, old );
+            DeleteObject( font );
+            DeleteDC( dc );
+            send_line( "shown %s", line );
+        }
         return 0;
     }
     if (!parse_cmdline( cmdline ))
@@ -595,7 +758,7 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
     g_panel = CreateSolidBrush( COL_PANEL );
     g_accent_br = CreateSolidBrush( COL_ACCENT );
     g_font_big = CreateFontA( -22, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI" );
-    g_font = CreateFontA( -15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI" );
+    g_font = location_font();
     g_font_bold = CreateFontA( -16, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Segoe UI" );
 
     wc.lpfnWndProc = wndproc;
@@ -671,10 +834,18 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show )
             make_label( g_main, g_desc.publisher, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
             y += 24;
         }
-        snprintf( line, sizeof(line), "Program location: %s", g_program );
-        wnd = make_label( g_main, line, px + 24, y, PANEL_W - 48, 56, g_font, 0x7ff );
-        SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL );
-        y += 60;
+        {
+            HDC dc = GetDC( g_main );
+            HFONT old = SelectObject( dc, g_font );
+            fit_location( dc, g_program, line, sizeof(line) );
+            SelectObject( dc, old );
+            ReleaseDC( g_main, dc );
+        }
+        wnd = make_label( g_main, line, px + 24, y, LOC_W, LOC_H, g_font, 0x7ff );
+        /* wrapped as fit_location measured it; a path's "&" is not a mnemonic */
+        SetWindowLongA( wnd, GWL_STYLE, GetWindowLongA( wnd, GWL_STYLE ) | SS_EDITCONTROL | SS_NOPREFIX );
+        InvalidateRect( wnd, NULL, TRUE );
+        y += LOC_H + 4;
         snprintf( line, sizeof(line), "Requested by %s. It will run as an administrator.", g_requester );
         make_label( g_main, line, px + 24, y, PANEL_W - 48, 20, g_font, 0x7ff );
         y += 30;
