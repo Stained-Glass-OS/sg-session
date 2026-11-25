@@ -1,0 +1,40 @@
+#!/bin/sh
+# modprobe's "install nouveau" command (/usr/lib/modprobe.d/sg-nouveau-guard.conf):
+# nouveau is loaded unless it would take the screen away.
+#
+# nouveau removes the firmware's framebuffer (efifb) as it starts and only
+# then loads the firmware its card needs; an NVIDIA Ada card (AD102-AD107,
+# PCI ids 10de:2680-28ff, laptops included) cannot run at all without
+# NVIDIA's GSP firmware (firmware-nvidia-graphics, not in the image), so
+# nouveau failed after the framebuffer was gone: no display of any kind, a
+# black screen after the boot logo (user report 2026-11-25, NVIDIA laptop).
+# Without the firmware, nouveau is not loaded: the framebuffer stays, the
+# login screen and the session draw on it in software (sg-compositor's Basic
+# Display Adapter), and NVIDIA's driver can be installed from there
+# (sudo sg-drivers --install-recommended, or Setup's third-party drivers).
+# With the firmware installed, nouveau loads as usual.
+#
+# Stand-ins for the gate: SG_GUARD_SYSFS (/sys/bus/pci/devices),
+# SG_GUARD_FIRMWARE (/usr/lib/firmware), SG_GUARD_MODPROBE, SG_GUARD_KMSG.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+SYSFS=${SG_GUARD_SYSFS:-/sys/bus/pci/devices}
+FW=${SG_GUARD_FIRMWARE:-/usr/lib/firmware}
+MODPROBE=${SG_GUARD_MODPROBE:-/sbin/modprobe}
+KMSG=${SG_GUARD_KMSG:-/dev/kmsg}
+
+for d in "$SYSFS"/*; do
+    [ "$(cat "$d/vendor" 2>/dev/null)" = 0x10de ] || continue
+    case "$(cat "$d/class" 2>/dev/null)" in 0x03*) ;; *) continue ;; esac
+    id=$(cat "$d/device" 2>/dev/null) || continue
+    n=$(printf '%d' "$id" 2>/dev/null) || continue
+    # Ada: GSP firmware or nothing (nouveau's ad10x)
+    if [ "$n" -ge $((0x2680)) ] && [ "$n" -le $((0x28ff)) ]; then
+        found=""
+        for f in "$FW"/nvidia/ad10*/gsp/gsp-*; do [ -e "$f" ] && { found=1; break; }; done
+        if [ -z "$found" ]; then
+            echo "sg-nouveau-guard: not loading nouveau: the NVIDIA GPU 10de:${id#0x} (${d##*/}) needs NVIDIA's GSP firmware (firmware-nvidia-graphics), which is not installed -- the screen stays on the firmware framebuffer (Basic Display Adapter); install NVIDIA's driver with: sudo sg-drivers --install-recommended" > "$KMSG" 2>/dev/null
+            exit 0
+        fi
+    fi
+done
+exec "$MODPROBE" --ignore-install nouveau "$@"

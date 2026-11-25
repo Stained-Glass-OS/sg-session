@@ -19,6 +19,10 @@ sg_wine_env
 unset SG_WINSTATION
 
 LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
+# Setup, the first-run setup and the login screen all take -s: Ctrl+Alt+F2-F6
+# reach a text console from them, as from a signed-in session (a live boot's
+# Setup had none: no way to a console when its screen was wrong, 2026-11-25).
+#
 # A live boot (the installation media's "live" entry) shows Setup here instead:
 # the machine's first screen is the installer, as with Windows Setup.
 # SG_SETUP=0 shows the login screen anyway.
@@ -30,7 +34,7 @@ LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 if grep -qw systemd.volatile=overlay /proc/cmdline 2>/dev/null && [ "${SG_SETUP:-1}" != 0 ] \
         && [ -x "$LIBEXEC/sg-setup-bridge" ] && [ -f "$LIBEXEC/sg-setup64.exe" ]; then
     result=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/sg-setup-result.XXXXXX") || exit 1
-    SG_SETUP_RESULT="$result" systemd-cat -t sg-setup -- "$SG_COMPOSITOR" -- "$LIBEXEC/sg-setup-bridge" \
+    SG_SETUP_RESULT="$result" systemd-cat -t sg-setup -- "$SG_COMPOSITOR" -s -- "$LIBEXEC/sg-setup-bridge" \
         "env -u WAYLAND_DISPLAY SG_SIGN_IN_SCREEN=1 $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-setup64.exe"
     answer=$(cat "$result" 2>/dev/null)
     rm -f "$result"
@@ -62,7 +66,7 @@ if [ -f "$OOBE_PENDING" ] && [ "${SG_OOBE:-1}" != 0 ] && [ -S "$OOBE_SOCK" ] \
     echo $(( $(cat "$OOBE_TRIES" 2>/dev/null || echo 0) + 1 )) > "$OOBE_TRIES"
     ready="${TMPDIR:-/tmp}/sg-oobe-ready.$(id -u)"
     rm -f "$ready"
-    SG_OOBE_READY="$ready" SG_OOBED_SOCK="$OOBE_SOCK" systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -- \
+    SG_OOBE_READY="$ready" SG_OOBED_SOCK="$OOBE_SOCK" systemd-cat -t sg-oobe -- "$SG_COMPOSITOR" -s -- \
         "$LIBEXEC/sg-setup-bridge" --oobe "env -u WAYLAND_DISPLAY SG_SIGN_IN_SCREEN=1 $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-oobe64.exe" &
     pid=$!
     waited=0

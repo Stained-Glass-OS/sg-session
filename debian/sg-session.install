@@ -13,3 +13,4 @@ systemd/sg-wineserver.service  usr/lib/systemd/system
 tmpfiles/sg-session.conf  usr/lib/tmpfiles.d
 udev/70-stained-glass-devices.rules usr/lib/udev/rules.d
 modprobe/sg-nvidia-kms.conf usr/lib/modprobe.d
+modprobe/sg-nouveau-guard.conf usr/lib/modprobe.d

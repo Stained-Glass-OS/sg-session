@@ -56,6 +56,11 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	@# A start that does not finish shows the boot menu at the next one (sg-boot-health).
 	install -m 0755 bin/sg-boot-health $(BINDIR)
 	install -m 0644 systemd/sg-boot-health.service systemd/sg-boot-ok.service systemd/sg-grub-bless.service systemd/sg-boot-space-retry.service $(UNITDIR)
+	@# The login screen cannot start: a text screen on tty1 says what failed and saves a boot report.
+	install -m 0755 bin/sg-boot-report $(BINDIR)
+	install -m 0644 systemd/sg-boot-report.service $(UNITDIR)
+	@# nouveau is not loaded on an NVIDIA card it cannot run (missing firmware): the framebuffer stays.
+	install -m 0755 lib/sg-nouveau-guard $(LIBDIR)
 	install -D -m 0755 kernel/94-sg-restore-points.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/94-sg-restore-points.install
 	install -m 0755 convert/sg-convert-root $(LIBDIR)
 	install -d $(SHAREDIR)/convert-initramfs/hooks $(SHAREDIR)/convert-initramfs/scripts/local-premount
@@ -429,6 +434,10 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-boot-report
+	@sh -n lib/sg-nouveau-guard
+	@sh test/nouveau-guard-test.sh >/dev/null || { sh test/nouveau-guard-test.sh; exit 1; }
+	@! sh test/nouveau-guard-test.sh --mutant >/dev/null 2>&1 || { echo "nouveau-guard-test: mutant passed"; exit 1; }
 	@python3 test/sysinfo-test.py
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-audit
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' speech/sg-dictate

@@ -1,3 +1,34 @@
+sg-session (0.1.0-287) unstable; urgency=medium
+
+  * When the graphical login cannot start, tty1 now says so (sg-boot-report,
+    sg-boot-report.service), the way Windows shows what failed after a bad
+    start: the unit and its last log lines, the graphics found (lspci, the
+    driver bound, the firmware framebuffer, DRM devices), how to reach a
+    text console and sign in, and one key to save a full boot report
+    (journal, dmesg, lspci -nnk, the compositor's and X logs, sg-live-iso's
+    lines, failed units) as a .tar.gz on the boot medium when it can be
+    written (a Ventoy stick: next to the .iso), else on any FAT, exFAT or
+    NTFS stick -- the path is shown. Uploading is a separate key: it shows
+    exactly what would be sent, says it will be public, and sends only on a
+    typed "yes" for that report (sg-shell's sg-bugreport-send, which
+    replaces the account and computer names). R starts the login screen
+    again. `sudo sg-boot-report screen|save` by hand. User report
+    2026-11-25 ("a way of reporting boot issues").
+  * Setup and the first-run setup start their compositor with -s, as the
+    login screen and the session do: Ctrl+Alt+F2-F6 reach a text console
+    from a live boot's first screen (there was no way to one).
+  * sg-nouveau-guard (modprobe install hook): nouveau is not loaded on an
+    NVIDIA Ada card (10de:2680-28ff) whose GSP firmware is missing. nouveau
+    removed the firmware framebuffer and then failed for want of the
+    firmware: no display at all, a black screen after the boot logo (user
+    report, NVIDIA laptop). Now the framebuffer stays, the login screen and
+    the desktop draw on it (sg-compositor's Basic Display Adapter), and
+    NVIDIA's driver installs from there (sg-drivers). Gate
+    test/nouveau-guard-test.sh (in lint) with a mutant; sg-image
+    basic-display-test covers the screen, the console and the report.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 24 Nov 2026 20:00:00 -0800
+
 sg-session (0.1.0-286) unstable; urgency=medium
 
   * test/nvidia-driver-test.sh: the pin check by real apt needs apt-ftparchive

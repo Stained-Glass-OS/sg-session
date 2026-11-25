@@ -1,0 +1,428 @@
+#!/usr/bin/python3
+# sg-boot-report -- when the graphical login cannot start, say so on the
+# screen and offer to collect a boot report: what Windows does after a failed
+# start (what failed, and a report to send).
+#
+#   sg-boot-report watch    (sg-boot-report.service, root) follows this boot's
+#                           log: when the login screen's compositor failed to
+#                           start SG_BOOTREPORT_FAILS (3) times within two
+#                           minutes, or greetd itself failed, it stops greetd
+#                           (which keeps taking the screen back) and shows the
+#                           screen below on tty1. R starts the login screen
+#                           again and the watch goes on.
+#   sg-boot-report screen   the screen itself, on the terminal it is run from
+#                           (`sudo sg-boot-report screen` from a console).
+#   sg-boot-report save     collect the report and save it (as S does); prints
+#                           where it went.
+#
+# The screen: what failed (the unit, its last log lines), the graphics found
+# (lspci, the driver bound, the firmware framebuffer), how to reach a text
+# console and sign in, and one key each to
+#   S  save a full boot report: this boot's journal, lspci -nnk, dmesg, the
+#      compositor's and X server's logs, sg-live-iso's lines, the failed
+#      units -- as one .tar.gz on the boot medium when it can be written (a
+#      Ventoy stick: next to the .iso file), otherwise on any FAT, exFAT or
+#      NTFS stick plugged in; the path is shown;
+#   U  upload a summary to the project's server (freesoft.page, public), only
+#      after showing exactly what would be sent and a yes for this report --
+#      never by itself (sg-shell's sg-bugreport-send, which also replaces the
+#      account and computer names);
+#   R  try the login screen again.
+#
+# Stand-ins for the gate: SG_BOOTREPORT_TTY (/dev/tty1), SG_BOOTREPORT_FAILS,
+# SG_BOOTREPORT_SEND (the uploader).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
+import fcntl
+import json
+import os
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tarfile
+import termios
+import time
+import tty
+
+TTY = os.environ.get("SG_BOOTREPORT_TTY", "/dev/tty1")
+FAILS = int(os.environ.get("SG_BOOTREPORT_FAILS", "3"))
+WINDOW = 120
+SEND = os.environ.get("SG_BOOTREPORT_SEND", "/usr/libexec/stained-glass/shell/sg-bugreport-send")
+WORK = "/run/sg-boot-report"
+GREETER_TAGS = ("sg-setup", "sg-login", "sg-oobe")
+FAIL_RX = re.compile(r"Unable to create the wlroots (backend|renderer|allocator)|Unable to start the wlroots backend"
+                     r"|Failed to open any DRM device|cannot create backend")
+START_FAIL_RX = re.compile(r"Unable to (create|start) the wlroots")
+VT_ACTIVATE, VT_WAITACTIVE, KDSETMODE, KD_TEXT = 0x5606, 0x5607, 0x4B3A, 0x00
+KDSKBMODE, K_UNICODE = 0x4B45, 0x03
+
+
+def run(cmd, timeout=60):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"({' '.join(cmd)}: {e})\n"
+
+
+def live():
+    try:
+        with open("/proc/cmdline") as f:
+            return "sg.live=" in f.read()
+    except OSError:
+        return False
+
+
+# --- what failed -------------------------------------------------------------------
+def greeter_log(lines=5):
+    out = run(["journalctl", "-b", "--no-pager", "-o", "cat"] + sum((["-t", t] for t in GREETER_TAGS), []))
+    rel = []
+    for l in out.splitlines():
+        if "ERROR" in l or "error" in l or "Failed" in l or "cannot" in l:
+            l = re.sub(r"^\d\d:\d\d:\d\d\.\d+ ", "", l)  # wlroots' own clock
+            if l in rel:
+                rel.remove(l)
+            rel.append(l)
+    return rel[-lines:]
+
+
+def graphics():
+    """[(description, driver or None)] for each display controller, and the framebuffer"""
+    gpus = []
+    cur = None
+    for line in run(["lspci", "-nnk"]).splitlines():
+        if line and not line[0].isspace():
+            cur = None
+            if re.search(r"\[03[0-9a-f]{2}\]", line):
+                cur = [line.strip(), None]
+                gpus.append(cur)
+        elif cur is not None and "Kernel driver in use:" in line:
+            cur[1] = line.split(":", 1)[1].strip()
+    try:
+        with open("/proc/fb") as f:
+            fb = f.read().strip()
+    except OSError:
+        fb = ""
+    drm = sorted(n for n in os.listdir("/dev/dri")) if os.path.isdir("/dev/dri") else []
+    return gpus, fb, drm
+
+
+def summary(reason):
+    gpus, fb, drm = graphics()
+    who = ('as "live", with no password (just press Enter)' if live()
+           else "with your account and password")
+    out = []
+    out.append("Stained Glass OS could not start its graphical login screen.")
+    out.append("")
+    out.append("What failed: " + reason)
+    for l in greeter_log():
+        out.append("  " + l[:150])
+    out.append("")
+    out.append("Graphics found:")
+    for desc, drv in gpus or [("no display controller found by lspci", "")]:
+        out.append("  " + desc[:150])
+        out.append("    driver: " + (drv or "none (no driver for this card is loaded)"))
+    out.append("  firmware framebuffer: " + (fb.replace("\n", "; ") if fb else "none"))
+    out.append("  DRM devices: " + (" ".join(drm) if drm else "none"))
+    for l in run(["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "--grep", "sg-nouveau-guard|sg-live-iso"]).splitlines()[-4:]:
+        out.append("  " + l[:150])
+    out.append("")
+    out.append("A text console: press Ctrl+Alt+F2 and sign in " + who + ";")
+    out.append("sudo works there. Ctrl+Alt+F1 comes back to this screen.")
+    return out
+
+
+# --- the report ---------------------------------------------------------------------
+def collect(reason):
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = f"sg-boot-report-{stamp}"
+    d = os.path.join(WORK, name)
+    os.makedirs(d, exist_ok=True)
+    parts = {
+        "summary.txt": "\n".join(summary(reason)) + "\n",
+        "journal.txt": run(["journalctl", "-b", "--no-pager", "-o", "short-precise"], 180),
+        "dmesg.txt": run(["dmesg"]),
+        "lspci.txt": run(["lspci", "-nnk"]),
+        "failed-units.txt": run(["systemctl", "--failed", "--no-pager"]) + "\n"
+        + run(["systemctl", "status", "--no-pager", "-l", "greetd.service", "sg-basic-display.service"]),
+        "compositor.txt": run(["journalctl", "-b", "--no-pager", "-o", "short-precise"]
+                              + sum((["-t", t] for t in GREETER_TAGS + ("sg-session",)), [])),
+        "sg-live-iso.txt": run(["journalctl", "-b", "--no-pager", "-o", "short-precise", "--grep", "sg-live-iso"]),
+        "display.txt": "\n".join([open("/proc/fb").read() if os.path.exists("/proc/fb") else "no /proc/fb",
+                                  run(["ls", "-l", "/dev/dri", "/dev/fb0"]),
+                                  run(["sh", "-c", "for c in /sys/class/drm/card*; do echo $c $(readlink $c/device/driver); done"])]),
+        "system.txt": "\n".join([open("/proc/cmdline").read(), run(["uname", "-a"]),
+                                 open("/etc/os-release").read() if os.path.exists("/etc/os-release") else "",
+                                 run(["sh", "-c", "dpkg-query -W 'sg-*' wine-sg 2>/dev/null"]),
+                                 run(["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,LABEL,TRAN,RM,MOUNTPOINTS"])]),
+    }
+    for f in sorted(os.listdir("/var/log")) if os.path.isdir("/var/log") else []:
+        if f.startswith("Xorg.") and f.endswith(".log"):
+            shutil.copy(os.path.join("/var/log", f), os.path.join(d, f))
+    for fname, text in parts.items():
+        with open(os.path.join(d, fname), "w") as f:
+            f.write(text)
+    tgz = d + ".tar.gz"
+    with tarfile.open(tgz, "w:gz") as t:
+        t.add(d, arcname=name)
+    return tgz
+
+
+def lsblk():
+    try:
+        return json.loads(run(["lsblk", "-J", "-p", "-o", "NAME,FSTYPE,TYPE,TRAN,RM,MOUNTPOINT,PKNAME"]))["blockdevices"]
+    except (ValueError, KeyError):
+        return []
+
+
+def flat(devs):
+    for d in devs:
+        yield d
+        yield from flat(d.get("children") or [])
+
+
+def medium_dir():
+    """(mountpoint, directory) of the .iso file's partition when booted from a
+    multiboot stick (Ventoy): sg-live-iso keeps it under /run/initramfs/sg-host"""
+    out = run(["losetup", "-n", "-l", "-O", "BACK-FILE"])
+    for f in out.split():
+        if f.startswith("/run/initramfs/sg-host/") and f.lower().endswith(".iso"):
+            mp = "/".join(f.split("/")[:5])
+            return mp, os.path.dirname(f)
+    return None, None
+
+
+def save(tgz):
+    """the place it was saved, or None"""
+    base = os.path.basename(tgz)
+    mp, where = medium_dir()
+    if mp and subprocess.run(["mount", "-o", "remount,rw", mp]).returncode == 0:
+        try:
+            shutil.copy(tgz, os.path.join(where, base))
+            os.sync()
+            return os.path.join(where, base).replace(mp, "the boot stick:", 1)
+        except OSError:
+            pass
+        finally:
+            subprocess.run(["mount", "-o", "remount,ro", mp])
+    medium_disks = set()
+    for d in flat(lsblk()):
+        if d.get("fstype") == "iso9660" or (d.get("mountpoint") or "").startswith("/run/initramfs"):
+            medium_disks.add(d.get("pkname") or d["name"])
+    target = os.path.join(WORK, "mnt")
+    for d in flat(lsblk()):
+        if d.get("type") != "part" and d.get("type") != "disk":
+            continue
+        fs = d.get("fstype")
+        if fs not in ("vfat", "exfat", "ntfs") or (d.get("pkname") or d["name"]) in medium_disks:
+            continue
+        mounted = d.get("mountpoint") or ""
+        if mounted.startswith("/run/initramfs") or mounted in ("/efi", "/boot", "/boot/efi"):
+            continue
+        if mounted:  # already mounted (automount): write there
+            try:
+                shutil.copy(tgz, os.path.join(mounted, base))
+                os.sync()
+                return f"{d['name']} ({mounted}): /{base}"
+            except OSError:
+                continue
+        os.makedirs(target, exist_ok=True)
+        if subprocess.run(["mount", "-t", "ntfs3" if fs == "ntfs" else fs, d["name"], target]).returncode != 0:
+            continue
+        try:
+            shutil.copy(tgz, os.path.join(target, base))
+            os.sync()
+            return f"{d['name']}: /{base}"
+        except OSError:
+            pass
+        finally:
+            subprocess.run(["umount", target])
+    if not live():
+        os.makedirs("/var/log/sg-boot-reports", exist_ok=True)
+        shutil.copy(tgz, os.path.join("/var/log/sg-boot-reports", base))
+        return "/var/log/sg-boot-reports/" + base
+    return None
+
+
+def upload_text(tgz):
+    d = tgz[:-len(".tar.gz")]
+    text = ["Stained Glass OS boot report (sg-boot-report)", ""]
+    for f, tail in (("summary.txt", 0), ("system.txt", 0), ("lspci.txt", 0), ("failed-units.txt", 0),
+                    ("sg-live-iso.txt", 0), ("compositor.txt", 200), ("dmesg.txt", 300)):
+        try:
+            with open(os.path.join(d, f), errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            continue
+        if tail:
+            lines = lines[-tail:]
+        text += [f"===== {f}" + (f" (last {tail} lines)" if tail else ""), *lines, ""]
+    return "\n".join(text) + "\n"
+
+
+# --- the screen ------------------------------------------------------------------------
+class Screen:
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
+        if path.startswith("/dev/tty") and path[8:].isdigit():
+            n = int(path[8:])
+            for req, arg in ((VT_ACTIVATE, n), (VT_WAITACTIVE, n), (KDSETMODE, KD_TEXT), (KDSKBMODE, K_UNICODE)):
+                try:
+                    fcntl.ioctl(self.fd, req, arg)
+                except OSError:
+                    pass
+        self.saved = termios.tcgetattr(self.fd)
+
+    def write(self, text):
+        os.write(self.fd, text.replace("\n", "\r\n").encode())
+
+    def key(self, timeout=None):
+        tty.setraw(self.fd)
+        try:
+            r, _, _ = select.select([self.fd], [], [], timeout)
+            return os.read(self.fd, 16).decode(errors="replace") if r else ""
+        finally:
+            termios.tcsetattr(self.fd, termios.TCSANOW, self.saved)
+
+    def line(self):
+        termios.tcsetattr(self.fd, termios.TCSANOW, self.saved)
+        buf = b""
+        while not buf.endswith(b"\n"):
+            c = os.read(self.fd, 64)
+            if not c:
+                break
+            buf += c
+        return buf.decode(errors="replace").strip()
+
+    def page(self, text, rows=22):
+        lines = text.splitlines()
+        for i in range(0, len(lines), rows):
+            self.write("\033[2J\033[H" + "\n".join(l[:200] for l in lines[i:i + rows]) + "\n")
+            self.write(f"\n-- {min(i + rows, len(lines))} of {len(lines)} lines: any key for more, Q to stop reading --")
+            if self.key().lower() == "q":
+                break
+
+
+def screen(reason, path=TTY, retry=True):
+    s = Screen(path)
+    note = ""
+    tgz = None
+    while True:
+        s.write("\033[2J\033[H" + "\n".join(summary(reason)) + "\n\n")
+        s.write("  S  save a boot report (to the boot stick or a USB stick)\n")
+        s.write("  U  upload a report to the Stained Glass OS project (asks first)\n")
+        if retry:
+            s.write("  R  try the login screen again\n")
+        else:
+            s.write("  Q  quit\n")
+        if note:
+            s.write("\n" + note + "\n")
+        k = s.key().lower()
+        if k == "s":
+            s.write("\nCollecting the report...\n")
+            tgz = collect(reason)
+            where = save(tgz)
+            note = (f"Saved: {where}" if where else
+                    "Not saved: the boot medium cannot be written and no FAT, exFAT or NTFS stick was found.\n"
+                    "Plug in a USB stick and press S again.")
+        elif k == "u":
+            tgz = tgz or collect(reason)
+            text = upload_text(tgz)
+            s.page("This is exactly what would be sent (the account and computer names are replaced).\n"
+                   "It goes to freesoft.page and will be PUBLIC (freesoft.page/reports).\n\n" + text)
+            s.write("\033[2J\033[HSend this report to freesoft.page? It will be public. Type yes to send: ")
+            if s.line().lower() == "yes":
+                if not os.path.exists(SEND):
+                    note = "Not sent: the uploader (sg-bugreport-send) is not installed."
+                else:
+                    plain = tgz[:-len(".tar.gz")] + "-upload.txt"
+                    with open(plain, "w") as f:
+                        f.write(text)
+                    out = plain + ".result"
+                    subprocess.run([SEND, plain, out], timeout=90)
+                    try:
+                        res = open(out).read().strip()
+                    except OSError:
+                        res = "ERROR no answer"
+                    note = (f"Sent: report {res[3:]}" if res.startswith("OK") else
+                            f"Not sent: {res[6:]} (is the network connected? a cable works without setup)")
+            else:
+                note = "Not sent."
+        elif k == "q" and not retry:
+            return "quit"
+        elif k == "r" and retry:
+            s.write("\033[2J\033[HStarting the login screen again...\n")
+            return "retry"
+
+
+def watch():
+    """follow this boot's log; on repeated compositor failures show the screen"""
+    since = 0  # failures from the start of this boot count, the first time
+    while True:
+        fails = []
+        proc = subprocess.Popen(["journalctl", "-b", "-f", "-n", "all", "-o", "json"]
+                                + sum((["-t", t] for t in GREETER_TAGS), []),
+                                stdout=subprocess.PIPE, text=True, errors="replace")
+        reason = None
+        while reason is None:
+            r, _, _ = select.select([proc.stdout], [], [], 10)
+            if r:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                t = int(e.get("__REALTIME_TIMESTAMP", "0")) / 1e6
+                msg = e.get("MESSAGE") or ""
+                if not isinstance(msg, str) or t < since:
+                    continue
+                if START_FAIL_RX.search(msg):
+                    fails = [x for x in fails if x > t - WINDOW] + [t]
+                    if len(fails) >= FAILS:
+                        reason = (f"the login screen's display server (sg-compositor) failed to start "
+                                  f"{len(fails)} times: it found no display it could use.")
+            if reason is None and run(["systemctl", "is-failed", "greetd.service"]).strip() == "failed":
+                reason = "the login screen service (greetd.service) failed."
+        proc.terminate()
+        if reason is None:
+            time.sleep(5)
+            continue
+        print("sg-boot-report: " + reason, file=sys.stderr)
+        subprocess.run(["systemctl", "stop", "greetd.service"])
+        if shutil.which("plymouth"):
+            subprocess.run(["plymouth", "quit"])
+        try:
+            screen(reason)
+        except OSError as e:
+            print(f"sg-boot-report: cannot show the screen on {TTY}: {e}", file=sys.stderr)
+            return 1
+        subprocess.run(["systemctl", "reset-failed", "greetd.service"])
+        subprocess.run(["systemctl", "start", "greetd.service"])
+        since = time.time()
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "screen"
+    if os.geteuid() != 0:
+        print("sg-boot-report: run it as root (sudo sg-boot-report)", file=sys.stderr)
+        return 1
+    if cmd == "watch":
+        return watch()
+    if cmd == "save":
+        tgz = collect("(saved by hand)")
+        where = save(tgz)
+        print(where or f"not saved to a stick; the report is {tgz}")
+        return 0 if where else 1
+    if cmd == "screen":
+        screen("(shown by hand)", path=os.ttyname(0), retry=False)
+        return 0
+    print("usage: sg-boot-report [watch|screen|save]", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

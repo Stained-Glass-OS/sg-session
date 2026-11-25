@@ -1,0 +1,15 @@
+# When the graphical login cannot start, a text screen on tty1 says what
+# failed and offers to save (and, if asked, upload) a boot report
+# (sg-boot-report watch).
+[Unit]
+Description=Stained Glass OS: show what failed when the login screen cannot start
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sg-boot-report watch
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical.target
