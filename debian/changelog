@@ -1,3 +1,12 @@
+sg-session (0.1.0-286) unstable; urgency=medium
+
+  * test/nvidia-driver-test.sh: the pin check by real apt needs apt-ftparchive
+    (apt-utils), which the CI builder lacked (2 FAILs, sg-image CI red after
+    0.1.0-285); apt-utils is now a Build-Depends and the check says SKIP
+    where it is missing.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 00:30:00 +0000
+
 sg-session (0.1.0-285) unstable; urgency=medium
 
   * test/hive-temp-test.sh: run as root (the package build in CI), the user's

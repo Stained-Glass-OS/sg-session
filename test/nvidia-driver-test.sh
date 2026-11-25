@@ -89,6 +89,9 @@ tail -1 "$T/apt.log" | grep -q nvidia-open && fail "at boot, the running NVIDIA 
     || { grep -q "not at boot" "$T/boot.err" && pass "at boot a running NVIDIA driver is left for a run by hand (it says so)" \
         || fail "boot run: $(cat "$T/boot.err")"; }
 
+# apt-ftparchive (apt-utils) makes the stand-in archive's Release; a builder
+# without it (CI before apt-utils was a Build-Depends) skips this part.
+if command -v apt-ftparchive >/dev/null 2>&1; then
 # the pin, by real apt, against the stand-in: only the driver, both
 # architectures (the 32-bit library a game needs among them)
 mkdir -p "$T/root/etc/apt/sources.list.d" "$T/root/etc/apt/preferences.d" \
@@ -106,6 +109,9 @@ cand() { apt-cache $A policy "$1" 2>/dev/null | awk '/Candidate:/ { print $2; ex
     || fail "driver candidates: '$(cand nvidia-driver)' '$(cand libglx-nvidia0)' i386 '$(cand libglx-nvidia0:i386)'"
 [ "$(cand cuda-toolkit)" = "(none)" ] && [ "$(cand dkms)" = "(none)" ] \
     && pass "...and never anything else of it (CUDA, its dkms)" || fail "pinned out: cuda '$(cand cuda-toolkit)' dkms '$(cand dkms)'"
+else
+    echo "SKIP  no apt-ftparchive (apt-utils): the pin not tried by real apt"
+fi
 
 echo
 [ $RC = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
