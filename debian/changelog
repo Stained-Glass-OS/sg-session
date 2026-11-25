@@ -1,3 +1,20 @@
+sg-session (0.1.0-290) unstable; urgency=medium
+
+  * A user's own keyboard layouts, as Windows keeps them per user.
+    sg-settingsctl keyboard says the layouts (the user's own, else the
+    machine's from Setup) and the one typing now; keyboard set LAYOUTS
+    VARIANTS|- OPTIONS|- (Settings > Time & Language > Language) gives them
+    to the running compositor at once (KEYMAP on its control socket,
+    sg-compositor sg82: no signing out) and keeps them in
+    ~/.config/stained-glass/keyboard, which sg-session-start now reads in
+    place of /etc/default/keyboard for that user's session (sg-common.sh
+    sg_user_keyboard_env); the sign-in screen keeps the machine's. Names
+    are checked against XKB's characters, at most four layouts; a refusal
+    by the compositor keeps nothing. Gate: settingsctl-test.py's keyboard
+    section, mutant SG_MUTANT_KBD_MACHINE_ONLY.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 12:15:17 -0800
+
 sg-session (0.1.0-289) unstable; urgency=medium
 
   * The nouveau guard in an installed machine's initrds. nouveau starts in

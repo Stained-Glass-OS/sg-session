@@ -348,6 +348,21 @@ sg_keyboard_env() {
 }
 sg_keyboard_env
 
+# The person's own keyboard layouts, as Windows keeps them per user: Settings >
+# Time & Language > Language writes them (sg-settingsctl keyboard set) and the
+# session's compositor takes them from here at every sign-in (sg-session-start),
+# in place of the machine's from Setup and the first-run setup, which the
+# sign-in screen keeps. True if the user has their own.
+sg_user_keyboard_env() {
+    _ukbd="${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/stained-glass/keyboard"
+    [ -r "$_ukbd" ] && [ -z "${SG_MUTANT_KBD_MACHINE_ONLY:-}" ] || return 1
+    _mkbd="${SG_KEYBOARD_FILE:-}"
+    SG_KEYBOARD_FILE="$_ukbd"
+    sg_keyboard_env
+    if [ -n "$_mkbd" ]; then SG_KEYBOARD_FILE="$_mkbd"; else unset SG_KEYBOARD_FILE; fi
+    return 0
+}
+
 # wlroots' GL renderer on Mesa's software rasteriser -- what a display with
 # no 3D driver gets (a VM's virtio-gpu without virgl, bochs, qxl, simpledrm,
 # server graphics) -- presented stale frames: the first-run setup, Setup and

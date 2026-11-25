@@ -757,6 +757,11 @@ country, known layouts, 0/1 switches, an offered browser) before writing:
   choice never reached the desktop. `sg-common.sh` now exports
   `XKB_DEFAULT_LAYOUT/VARIANT/OPTIONS/MODEL` from it for every compositor
   (login screen, session, and so the lock screen too).
+  A user's own layouts (Settings > Time & Language > Language: `sg-settingsctl
+  keyboard set`, `~/.config/stained-glass/keyboard`) replace the machine's for
+  their session (`sg_user_keyboard_env`, sg-session-start), as Windows keeps
+  keyboards per user; the change also reaches the running compositor at once
+  (KEYMAP on its control socket), no signing out.
 - HKLM as SYSTEM (runuser sgsystem, `reg import`): the device's microphone
   and location ConsentStore switches, `Policies\Microsoft\Windows\DataCollection`
   `AllowTelemetry=0`.

@@ -61,6 +61,10 @@ fi
 # Linux programs through Xwayland, not full screen as native Wayland ones
 sg_linux_app_env
 
+# The person's own keyboard layouts (Settings > Time & Language > Language),
+# for the session's compositor, in place of the machine's.
+sg_user_keyboard_env && sg_log "keyboard layouts: the user's own (${XKB_DEFAULT_LAYOUT:-})"
+
 # An administrator's session (wine-sg 0623): a program whose manifest asks for
 # the highest level available (highestAvailable; NSIS "highest") asks for
 # consent, as Windows does for an administrator; for a standard user it runs

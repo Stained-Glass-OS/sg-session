@@ -940,6 +940,77 @@ check("printers: a disabled queue is stopped", "QUEUE Office\tOffice Laser\tipp:
 code, lines = ctl("printers", "add")
 check("printers: arguments are refused", code == 2, lines)
 
+# ---- keyboard: the user's layouts (Settings > Time & Language > Language) -------------------------
+import socket
+import threading
+
+KCTL = os.path.join(tmp, "ctl.sock")
+asked = []
+answers = {"KEYBOARD": "OK group=1 count=2 layout=us,de variant= options=grp:win_space_toggle"}
+
+
+def fake_compositor():
+    s = socket.socket(socket.AF_UNIX)
+    s.bind(KCTL)
+    s.listen(4)
+    while True:
+        c, _ = s.accept()
+        line = c.recv(700).decode().strip()
+        asked.append(line)
+        reply = answers.get(line) or answers.get(line.split(" ")[0]) or "OK"
+        c.sendall(reply.encode() + b"\n")
+        c.close()
+
+
+threading.Thread(target=fake_compositor, daemon=True).start()
+while not os.path.exists(KCTL):
+    time.sleep(0.05)
+machine = os.path.join(tmp, "default-keyboard")
+with open(machine, "w") as f:
+    f.write('XKBMODEL="pc105"\nXKBLAYOUT="us,de"\nXKBVARIANT=""\nXKBOPTIONS="grp:win_space_toggle"\nBACKSPACE="guess"\n')
+KENV = dict(ENV, SG_KEYBOARD_FILE=machine, SG_LOCK_CONTROL=KCTL)
+own = os.path.join(ENV["XDG_CONFIG_HOME"], "stained-glass", "keyboard")
+code, lines = ctl("keyboard", env=KENV)
+check("keyboard: the machine's layouts while the user has none of their own, and the one typing now",
+      code == 0 and lines == ["KEYBOARD us,de\t\tgrp:win_space_toggle\tno", "CURRENT 1", "OK"], lines)
+code, lines = ctl("keyboard", "set", "fr,de", "-", "grp:win_space_toggle", env=KENV)
+check("keyboard set: the compositor is given them at once (KEYMAP) and they apply",
+      code == 0 and lines == ["APPLIED yes", "OK"] and asked[-1] == "KEYMAP fr,de - grp:win_space_toggle", (lines, asked))
+try:
+    kept = open(own).read()
+except OSError:
+    kept = ""
+check("keyboard set: kept for every sign-in in the user's own file (the machine's model)",
+      kept == 'XKBMODEL="pc105"\nXKBLAYOUT="fr,de"\nXKBVARIANT=""\nXKBOPTIONS="grp:win_space_toggle"\n', kept)
+code, lines = ctl("keyboard", env=KENV)
+check("keyboard: now the user's own", lines[0] == "KEYBOARD fr,de\t\tgrp:win_space_toggle\tyes", lines)
+code, lines = ctl("keyboard", "set", "us,us", ",dvorak", "-", env=KENV)
+check("keyboard set: a variant, no options", code == 0 and asked[-1] == "KEYMAP us,us ,dvorak -" and
+      'XKBVARIANT=",dvorak"' in open(own).read() and 'XKBOPTIONS=""' in open(own).read(), (asked[-1:], lines))
+for bad in (["us;id", "-", "-"], ["us,de,fr,it,es", "-", "-"], ["us", "-", "grp:x;rm"], ["us", "a,b", "-"], ["US", "-", "-"]):
+    code, lines = ctl("keyboard", "set", *bad, env=KENV)
+    check("keyboard set refuses %s" % " ".join(bad), code == 2 and lines[-1].startswith("ERROR invalid"), lines)
+answers["KEYMAP"] = "ERR no such layout"
+code, lines = ctl("keyboard", "set", "zz", "-", "-", env=KENV)
+check("keyboard set: the compositor's refusal is the answer, and nothing is kept",
+      code == 1 and lines[-1].startswith("ERROR failed") and 'XKBLAYOUT="us,us"' in open(own).read(), lines)
+del answers["KEYMAP"]
+NOCOMP = dict(KENV)
+del NOCOMP["SG_LOCK_CONTROL"]
+code, lines = ctl("keyboard", "set", "de", "-", "-", env=NOCOMP)
+check("keyboard set outside a session: kept for the next sign-in (APPLIED no)",
+      lines == ["APPLIED no", "OK"] and 'XKBLAYOUT="de"' in open(own).read(), lines)
+# sg-session-start takes the user's own (sg-common.sh's sg_user_keyboard_env) in place of the machine's
+COMMON = os.path.join(HERE, "..", "lib", "sg-common.sh")
+def session_layout(env):
+    r = subprocess.run(["sh", "-c", '. "$1"; sg_user_keyboard_env; echo "$XKB_DEFAULT_LAYOUT|$XKB_DEFAULT_OPTIONS"',
+                        "sh", COMMON], env=env, capture_output=True, text=True, timeout=20)
+    return r.stdout.strip()
+SENV2 = dict(KENV, SG_LIB=os.path.join(HERE, "..", "lib"))
+check("the session starts with the user's own layouts", session_layout(SENV2) == "de|", session_layout(SENV2))
+got = session_layout(dict(SENV2, SG_MUTANT_KBD_MACHINE_ONLY="1"))
+check("MUTANT KBD_MACHINE_ONLY (the machine's layouts) is caught", got == "us,de|grp:win_space_toggle", got)
+
 # ---- usage
 code, lines = ctl("reboot")
 check("an unknown command is refused", code == 2 and lines[-1].startswith("ERROR invalid"), lines)

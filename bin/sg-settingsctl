@@ -84,6 +84,15 @@
 #       LOCKSCREEN <picture published yes|no>\t<shown on sign-in yes|no>
 #   sg-settingsctl lockscreen picture FILE | default
 #   sg-settingsctl lockscreen signin yes|no
+#   sg-settingsctl keyboard
+#       KEYBOARD <layouts>\t<variants>\t<options>\t<the user's own yes|no>
+#       CURRENT <index>  the layout typing now (when the compositor says)
+#   sg-settingsctl keyboard set LAYOUTS VARIANTS|- OPTIONS|-
+#       the user's keyboard layouts (Settings > Time & Language > Language):
+#       kept in ~/.config/stained-glass/keyboard for every sign-in
+#       (sg-session-start) and given to the session's compositor at once
+#       (KEYMAP on its control socket), as Windows adds a keyboard without
+#       signing out: APPLIED yes|no
 #   sg-settingsctl printers          CUPS's queues, for Settings' Printers & scanners
 #       QUEUE <name>\t<make and model>\t<device-uri>\t<idle|printing|stopped>\t<description>
 #       (the Windows printers are winspool's; these are the same printers'
@@ -1904,7 +1913,90 @@ def input_settings(args):
     raise Fail("invalid", "usage: input [natural mouse|touchpad yes|no]")
 
 
-COMMANDS = {"input": input_settings, "sound": sound, "media": media, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
+def keyboard_paths():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return (os.path.join(base, "stained-glass", "keyboard"),
+            os.environ.get("SG_KEYBOARD_FILE") or "/etc/default/keyboard")
+
+
+def read_keyboard_file(path):
+    """Debian's keyboard file's XKB values (read, never sourced)."""
+    vals = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'^XKB(LAYOUT|VARIANT|OPTIONS|MODEL)="?([A-Za-z0-9_,:()+-]*)"?\s*$', line)
+                if m:
+                    vals[m.group(1)] = m.group(2)
+    except OSError:
+        return None
+    return vals
+
+
+def compositor(cmd):
+    """One line to the session's compositor's control socket; its answer, or
+    None outside a Stained Glass session."""
+    path = os.environ.get("SG_LOCK_CONTROL")
+    if not path:
+        return None
+    import socket
+    try:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(3)
+        s.connect(path)
+        s.sendall(cmd.encode() + b"\n")
+        reply = s.recv(700).decode(errors="replace").strip()
+        s.close()
+        return reply
+    except OSError:
+        return None
+
+
+XKB_NAMES = re.compile(r"^[A-Za-z0-9_():+-]*$")
+
+
+def keyboard(args):
+    """The user's keyboard layouts: their own file, else the machine's."""
+    own, machine = keyboard_paths()
+    if not args:
+        vals = read_keyboard_file(own)
+        mine = vals is not None
+        if vals is None:
+            vals = read_keyboard_file(machine) or {}
+        lines = ["KEYBOARD %s\t%s\t%s\t%s" % (vals.get("LAYOUT") or "us", vals.get("VARIANT", ""),
+                                               vals.get("OPTIONS", ""), yn(mine))]
+        reply = compositor("KEYBOARD") or ""
+        m = re.search(r"\bgroup=(\d+)", reply)
+        if reply.startswith("OK") and m:
+            lines.append("CURRENT %s" % m.group(1))
+        return lines
+    if len(args) != 4 or args[0] != "set":
+        raise Fail("invalid", "usage: keyboard [set LAYOUTS VARIANTS|- OPTIONS|-]")
+    layouts = args[1].split(",")
+    variants = [] if args[2] == "-" else args[2].split(",")
+    options = "" if args[3] == "-" else args[3]
+    if not 1 <= len(layouts) <= 4 or len(variants) > len(layouts) or \
+            not all(re.match(r"^[a-z]{2,8}$", x) for x in layouts) or \
+            not all(XKB_NAMES.match(x) for x in variants) or not re.match(r"^[A-Za-z0-9_,:()+-]*$", options):
+        raise Fail("invalid", "not keyboard layouts: %s %s %s" % (args[1], args[2], args[3]))
+    variant = ",".join(variants + [""] * (len(layouts) - len(variants))) if any(variants) else ""
+    model = (read_keyboard_file(machine) or {}).get("MODEL") or "pc105"
+    applied = "no"
+    reply = compositor("KEYMAP %s %s %s" % (",".join(layouts), variant or "-", options or "-"))
+    if reply is not None:
+        if not reply.startswith("OK"):
+            raise Fail("failed", "the compositor refused the layouts: %s" % reply)
+        applied = "yes"
+    os.makedirs(os.path.dirname(own), exist_ok=True)
+    tmp = own + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write('XKBMODEL="%s"\nXKBLAYOUT="%s"\nXKBVARIANT="%s"\nXKBOPTIONS="%s"\n'
+                % (model, ",".join(layouts), variant, options))
+    os.replace(tmp, own)
+    return ["APPLIED %s" % applied]
+
+
+COMMANDS = {"input": input_settings, "keyboard": keyboard, "sound": sound, "media": media, "bluetooth": bluetooth, "display": display, "nightlight": nightlight,
             "power": power, "updates": updates, "session-start": session_start,
             "sleep-caps": sleep_caps, "sleep": sleep_now, "shutdown": shutdown_now,
             "lockscreen": lockscreen, "look": look, "display-scale": display_scale,
