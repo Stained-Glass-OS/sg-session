@@ -29,8 +29,10 @@
 #      account and computer names);
 #   R  try the login screen again.
 #
-# Stand-ins for the gate: SG_BOOTREPORT_TTY (/dev/tty1), SG_BOOTREPORT_FAILS,
-# SG_BOOTREPORT_SEND (the uploader).
+# Stand-ins for the gates: SG_BOOTREPORT_TTY (/dev/tty1), SG_BOOTREPORT_FAILS,
+# SG_BOOTREPORT_SEND (the uploader); SG_BOOTREPORT_MOUNTS (/proc/mounts),
+# SG_BOOTREPORT_LOSETUP, SG_BOOTREPORT_HOSTS (test/boot-report-medium-test.sh);
+# SG_MUTANT_BOOTREPORT_ABSOLUTE.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
@@ -55,6 +57,7 @@ WORK = "/run/sg-boot-report"
 GREETER_TAGS = ("sg-setup", "sg-login", "sg-oobe")
 FAIL_RX = re.compile(r"Unable to create the wlroots (backend|renderer|allocator)|Unable to start the wlroots backend"
                      r"|Failed to open any DRM device|cannot create backend")
+HOST_RX = re.compile(os.environ.get("SG_BOOTREPORT_HOSTS", r"/run/initramfs/sg-host/[^/]+$"))
 START_FAIL_RX = re.compile(r"Unable to (create|start) the wlroots")
 VT_ACTIVATE, VT_WAITACTIVE, KDSETMODE, KD_TEXT = 0x5606, 0x5607, 0x4B3A, 0x00
 KDSKBMODE, K_UNICODE = 0x4B45, 0x03
@@ -186,11 +189,21 @@ def flat(devs):
 def medium_dir():
     """(mountpoint, directory) of the .iso file's partition when booted from a
     multiboot stick (Ventoy): sg-live-iso keeps it under /run/initramfs/sg-host"""
-    out = run(["losetup", "-n", "-l", "-O", "BACK-FILE"])
-    for f in out.split():
-        if f.startswith("/run/initramfs/sg-host/") and f.lower().endswith(".iso"):
-            mp = "/".join(f.split("/")[:5])
-            return mp, os.path.dirname(f)
+    hosts = []
+    try:
+        with open(os.environ.get("SG_BOOTREPORT_MOUNTS", "/proc/mounts")) as f:
+            hosts = [l.split()[1] for l in f if HOST_RX.match(l.split()[1])]
+    except OSError:
+        pass
+    # the loop device's backing file reads relative to the partition's own
+    # mount (/isos/x.iso) once the initrd's mounts have moved to the system
+    for f in run(os.environ.get("SG_BOOTREPORT_LOSETUP", "losetup -n -l -O BACK-FILE").split()).split():
+        if not f.lower().endswith(".iso"):
+            continue
+        for mp in hosts:
+            path = f if f.startswith(mp + "/") or os.environ.get("SG_MUTANT_BOOTREPORT_ABSOLUTE") else mp + f
+            if os.path.isfile(path):
+                return mp, os.path.dirname(path)
     return None, None
 
 
@@ -202,7 +215,7 @@ def save(tgz):
         try:
             shutil.copy(tgz, os.path.join(where, base))
             os.sync()
-            return os.path.join(where, base).replace(mp, "the boot stick:", 1)
+            return "the boot stick: " + os.path.join(where, base)[len(mp):]
         except OSError:
             pass
         finally:

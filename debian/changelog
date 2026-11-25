@@ -1,3 +1,15 @@
+sg-session (0.1.0-288) unstable; urgency=medium
+
+  * sg-boot-report saves next to the .iso on a Ventoy stick: after the switch
+    to the real root the loop device's backing file reads relative to the
+    partition's mount ("/isos/sg-live.iso"), so the boot stick was never
+    found and the report went to another stick or nowhere. Verified on a
+    live boot from an exFAT stick (saved beside the .iso, the partition
+    read-only again after). Gate test/boot-report-medium-test.sh (in lint),
+    mutant SG_MUTANT_BOOTREPORT_ABSOLUTE.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Tue, 24 Nov 2026 20:50:00 -0800
+
 sg-session (0.1.0-287) unstable; urgency=medium
 
   * When the graphical login cannot start, tty1 now says so (sg-boot-report,

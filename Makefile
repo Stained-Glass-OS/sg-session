@@ -435,6 +435,8 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-boot-report
+	@sh test/boot-report-medium-test.sh >/dev/null || { sh test/boot-report-medium-test.sh; exit 1; }
+	@! sh test/boot-report-medium-test.sh --mutant >/dev/null 2>&1 || { echo "boot-report-medium-test: mutant passed"; exit 1; }
 	@sh -n lib/sg-nouveau-guard
 	@sh test/nouveau-guard-test.sh >/dev/null || { sh test/nouveau-guard-test.sh; exit 1; }
 	@! sh test/nouveau-guard-test.sh --mutant >/dev/null 2>&1 || { echo "nouveau-guard-test: mutant passed"; exit 1; }
