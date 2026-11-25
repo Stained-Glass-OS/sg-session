@@ -17,6 +17,10 @@ SG_LIB="${SG_LIB:-/usr/lib/stained-glass}"
 . "$SG_LIB/sg-common.sh"
 sg_wine_env
 unset SG_WINSTATION
+# no GPU driver: no ten-second wait for one (sg_basic_display_env)
+if [ "${SG_BASIC_DISPLAY:-}" = 1 ]; then
+    logger -t sg-login-ui "no GPU driver (no DRM device, udev has settled): the Basic Display Adapter at once" 2>/dev/null || :
+fi
 
 LIBEXEC="${SG_LIBEXEC:-/usr/libexec/stained-glass}"
 # Setup, the first-run setup and the login screen all take -s: Ctrl+Alt+F2-F6

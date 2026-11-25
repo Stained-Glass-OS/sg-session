@@ -1,3 +1,50 @@
+sg-session (0.1.0-289) unstable; urgency=medium
+
+  * The nouveau guard in an installed machine's initrds. nouveau starts in
+    the initrd, and on an NVIDIA Ada card (10de:2680-28ff) without its GSP
+    firmware it removed the firmware framebuffer there and then failed: a
+    black screen from the boot logo on, though the guard was in the root
+    (0.1.0-287) -- only the live ISO's initrd had it. sg-firmware-initrd now
+    puts sg-nouveau-guard and its modprobe.d line into sg-firmware.initrd,
+    which every installed entry loads last (the image's initrd and Debian's
+    after a kernel update alike; each new kernel's entry by the
+    kernel-install plugin), on such a PC only and while NVIDIA's driver is
+    not installed: once it is (modprobe.blacklist=nouveau, sg-drivers; or
+    the driver package's "blacklist nouveau") the initrd is written again
+    without the guard. With the firmware installed the guard steps aside
+    wherever the firmware is (Debian's initrds copy it; in the image's
+    initrd nouveau waits for the root). As Windows keeps the Basic Display
+    Adapter until a working driver is there. The postinst runs it (so an
+    apt upgrade fixes the next boot) and so do triggers on
+    /usr/lib/firmware/nvidia and modprobe.d. sg-nouveau-guard --ada (the
+    card, the firmware aside); no printf (klibc's sh).
+  * initramfs-tools hook sg-nouveau-guard: Debian's initrds copy
+    /usr/lib/modprobe.d, so they had the guard's "install nouveau" line
+    without the script it names, and nouveau never loaded from them on any
+    NVIDIA card; the script now goes with it.
+  * No GPU driver at all (no DRM device once udev has handled every
+    device: nomodeset, an NVIDIA card nouveau is kept off, a GPU newer than
+    the kernel): every compositor started from here goes to the Basic
+    Display Adapter at once (sg_basic_display_env, SG_BASIC_DISPLAY=1).
+    wlroots waited ten seconds for a GPU to appear before each fallback: the
+    first-run setup, the login screen and every sign-in sat ten seconds on a
+    blank screen (found installing on OVMF + ramfb). While udev still has
+    events queued, or is not running, wlroots asks as before. Gate
+    test/basic-display-env-test.sh (in lint; --mutant); sg-image
+    install-test with SG_BASIC_DISPLAY=1 and nouveau-initrd-vm-test
+    (mutant NO_QUICK) check no compositor waited.
+  * sg-boot-report's graphics section shows sg-nouveau-guard's and
+    sg-live-iso's lines again: written to the kernel log from user space,
+    the journal files them under their own names, not among the kernel's,
+    so journalctl -k found none. Whole line now (what to run is at its end).
+  * Gates: test/nouveau-initrd-test.sh (in lint; --mutant), nouveau-guard-
+    test --ada and klibc cases; sg-image test/nouveau-initrd-vm-test.sh
+    boots an installed disk in QEMU with a fake Ada card (the guard's
+    SG_GUARD_SYSFS stand-in in the initrd) and checks nouveau stays out of
+    the initrd (mutant NO_GUARD).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 09:30:00 -0800
+
 sg-session (0.1.0-288) unstable; urgency=medium
 
   * sg-boot-report saves next to the .iso on a Ventoy stick: after the switch

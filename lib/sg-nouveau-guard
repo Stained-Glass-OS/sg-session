@@ -14,6 +14,17 @@
 # (sudo sg-drivers --install-recommended, or Setup's third-party drivers).
 # With the firmware installed, nouveau loads as usual.
 #
+# The same script and its modprobe.d line ride in the initrds too (nouveau
+# loads there first): sg-firmware-initrd puts them in this PC's
+# sg-firmware.initrd on a PC with such a card and no NVIDIA driver, and the
+# live ISO's initrd has them. In an initrd the firmware looked for is the
+# initrd's own: where it is missing nouveau waits for the real root, which
+# loads it (with the firmware) or not (without). Plain sh, cat and $(( )):
+# initramfs-tools' initrd may have only klibc's shell, no printf.
+#
+#   sg-nouveau-guard --ada   exit 0 when this PC has such a card (the
+#                            firmware aside): sg-firmware-initrd asks
+#
 # Stand-ins for the gate: SG_GUARD_SYSFS (/sys/bus/pci/devices),
 # SG_GUARD_FIRMWARE (/usr/lib/firmware), SG_GUARD_MODPROBE, SG_GUARD_KMSG.
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -21,14 +32,18 @@ SYSFS=${SG_GUARD_SYSFS:-/sys/bus/pci/devices}
 FW=${SG_GUARD_FIRMWARE:-/usr/lib/firmware}
 MODPROBE=${SG_GUARD_MODPROBE:-/sbin/modprobe}
 KMSG=${SG_GUARD_KMSG:-/dev/kmsg}
+ADA_ONLY=""
+[ "${1:-}" = --ada ] && ADA_ONLY=1
 
 for d in "$SYSFS"/*; do
     [ "$(cat "$d/vendor" 2>/dev/null)" = 0x10de ] || continue
     case "$(cat "$d/class" 2>/dev/null)" in 0x03*) ;; *) continue ;; esac
     id=$(cat "$d/device" 2>/dev/null) || continue
-    n=$(printf '%d' "$id" 2>/dev/null) || continue
+    case "$id" in 0x[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) continue ;; esac
+    n=$((id))
     # Ada: GSP firmware or nothing (nouveau's ad10x)
     if [ "$n" -ge $((0x2680)) ] && [ "$n" -le $((0x28ff)) ]; then
+        [ -z "$ADA_ONLY" ] || exit 0
         found=""
         for f in "$FW"/nvidia/ad10*/gsp/gsp-*; do [ -e "$f" ] && { found=1; break; }; done
         if [ -z "$found" ]; then
@@ -37,4 +52,5 @@ for d in "$SYSFS"/*; do
         fi
     fi
 done
+[ -z "$ADA_ONLY" ] || exit 1
 exec "$MODPROBE" --ignore-install nouveau "$@"

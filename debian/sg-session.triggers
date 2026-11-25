@@ -1,3 +1,8 @@
 # wine-sg updated: sg-session.postinst restarts the machine's wineserver if
 # the new Wine cannot talk to the running one
 interest-noawait /opt/wine-sg/bin/wineserver
+# NVIDIA's firmware or driver installed or removed: the nouveau guard in
+# this PC's sg-firmware.initrd is added or left out again (postinst)
+interest-noawait /usr/lib/firmware/nvidia
+interest-noawait /etc/modprobe.d
+interest-noawait /usr/lib/modprobe.d

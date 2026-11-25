@@ -47,4 +47,20 @@ gpu 0000:01:00.0 0x10de 0x030000 0x2520
 try load "NVIDIA Ampere (10de:2520), nouveau runs it without GSP"
 gpu 0000:01:00.0 0x10de 0x040300 0x2860
 try load "an NVIDIA audio function (not a display controller)"
+# --ada (sg-firmware-initrd asks): the card, whatever the firmware
+ada() { SG_GUARD_SYSFS="$T/sys" SG_GUARD_FIRMWARE="$T/fw" SG_GUARD_MODPROBE="$T/modprobe" SG_GUARD_KMSG="$T/kmsg" ${SH:-sh} "$GUARD" --ada; }
+rm -f "$T/loaded"
+ada && fail "--ada: an audio function counted as the card" || pass "--ada: no Ada display controller, exit 1"
+echo 0x030000 > "$T/sys/0000:01:00.0/class"
+mkdir -p "$T/fw/nvidia/ad102/gsp"; : > "$T/fw/nvidia/ad102/gsp/gsp-535.113.01.bin"
+ada && [ ! -e "$T/loaded" ] && pass "--ada: an Ada card (its firmware installed or not), exit 0, nothing loaded" || fail "--ada missed the card"
+rm -rf "$T/fw/nvidia"
+# the initrd's shell: initramfs-tools' may be klibc's (no printf)
+if [ -x /usr/lib/klibc/bin/sh ]; then
+    rm -f "$T/loaded" "$T/kmsg"
+    SG_GUARD_SYSFS="$T/sys" SG_GUARD_FIRMWARE="$T/fw" SG_GUARD_MODPROBE="$T/modprobe" SG_GUARD_KMSG="$T/kmsg" SG_T=$T \
+        /usr/lib/klibc/bin/sh "$GUARD" modeset=1
+    [ ! -e "$T/loaded" ] && grep -q 'not loading nouveau' "$T/kmsg" 2>/dev/null \
+        && pass "under klibc's sh (an initramfs-tools initrd): the same" || fail "under klibc's sh nouveau loaded (or no message)"
+fi
 exit $RC

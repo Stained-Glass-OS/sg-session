@@ -21,12 +21,30 @@
 # boot entry, which gets an initrd line for it. The next boot's early
 # drivers find their firmware.
 #
+# On a PC with an NVIDIA Ada card (sg-nouveau-guard --ada) and no NVIDIA
+# driver, sg-firmware.initrd also carries sg-nouveau-guard and its
+# modprobe.d line: nouveau starts in the initrd, where it removed the
+# firmware's framebuffer and then failed for want of its GSP firmware -- a
+# black screen from the boot logo on, on an installed machine as on the live
+# ISO (whose initrd has the guard of its own). The image's initrd and Debian's
+# (initramfs-tools, after a kernel update) both get it this way, and each new
+# kernel's entry (the kernel-install plugin). With the guard there nouveau
+# loads in the initrd only if the initrd has the firmware, else in the real
+# root if that has it. NVIDIA's driver installed (nouveau blacklisted:
+# modprobe.blacklist=nouveau in /etc/kernel/cmdline, which sg-drivers puts
+# there, or "blacklist nouveau" in modprobe.d) or the card gone: the guard
+# is left out again. Run again when packages change those
+# (sg-session.triggers) and by sg-drivers.
+#
 #   sg-firmware-initrd update     (root)
 #   sg-firmware-initrd list       the files kept, one per line
 #
 # For tests: SG_ESP (the boot partition), SG_FIRMWARE_DIR (/usr/lib/firmware),
 # SG_FIRMWARE_LIST (the list), SG_KERNEL_LOG (a file read instead of this
-# boot's kernel log).
+# boot's kernel log), SG_NOUVEAU_GUARD and SG_NOUVEAU_GUARD_CONF (the guard
+# and its modprobe.d file), SG_KERNEL_CMDLINE_FILE (/etc/kernel/cmdline),
+# SG_MODPROBE_DIRS (colon-separated: the modprobe.d directories);
+# sg-nouveau-guard's own SG_GUARD_SYSFS reaches it unchanged.
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 David Hamner and the Stained Glass OS contributors
@@ -38,6 +56,10 @@ import sys
 FWDIR = os.environ.get("SG_FIRMWARE_DIR", "/usr/lib/firmware")
 LIST = os.environ.get("SG_FIRMWARE_LIST", "/var/lib/stained-glass/firmware-initrd.list")
 NAME = "sg-firmware.initrd"
+GUARD = os.environ.get("SG_NOUVEAU_GUARD", "/usr/lib/stained-glass/sg-nouveau-guard")
+GUARD_CONF = os.environ.get("SG_NOUVEAU_GUARD_CONF", "/usr/lib/modprobe.d/sg-nouveau-guard.conf")
+KERNEL_CMDLINE = os.environ.get("SG_KERNEL_CMDLINE_FILE", "/etc/kernel/cmdline")
+MODPROBE_DIRS = os.environ.get("SG_MODPROBE_DIRS", "/etc/modprobe.d:/usr/lib/modprobe.d:/lib/modprobe.d:/run/modprobe.d").split(":")
 MAX_BYTES = 64 << 20  # a boot partition is small; firmware for one PC is a few MB
 FAILED = [re.compile(r"firmware: failed to load (\S+)"),
           re.compile(r"Direct firmware load for (\S+) failed"),
@@ -114,8 +136,51 @@ def newc(entries):
     return bytes(out)
 
 
-def archive(files):
+def nouveau_blacklisted():
+    # NVIDIA's driver: sg-drivers' command line, or the driver package's own
+    # modprobe.d blacklist (Debian's nvidia-kernel-support, NVIDIA's packages)
+    try:
+        with open(KERNEL_CMDLINE) as f:
+            if re.search(r"(^|\s)modprobe\.blacklist=(\S*,)?nouveau(,|\s|$)", f.read()):
+                return True
+    except OSError:
+        pass
+    for d in MODPROBE_DIRS:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            if not n.endswith(".conf"):
+                continue
+            try:
+                with open(os.path.join(d, n), errors="replace") as f:
+                    if any(l.split()[:2] == ["blacklist", "nouveau"] for l in f):
+                        return True
+            except OSError:
+                continue
+    return False
+
+
+def guard_wanted():
+    # an NVIDIA Ada card and no NVIDIA driver: the guard goes into the initrd
+    if not (os.path.isfile(GUARD) and os.path.isfile(GUARD_CONF)):
+        return False
+    try:
+        ada = subprocess.run(["sh", GUARD, "--ada"], timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return ada and not nouveau_blacklisted()
+
+
+def archive(files, guard=False):
     dirs, entries, total = set(), [], 0
+    extra = []
+    if guard:
+        for src, dst, mode in ((GUARD_CONF, "usr/lib/modprobe.d/sg-nouveau-guard.conf", 0o100644),
+                               (GUARD, "usr/lib/stained-glass/sg-nouveau-guard", 0o100755)):
+            with open(src, "rb") as f:
+                extra.append((dst, mode, f.read()))
     for name in files:
         with open(os.path.join(FWDIR, name), "rb") as f:  # the link's target's bytes
             data = f.read()
@@ -130,6 +195,14 @@ def archive(files):
                 dirs.add(d)
                 entries.append((d, 0o040755, b""))
         entries.append(("/".join(parts), 0o100644, data))
+    for dst, mode, data in extra:
+        parts = dst.split("/")
+        for i in range(1, len(parts)):
+            d = "/".join(parts[:i])
+            if d not in dirs:
+                dirs.add(d)
+                entries.append((d, 0o040755, b""))
+        entries.append((dst, mode, data))
     return newc(entries)
 
 
@@ -143,13 +216,17 @@ def entries(boot):
     return [os.path.join(d, n) for n in names if n.endswith(".conf") and not n.endswith("-live.conf")]
 
 
-def add_to_entry(path, boot):
+def add_to_entry(path, boot, add=True):
+    # add=False: no line is added, only an initrd the entry names already
+    # is returned (to be written again: emptied)
     with open(path) as f:
         lines = f.read().splitlines()
     initrds = [l.split(None, 1)[1] for l in lines if l.startswith("initrd ") and len(l.split(None, 1)) == 2]
     if not initrds:
         return None
     rel = os.path.dirname(initrds[0]) + "/" + NAME
+    if rel not in initrds and not add:
+        return None
     if rel not in initrds:
         last = max(i for i, l in enumerate(lines) if l.startswith("initrd "))
         lines.insert(last + 1, "initrd " + rel)
@@ -174,17 +251,19 @@ def update():
             f.write("".join(n + "\n" for n in files))
         os.replace(LIST + ".tmp", LIST)
         say("firmware the early drivers asked for: " + " ".join(new))
-    if not files:
-        return 0
+    guard = guard_wanted()
     boot = esp()
     if not boot or not os.path.isdir(boot):
-        say("no boot partition found")
+        if files or guard:
+            say("no boot partition found")
         return 0
-    data = archive(files)
+    # nothing to carry: initrds written before (the guard, now that NVIDIA's
+    # driver is here) are emptied, and no entry gets a new line
+    data = archive(files, guard)
     targets = set()
     for e in entries(boot):
         try:
-            t = add_to_entry(e, boot)
+            t = add_to_entry(e, boot, add=bool(files or guard))
         except OSError as err:
             say(f"{e}: {err}")
             continue
@@ -201,7 +280,7 @@ def update():
             with open(t + ".tmp", "wb") as f:
                 f.write(data)
             os.replace(t + ".tmp", t)
-            say(f"wrote {t} ({len(files)} files)")
+            say(f"wrote {t} ({len(files)} firmware files" + (", the nouveau guard)" if guard else ")"))
         except OSError as err:
             say(f"{t}: {err}")
     return 0

@@ -61,6 +61,8 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -m 0644 systemd/sg-boot-report.service $(UNITDIR)
 	@# nouveau is not loaded on an NVIDIA card it cannot run (missing firmware): the framebuffer stays.
 	install -m 0755 lib/sg-nouveau-guard $(LIBDIR)
+	@# ...in Debian's initrds too (the modprobe.d line is copied there; the script with it)
+	install -D -m 0755 initramfs/hooks/sg-nouveau-guard $(DESTDIR)$(PREFIX)/share/initramfs-tools/hooks/sg-nouveau-guard
 	install -D -m 0755 kernel/94-sg-restore-points.install $(DESTDIR)$(PREFIX)/lib/kernel/install.d/94-sg-restore-points.install
 	install -m 0755 convert/sg-convert-root $(LIBDIR)
 	install -d $(SHAREDIR)/convert-initramfs/hooks $(SHAREDIR)/convert-initramfs/scripts/local-premount
@@ -368,6 +370,8 @@ lint:
 	@# 77: skipped (it must run as an ordinary user; CI builds as root)
 	@sh test/shared-home-test.sh || [ $$? -eq 77 ]
 	@sh test/cursor-env-test.sh
+	@sh test/basic-display-env-test.sh >/dev/null || { sh test/basic-display-env-test.sh; exit 1; }
+	@! sh test/basic-display-env-test.sh --mutant >/dev/null 2>&1 || { echo "basic-display-env-test: mutant passed"; exit 1; }
 	@sh test/screensaver-test.sh >/dev/null 2>&1; rc=$$?; [ $$rc = 0 ] || [ $$rc = 77 ] || { sh test/screensaver-test.sh; exit 1; }
 	@! sh test/screensaver-test.sh --mutant NO_HOLD >/dev/null 2>&1 || [ $$? -eq 77 ] || { echo "screensaver-test: mutant NO_HOLD passed"; exit 1; }
 	@sh test/display-scale-test.sh
@@ -437,7 +441,9 @@ lint:
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-boot-report
 	@sh test/boot-report-medium-test.sh >/dev/null || { sh test/boot-report-medium-test.sh; exit 1; }
 	@! sh test/boot-report-medium-test.sh --mutant >/dev/null 2>&1 || { echo "boot-report-medium-test: mutant passed"; exit 1; }
-	@sh -n lib/sg-nouveau-guard
+	@sh -n lib/sg-nouveau-guard && sh -n initramfs/hooks/sg-nouveau-guard
+	@sh test/nouveau-initrd-test.sh >/dev/null || { rc=$$?; [ $$rc -eq 77 ] || { sh test/nouveau-initrd-test.sh; exit 1; }; }
+	@! sh test/nouveau-initrd-test.sh --mutant >/dev/null 2>&1 || ! command -v cpio >/dev/null || { echo "nouveau-initrd-test: mutant passed"; exit 1; }
 	@sh test/nouveau-guard-test.sh >/dev/null || { sh test/nouveau-guard-test.sh; exit 1; }
 	@! sh test/nouveau-guard-test.sh --mutant >/dev/null 2>&1 || { echo "nouveau-guard-test: mutant passed"; exit 1; }
 	@python3 test/sysinfo-test.py

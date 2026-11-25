@@ -40,7 +40,8 @@ i915 0000:00:02.0: [drm] Failed to load DMC firmware i915/tgl_dmc_ver2_12.bin (-
 sof-audio-pci-intel-tgl 0000:00:1f.3: firmware: failed to load intel/sof/sof-tgl.ri (-2)
 evil: firmware: failed to load ../../etc/shadow (-2)
 E
-export SG_ESP="$ESP" SG_FIRMWARE_DIR="$FW" SG_FIRMWARE_LIST="$T/list" SG_KERNEL_LOG="$T/klog"
+export SG_ESP="$ESP" SG_FIRMWARE_DIR="$FW" SG_FIRMWARE_LIST="$T/list" SG_KERNEL_LOG="$T/klog" \
+    SG_GUARD_SYSFS="$T/no-pci" SG_KERNEL_CMDLINE_FILE="$T/no-cmdline" SG_MODPROBE_DIRS="$T/no-modprobe.d"   # no NVIDIA card (the guard: nouveau-initrd-test)
 python3 "$TOOL" update 2> "$T/err"
 E="$ESP/loader/entries/debian-stained-glass-6.12.conf"
 [ "$(grep -c '^initrd /stained-glass/sg-firmware.initrd$' "$E")" = 1 ] && [ "$(tail -1 "$E")" = "initrd /stained-glass/sg-firmware.initrd" ] \

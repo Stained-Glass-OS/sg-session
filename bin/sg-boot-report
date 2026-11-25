@@ -129,8 +129,14 @@ def summary(reason):
         out.append("    driver: " + (drv or "none (no driver for this card is loaded)"))
     out.append("  firmware framebuffer: " + (fb.replace("\n", "; ") if fb else "none"))
     out.append("  DRM devices: " + (" ".join(drm) if drm else "none"))
-    for l in run(["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "--grep", "sg-nouveau-guard|sg-live-iso"]).splitlines()[-4:]:
-        out.append("  " + l[:150])
+    # their lines go to the kernel log from user space: the journal files
+    # them under their own names, not among the kernel's (journalctl -k
+    # found none), and -o cat dropped the name
+    for l in run(["journalctl", "-b", "--no-pager", "-o", "short-iso",
+                  "-t", "sg-nouveau-guard", "-t", "sg-live-iso"]).splitlines()[-4:]:
+        if l.startswith("-- "):
+            continue
+        out.append("  " + l.split(" ", 2)[-1][:320])
     out.append("")
     out.append("A text console: press Ctrl+Alt+F2 and sign in " + who + ";")
     out.append("sudo works there. Ctrl+Alt+F1 comes back to this screen.")

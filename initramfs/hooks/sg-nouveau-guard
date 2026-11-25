@@ -1,0 +1,14 @@
+#!/bin/sh
+# initramfs-tools hook (Stained Glass OS): Debian's initrds (a kernel update's
+# initrd.img) copy /usr/lib/modprobe.d, so they have sg-nouveau-guard.conf's
+# "install nouveau" line -- the script it names comes with it. Without it
+# the line named a missing file and nouveau never loaded from that initrd.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+[ -x /usr/lib/stained-glass/sg-nouveau-guard ] || exit 0
+# shellcheck source=/dev/null
+. /usr/share/initramfs-tools/hook-functions
+copy_file script /usr/lib/stained-glass/sg-nouveau-guard /usr/lib/stained-glass/sg-nouveau-guard
+exit 0

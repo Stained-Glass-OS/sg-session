@@ -399,6 +399,29 @@ sg_cursor_env() {
 }
 sg_cursor_env
 
+# No GPU driver at all -- no DRM device once udev has handled every device
+# (nomodeset, an NVIDIA card nouveau is kept off, a GPU newer than the
+# kernel): the compositor goes to the Basic Display Adapter at once
+# (SG_BASIC_DISPLAY=1). Asked first, wlroots waited ten seconds for a GPU to
+# appear before each fallback: the first-run setup, the login screen and
+# every sign-in each sat ten seconds on a blank screen. While udev still has
+# events queued (a driver may be loading) or is not running, wlroots waits as
+# before. Windows starts on its Basic Display Adapter with no wait.
+# SG_BASIC_DISPLAY set by hand still wins. Stand-ins: SG_DRM_SYSFS,
+# SG_UDEV_RUN (/run/udev).
+sg_basic_display_env() {
+    [ -n "${SG_BASIC_DISPLAY:-}" ] && return 0
+    for _c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*; do
+        case "${_c##*/}" in *-*) continue ;; esac
+        [ -e "$_c" ] && return 0
+    done
+    _ur=${SG_UDEV_RUN:-/run/udev}
+    [ -e "$_ur/control" ] && [ ! -e "$_ur/queue" ] || return 0
+    export SG_BASIC_DISPLAY=1
+    return 0
+}
+sg_basic_display_env
+
 # C:\ProgramData is shared the way Windows shares it: what anyone makes in it
 # stays writable for the users of the machine (Windows' "Users: create" that
 # its subfolders inherit). An elevated installer runs as the SYSTEM account and

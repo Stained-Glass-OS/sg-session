@@ -118,6 +118,7 @@ case "$SG_DISPLAY_PATH" in
         # gives Wine an X server, and winex11's virtual desktop draws the shell
         # and taskbar into one window sized to the output. See ADR 0003.
         sg_log "compositor: $SG_COMPOSITOR"
+        [ "${SG_BASIC_DISPLAY:-}" != 1 ] || sg_log "no GPU driver (no DRM device, udev has settled): the Basic Display Adapter at once"
         # sg-compositor gets its lock and privileged sockets (ADR 0009/0011);
         # cage has no such options. Without a writable seat directory the
         # session still runs, just without lock support -- and says so.

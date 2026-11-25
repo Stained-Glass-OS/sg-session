@@ -212,6 +212,13 @@ case "$1" in
         # counting; one installed since without an entry gets it now.
         /usr/bin/sg-kernel-entries --apply || true
         /usr/bin/sg-boot-splash apply || true
+        # The nouveau guard into this PC's initrds (sg-firmware.initrd) on a
+        # PC with an NVIDIA Ada card and no NVIDIA driver -- before the next
+        # boot, which would otherwise lose its screen in the initrd. Only on
+        # a running system (never an image build's chroot).
+        if [ -d /run/systemd/system ] && [ -x /usr/bin/sg-firmware-initrd ]; then
+            /usr/bin/sg-firmware-initrd update || true
+        fi
 
         # Restore points (btrfs) or Undo the last update (ext4): what Settings
         # and the Control Panel show, now rather than at the next start
@@ -226,6 +233,14 @@ case "$1" in
         fi
         ;;
     triggered)
+        # NVIDIA's firmware or driver came or went (their files under
+        # /usr/lib/firmware/nvidia, a modprobe.d blacklist): the guard in
+        # sg-firmware.initrd follows (sg-firmware-initrd)
+        case " ${2:-} " in *firmware/nvidia*|*modprobe.d*)
+            if [ -d /run/systemd/system ] && [ -x /usr/bin/sg-firmware-initrd ]; then
+                /usr/bin/sg-firmware-initrd update || true
+            fi ;;
+        esac
         ;;
 esac
 
