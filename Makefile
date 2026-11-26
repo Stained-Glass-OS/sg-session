@@ -21,7 +21,7 @@ BINS         = bin/sg-install bin/sg-print-check bin/sg-drivers domain/sg-dc-pro
                bin/sg-update-prepare bin/sg-boot-splash bin/sg-boot-health bin/sg-kernel-entries bin/sg-grub-bios bin/sg-boot-space bin/sg-boot-layout bin/sg-file-access-check \
                bin/sg-token-check bin/sg-procagent-check bin/sg-elevate-check bin/sg-policy-check bin/sg-greeter-check bin/sg-netlock-check \
                bin/sg-firewall-check
-LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-restart-notify lib/sg-boot-space-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
+LIBS         = lib/sg-common.sh lib/sg-wine-reload lib/sg-defender-notify lib/sg-clamd-conf lib/sg-restart-notify lib/sg-boot-space-notify lib/sg-run-explorer lib/sg-sas-action lib/sg-lock-ui lib/sg-login-ui lib/sg-consent-ui \
                lib/sg-oobe-user lib/sg-oobe-browser lib/sg-ui-scale lib/sg-display-scale lib/sg-btrfs-layout.sh
 
 .PHONY: all install lint test test-session test-firmware-retry test-multiuser deb clean
@@ -72,7 +72,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	@# SG PDF's Linux half: MuPDF (python3-pymupdf) and its engine.
 	install -m 0755 bin/sg-pdf $(BINDIR)
 	install -m 0755 bin/powershell $(BINDIR)
-	install -m 0755 bin/sg-defender $(BINDIR)
+	install -m 0755 bin/sg-defender bin/sg-defender-scan $(BINDIR)
 	install -d $(LIBDIR)/pdf
 	install -m 0644 pdf/sgpdf.py pdf/sgpdf_content.py pdf/sgpdf_docx.py pdf/sgpdf_forms.py pdf/sgpdf_sign.py \
 	    pdf/sgpdf_create.py $(LIBDIR)/pdf/
@@ -298,6 +298,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	install -D -m 0644 systemd/systemd-timesyncd.service.d/50-sg-initrd-network.conf \
 	    $(UNITDIR)/systemd-timesyncd.service.d/50-sg-initrd-network.conf
 	install -D -m 0644 systemd/clamav-daemon.service.d/50-sg-background.conf $(UNITDIR)/clamav-daemon.service.d/50-sg-background.conf
+	install -D -m 0644 systemd/clamav-daemon.service.d/60-sg-memory.conf $(UNITDIR)/clamav-daemon.service.d/60-sg-memory.conf
 	install -D -m 0644 systemd/clamav-freshclam.service.d/50-sg-background.conf $(UNITDIR)/clamav-freshclam.service.d/50-sg-background.conf
 	install -D -m 0644 systemd/clamav-freshclam-once.service.d/50-sg-daemon.conf $(UNITDIR)/clamav-freshclam-once.service.d/50-sg-daemon.conf
 	install -D -m 0644 systemd/fluidsynth.service.d/50-sg-off.conf $(DESTDIR)$(PREFIX)/lib/systemd/user/fluidsynth.service.d/50-sg-off.conf
@@ -400,6 +401,12 @@ lint:
 	@sh test/powershell-cmd-test.sh
 	@sh test/wine-reload-test.sh
 	@sh test/defender-test.sh
+	@sh test/clamd-conf-test.sh
+	@! sh test/clamd-conf-test.sh --mutant >/dev/null
+	@python3 test/defender-exec-test.py >/dev/null || python3 test/defender-exec-test.py
+	@for m in $$(python3 test/defender-exec-test.py --list-mutants); do ! python3 test/defender-exec-test.py --mutant $$m >/dev/null 2>&1 || { echo "defender-exec mutant $$m survived"; exit 1; }; done
+	@sh test/defender-root-test.sh || [ $$? -eq 77 ]
+	@for m in ROOT_OPENS SCAN_AS_ROOT; do sh test/defender-root-test.sh --mutant $$m >/dev/null 2>&1; rc=$$?; [ $$rc -ne 0 ] || { echo "defender-root mutant $$m survived"; exit 1; }; done
 	@sh test/clamav-dirs-test.sh
 	@sh test/freshclam-once-test.sh
 	@sh test/defender-notify-test.sh
@@ -437,6 +444,7 @@ lint:
 	@! sh test/windows-printers-test.sh --mutant-decode >/dev/null
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-sysinfo
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-defender-scan
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-firmware-initrd
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' bin/sg-boot-report
 	@sh test/boot-report-medium-test.sh >/dev/null || { sh test/boot-report-medium-test.sh; exit 1; }

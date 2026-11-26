@@ -1,0 +1,84 @@
+#!/usr/bin/python3
+# sg-defender-scan -- start an SG Defender scan, as Windows' "MpCmdRun -Scan":
+#
+#   sg-defender-scan quick           the places malware starts from and lives in
+#   sg-defender-scan full            your home and the C: drive
+#   sg-defender-scan custom FOLDER   one folder
+#   ... --wait                       wait for it, then say what it found
+#
+# Settings > Virus & threat protection runs this. The scan runs in the
+# sg-defender service as you, with your rights: a custom scan's folder is
+# opened here, by you, and its descriptor handed over (never its path).
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+import array
+import json
+import os
+import socket
+import sys
+import time
+
+SOCKET = os.path.join(os.environ.get("SG_DEFENDER_RUNTIME", "/run/stained-glass/defender"), "socket")
+NOTICES = os.environ.get("SG_DEFENDER_NOTICES", "/var/lib/stained-glass/defender/notices")
+
+
+def ask(line, fd=None):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(30)
+    s.connect(SOCKET)
+    anc = [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))] if fd is not None else []
+    s.sendmsg([line.encode() + b"\n"], anc)
+    data = b""
+    while not data.endswith(b"\n"):
+        b = s.recv(4096)
+        if not b:
+            break
+        data += b
+    s.close()
+    return data.decode(errors="replace").strip()
+
+
+def main(argv):
+    wait = "--wait" in argv
+    args = [a for a in argv if a != "--wait"]
+    if not args or args[0] not in ("quick", "full", "custom") or (args[0] == "custom") != (len(args) == 2):
+        sys.stderr.write("usage: sg-defender-scan quick|full|custom FOLDER [--wait]\n")
+        return 2
+    fd = None
+    if args[0] == "custom":
+        try:
+            fd = os.open(args[1], os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as e:
+            sys.stderr.write("sg-defender-scan: %s: %s\n" % (args[1], e.strerror))
+            return 2
+    try:
+        reply = ask("START1 " + args[0], fd)
+    except OSError as e:
+        sys.stderr.write("sg-defender-scan: SG Defender is not running (%s)\n" % e.strerror)
+        return 3
+    print(reply)
+    if not reply.startswith(("STARTED ", "BUSY ")):
+        return 1
+    job = reply.split()[1]
+    if not wait:
+        return 0
+    path = os.path.join(NOTICES, str(os.getuid()), "scans.json")
+    while True:
+        try:
+            with open(path) as f:
+                scan = [s for s in json.load(f) if s.get("id") == job]
+        except (OSError, ValueError):
+            scan = []
+        if scan and scan[0].get("state") != "running":
+            s = scan[0]
+            print("%s scan %s: %d files scanned, %d threats found" % (s["type"], s["state"], s["files"], s["found"]))
+            for t in s.get("threats", []):
+                print("  %s: %s (%s)" % (os.path.join(t["folder"], t["name"]), t["signature"],
+                                         "removed" if t.get("removed") else "not removed"))
+            return 1 if s["found"] else 0
+        time.sleep(0.5)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

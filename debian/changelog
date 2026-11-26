@@ -1,3 +1,50 @@
+sg-session (0.1.0-291) unstable; urgency=medium
+
+  * SG Defender, closer to Windows Defender (issue #10, David 2026-11-25:
+    Stained Glass runs Windows software, Windows malware included).
+    bin/sg-defender, rewritten:
+    - Real-time protection on execute: wine-sg (9456-9460) asks it before
+      a program, DLL, installer package or script runs, and for AMSI's
+      script text, over /run/stained-glass/defender/socket (root's, 0660 to
+      sgwine). A request passes an open file descriptor (SCM_RIGHTS), never
+      a path; the caller is known by SO_PEERCRED; only a regular file
+      opened for reading (not O_PATH) is read, and root never reopens it.
+      Verdicts are remembered per caller (device, inode, size, mtime,
+      ctime); a file clean under older definitions starts at once and is
+      scanned again in the background (a cold ClamAV scan took 0.7 s for a
+      0.6 MB program, 6-10 s for 16 MB), and a detection stops its next
+      start. A detection is kept in the quarantine (a copy from the
+      descriptor; per person at most 200) and told; the file is removed by
+      the caller's own Wine, never by root. Exclusions match where the
+      file really is, not the caller's word. Real-time protection off is
+      for a while only (/run/.../realtime-off, at most 4 hours).
+    - clamd asked directly (zFILDES, the descriptor in a message of its
+      own), not through a clamdscan per file.
+    - Quick, full and custom scans (sg-defender-scan, Settings) and a
+      scheduled quick scan each day: Run/RunOnce, Startup folders,
+      scheduled tasks, services' ImagePath, system32, Program Files,
+      Downloads, Desktop, Temp. They run in children that are the person
+      (setuid, their groups; nice 19, idle I/O) and open each file with
+      O_NOFOLLOW; the machine's part runs as the SYSTEM account. Results
+      go to the person's own notices/<uid>/scans.json.
+    - Fix: the download watcher opened and moved files in people's
+      folders as root, by path; a folder swapped for a link into root's
+      files was read and moved. It now opens as the folder's person (a
+      child, O_NOFOLLOW) and the person's child removes what was found.
+      Folders already in Downloads when it starts are watched too.
+    - A person's notices folder: their group only if it is theirs alone,
+      else an ACL entry for them.
+  * clamd without the concurrent reload of its definitions: its peak at
+    each update halves, 1.92 GB -> 0.98 GB (lib/sg-clamd-conf writes
+    Debian's clamd.conf + ConcurrentDatabaseReload no where clamd's
+    AppArmor profile reads; clamav-daemon drop-in 60-sg-memory.conf).
+  * Tests: test/defender-test.sh (a stand-in clamd with clamd 1.4's
+    protocol), test/defender-exec-test.py (12 mutants),
+    test/defender-root-test.sh (root in private namespaces, two accounts;
+    2 mutants), test/clamd-conf-test.sh (+mutant).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 15:48:59 -0800
+
 sg-session (0.1.0-290) unstable; urgency=medium
 
   * A user's own keyboard layouts, as Windows keeps them per user.

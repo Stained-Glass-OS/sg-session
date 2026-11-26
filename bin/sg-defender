@@ -1,57 +1,108 @@
 #!/usr/bin/python3
-# sg-defender -- SG Defender: what is downloaded is scanned before it runs.
+# sg-defender -- SG Defender: Windows programs are scanned before they run.
 #
 # David 2026-10-03: the SG Store installs known-good software (each Windows
 # installer is the maker's file, checked against its SHA-256; Linux apps come
-# from signed apt repositories), and everything else that comes in -- a
-# browser's download, a mail attachment saved, a file copied from a stick --
-# is checked by ClamAV (open source, Debian's clamav-daemon), on by default,
-# off in Settings for whoever needs the memory back (its definitions stay
-# loaded: about a gigabyte, worth it).
+# from signed apt repositories), and everything else that comes in is checked
+# by ClamAV (open source, Debian's clamav-daemon), on by default, off in
+# Settings for whoever needs the memory back. David 2026-11-25 (issue #10):
+# Stained Glass runs Windows software, Windows malware included; be more like
+# Windows Defender. So, as Windows Defender does:
 #
-# Runs as root. Watches every account's Downloads and Desktop, and
-# Applications -- where AppImages are installed (sg-shell's sg-appimage
-# copies a download there) -- (inotify): a
-# file written there, or moved in, that could run -- a Windows or Linux
-# program, an installer, a script, an archive that may hold one, an Office
-# document that may hold macros -- is scanned by clamd (clamdscan --fdpass:
-# root opens it, clamd reads it). A detection is moved, whole, into
-# /var/lib/stained-glass/defender/quarantine (root only), and the person is
-# told: a notice in /var/lib/stained-glass/defender/notices/<uid>/ that their session
-# shows. Other files are not looked at: scanning everything a program opens
-# would cost the speed it was not worth.
+#  * Real-time protection, on execute. wine-sg (9456-) asks this service
+#    before an image is mapped (a program, a DLL), before msiexec opens a
+#    package, before cmd, wscript and cscript run a script, and from
+#    AmsiScanBuffer (PowerShell and others hand their script text to AMSI).
+#    A detected file is not run: the program gets ERROR_VIRUS_INFECTED (225),
+#    the file is quarantined and the person told.
+#  * Real-time protection, on download: Downloads, Desktop and Applications
+#    (where AppImages are installed) of every account are watched (inotify);
+#    what could run is scanned once it is written, and quarantined if found.
+#  * Quick, full and custom scans (Settings, sg-defender-scan), and a
+#    scheduled quick scan each day: the places malware starts from (Run and
+#    RunOnce, Startup folders, scheduled tasks, services) and lives in
+#    (system32, Program Files, Downloads, Desktop, Temp); niced, idle I/O.
+#  * Protection history: notices and scans, per person, for Settings.
 #
-#   /etc/stained-glass/defender.conf   enabled=1|0 (sg-admind's defender on|off)
+# Security. This runs as root and reads files for whoever asks, so:
+#  * A request passes an open file descriptor (SCM_RIGHTS) over an AF_UNIX
+#    socket whose peer is known by SO_PEERCRED, never a path: what is
+#    scanned is what the caller had open, and could already read. The
+#    descriptor must be a regular file opened for reading (not O_PATH): root
+#    never reopens it, and never opens a path for a caller.
+#  * The socket is root's, open to the Windows-side group (sgwine) only; it
+#    answers each caller about its own descriptor, and remembers verdicts per
+#    caller (no one learns from a fast answer what someone else ran).
+#  * Scans of a person's places run in a child that is that person (setuid,
+#    their groups): it opens each file with O_NOFOLLOW and hands its
+#    descriptor up; the machine's places are scanned as the SYSTEM account.
+#    A file found is removed by that same child -- never by root -- and only
+#    if it is still the file that was scanned.
+#  * Results go to the caller's own history; nothing names a file the caller
+#    could not open.
+# If this service is down, or SG Defender is off, programs run (as on
+# Windows with Defender off); wine-sg's wait is capped so a stuck scan never
+# hangs a start.
+#
+#   /etc/stained-glass/defender.conf        enabled=1|0 (sg-admind's defender on|off)
+#   /etc/stained-glass/defender-exclusions  folders and files not scanned (sg-admind's
+#                                           defender-exclude), one absolute path a line
+#   /run/stained-glass/defender/socket      the requests (wine-sg, sg-defender-scan)
+#   /run/stained-glass/defender/realtime-off  real-time protection off until this time
+#                                           (sg-admind's defender realtime off; gone at a restart)
 #   /var/lib/stained-glass/defender/status.json   for Settings (no file names)
+#   /var/lib/stained-glass/defender/notices/<uid>/  each person's notices and scans.json
+#   /var/lib/stained-glass/defender/quarantine/     root only
 #   /var/lib/stained-glass/defender/allowed   SHA-256s an administrator restored
-#       (Settings' Restore, sg-admind defender-restore): not quarantined again
 #
 # SG_DEFENDER_* environment variables point all of this elsewhere for the
-# test (test/defender-test.sh).
+# tests (test/defender-test.sh, test/defender-exec-test.sh).
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import array
+import collections
 import ctypes
 import ctypes.util
 import datetime
-import errno
+import fcntl
+import grp
 import hashlib
 import json
 import os
 import pwd
+import re
 import secrets
 import select
-import shutil
+import socket
+import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
+import warnings
 
-CONF = os.environ.get("SG_DEFENDER_CONF", "/etc/stained-glass/defender.conf")
-STATE = os.environ.get("SG_DEFENDER_STATE", "/var/lib/stained-glass/defender")
-NOTICES = os.environ.get("SG_DEFENDER_NOTICES", "/var/lib/stained-glass/defender/notices")
-HOMES = os.environ.get("SG_DEFENDER_HOMES")          # test: watch these homes only (":"-separated)
-SCAN = os.environ.get("SG_DEFENDER_SCAN", "clamdscan --fdpass --no-summary --infected").split()
+ENV = os.environ.get
+CONF = ENV("SG_DEFENDER_CONF", "/etc/stained-glass/defender.conf")
+EXCLUSIONS = ENV("SG_DEFENDER_EXCLUSIONS", "/etc/stained-glass/defender-exclusions")
+STATE = ENV("SG_DEFENDER_STATE", "/var/lib/stained-glass/defender")
+NOTICES = ENV("SG_DEFENDER_NOTICES", "/var/lib/stained-glass/defender/notices")
+RUNTIME = ENV("SG_DEFENDER_RUNTIME", "/run/stained-glass/defender")
+SOCKET = os.path.join(RUNTIME, "socket")
+CLAMD = ENV("SG_DEFENDER_CLAMD", "/run/clamav/clamd.ctl")
+HOMES = ENV("SG_DEFENDER_HOMES")          # test: watch these homes only (":"-separated)
+PREFIX = ENV("SG_DEFENDER_PREFIX", "/var/lib/stained-glass/prefix")
+SYSTEM_USER = ENV("SG_DEFENDER_SYSTEM_USER", "sgsystem")
+WINE_GROUP = ENV("SG_DEFENDER_GROUP", "sgwine")
+SCHEDULE = float(ENV("SG_DEFENDER_SCHEDULE_HOURS", "24")) * 3600   # the scheduled quick scan
+SCAN_TIMEOUT = float(ENV("SG_DEFENDER_SCAN_TIMEOUT", "120"))
+ENGINE_CHECK = float(ENV("SG_DEFENDER_ENGINE_CHECK", "60"))     # new definitions noticed within this
+REALTIME_OFF_MAX = 4 * 3600         # Windows turns real-time protection back on by itself
+MAX_SCAN_SIZE = 256 << 20           # clamd's own limits (MaxFileSize, MaxScanSize) stop well before
+QUARANTINE_MAX_FILE = 512 << 20
+QUARANTINE_MAX_PER_UID = 200
+TESTING = os.geteuid() != 0          # the tests run it as themselves: no setuid, no chown
 WATCHED = ("Downloads", "Desktop", "Applications")
 
 # what could run, by name
@@ -68,13 +119,24 @@ MAGIC = (b"MZ", b"\x7fELF", b"#!", b"PK\x03\x04", b"MSCF", b"\xd0\xcf\x11\xe0", 
          b"%PDF")
 # a browser's download in progress: scanned once it is renamed to its own name
 PARTIAL = (".part", ".crdownload", ".download", ".partial", ".tmp", ".opdownload")
+KINDS = ("image", "msi", "script", "amsi", "file")
 
 IN_CLOSE_WRITE, IN_MOVED_TO, IN_CREATE, IN_DELETE_SELF, IN_ISDIR = 0x8, 0x80, 0x100, 0x400, 0x40000000
+IN_ONLYDIR, IN_DONT_FOLLOW = 0x1000000, 0x2000000
+O_PATH = getattr(os, "O_PATH", 0o10000000)
+
+state_lock = threading.RLock()
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+warnings.filterwarnings("ignore", "This process .* is multi-threaded", DeprecationWarning)
 
 
 def log(msg):
     sys.stderr.write("sg-defender: %s\n" % msg)
     sys.stderr.flush()
+
+
+def now_iso():
+    return datetime.datetime.now().isoformat(timespec="seconds")
 
 
 def enabled():
@@ -88,34 +150,1173 @@ def enabled():
     return True
 
 
-def runnable(path):
-    name = os.path.basename(path).lower()
-    if name.endswith(PARTIAL):
+def realtime_back():
+    """When real-time protection comes back on: 0 = it is on. Off only for a
+    while, as on Windows (sg-admind's defender realtime off writes the time)."""
+    try:
+        with open(os.path.join(RUNTIME, "realtime-off")) as f:
+            until = float(f.read().split()[0])
+        st = os.stat(os.path.join(RUNTIME, "realtime-off"))
+    except (OSError, ValueError, IndexError):
+        return 0
+    if not TESTING and st.st_uid != 0:
+        return 0
+    until = min(until, st.st_mtime + REALTIME_OFF_MAX)
+    return until if until > time.time() else 0
+
+
+def realtime():
+    return enabled() and not realtime_back()
+
+
+def exclusions():
+    out = []
+    try:
+        with open(EXCLUSIONS) as f:
+            for line in f:
+                p = line.strip()
+                if p.startswith("/") and not p.startswith("#"):
+                    out.append(os.path.normpath(p))
+    except OSError:
+        pass
+    return out
+
+
+def excluded(path, excl=None):
+    if not path:
         return False
-    if os.path.splitext(name)[1] in RUNNABLE:
+    for e in exclusions() if excl is None else excl:
+        if path == e or path.startswith(e.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def runnable_name(name):
+    name = name.lower()
+    if name.endswith(PARTIAL):
+        return None
+    return os.path.splitext(name)[1] in RUNNABLE
+
+
+def runnable_fd(name, fd):
+    by_name = runnable_name(name)
+    if by_name is None:
+        return False
+    if by_name:
         return True
     try:
-        with open(path, "rb") as f:
-            head = f.read(8)
+        head = os.pread(fd, 8, 0)
     except OSError:
         return False
     return any(head.startswith(m) for m in MAGIC)
 
 
+def fd_path(fd):
+    """where the descriptor's file is, as this process sees it (a readlink, never an open)"""
+    try:
+        p = os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        return ""
+    return p if p.startswith("/") and not p.endswith(" (deleted)") else ""
+
+
+def readable_regular(fd):
+    """a regular file the caller opened for reading: what may be scanned"""
+    try:
+        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+        st = os.fstat(fd)
+    except OSError:
+        return None
+    if fl & O_PATH or (fl & os.O_ACCMODE) not in (os.O_RDONLY, os.O_RDWR) or not stat.S_ISREG(st.st_mode):
+        return None
+    return st
+
+
+# -- the engine: clamd, asked over its socket with the descriptor ------------
+
+def clamd(command, fd=None, timeout=30):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+    try:
+        s.settimeout(timeout)
+        s.connect(CLAMD)
+        s.sendall(b"z" + command + b"\0")
+        if fd is not None:      # the descriptor after the command, in a message of its own (clamd refuses it before)
+            s.sendmsg([b"\0"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+        data = b""
+        while not data.endswith(b"\0") and len(data) < 65536:
+            b = s.recv(4096)
+            if not b:
+                break
+            data += b
+        return data.rstrip(b"\0").decode(errors="replace").strip()
+    finally:
+        s.close()
+
+
+engine = {"version": "", "db": "", "checked": 0.0}
+
+
+def engine_version(force=False):
+    """ClamAV's engine and definitions: "ClamAV 1.4.3/27780/Fri Oct  3 08:24:01 2026" """
+    if not force and time.monotonic() - engine["checked"] < ENGINE_CHECK and engine["version"]:
+        return engine["version"]
+    try:
+        v = clamd(b"VERSION", timeout=10)
+    except OSError:
+        return engine["version"]
+    engine["checked"] = time.monotonic()
+    if v.startswith("ClamAV"):
+        engine["version"] = v
+        parts = v.split("/")
+        engine["db"] = parts[1] if len(parts) > 1 else v
+    return engine["version"]
+
+
+class Verdicts:
+    """What clamd said about a file, per caller, while the file is unchanged
+    (device, inode, size, mtime and ctime -- ctime no one can set back) and,
+    for a clean file, while the definitions are the same: new definitions
+    scan it again. Per caller: a fast answer must not tell anyone what
+    someone else ran."""
+
+    def __init__(self, size=50000):
+        self.lock = threading.Lock()
+        self.d = collections.OrderedDict()
+        self.size = size
+
+    @staticmethod
+    def key(uid, st):
+        return (uid, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+    def get(self, key, stale_ok=False):
+        """(found, signature); a clean verdict from older definitions only
+        with STALE_OK, as (False, None, "stale")"""
+        with self.lock:
+            v = self.d.get(key)
+            if v is None:
+                return None
+            found, sig, db = v
+            if not found and db != engine["db"]:
+                if stale_ok:
+                    return (False, None, "stale")
+                del self.d[key]
+                return None
+            self.d.move_to_end(key)
+            return (found, sig)
+
+    def put(self, key, found, sig):
+        with self.lock:
+            self.d[key] = (found, sig, engine["db"])
+            self.d.move_to_end(key)
+            while len(self.d) > self.size:
+                self.d.popitem(last=False)
+
+
+verdicts = Verdicts()
+clamd_asked = False
+per_uid = collections.defaultdict(lambda: threading.BoundedSemaphore(4))
+
+
+def start_clamd():
+    """clamav-daemon is skipped at install, before freshclam has fetched its
+    first definitions (ConditionPathExistsGlob), and nothing starts it once
+    they are here (QA VM 2026-10-03): start it when it is not answering.
+    Said once while it stays down, not every 30 s (qa4 2026-10-22)."""
+    global clamd_asked
+    if TESTING or CLAMD != "/run/clamav/clamd.ctl":     # a test's own clamd: nothing of the machine's
+        return
+    if subprocess.run(["systemctl", "is-active", "-q", "clamav-daemon.service"], check=False).returncode == 0:
+        clamd_asked = False
+        return
+    if not clamd_asked:
+        log("starting clamd")
+    clamd_asked = True
+    subprocess.run(["systemctl", "start", "--no-block", "clamav-daemon.service"], capture_output=True, check=False)
+
+
+def scan_fd(uid, fd, st, content_key=None, start=False):
+    """clamd's verdict on the open file: (True, signature) found, (False, None)
+    clean, None not known (clamd down or too slow).
+
+    START (a program starting): a file found clean with older definitions
+    starts at once and is scanned again in the background -- a cold scan
+    takes ClamAV 0.7 s for a 0.6 MB program and 6-10 s for a 16 MB DLL
+    (measured 2026-11-25), and new definitions come several times a day: a
+    start must not wait for that each time. What the new scan finds stops
+    the next start."""
+    key = content_key or Verdicts.key(uid, st)
+    engine_version()
+    v = verdicts.get(key, stale_ok=start)
+    if v is not None and len(v) == 3:
+        rescan_later(uid, fd, st, key)
+        return (False, None)
+    if v is not None:
+        return v
+    if st.st_size > MAX_SCAN_SIZE:
+        return (False, None)
+    with per_uid[uid]:
+        try:
+            r = clamd(b"FILDES", fd, timeout=SCAN_TIMEOUT)
+        except OSError as e:
+            log("clamd not answering: %s" % e)
+            start_clamd()
+            return None
+    if r.endswith(" OK"):
+        verdicts.put(key, False, None)
+        return (False, None)
+    if r.endswith(" FOUND"):
+        sig = r.rsplit(": ", 1)[-1][:-6].strip() or "unknown"
+        verdicts.put(key, True, sig)
+        return (True, sig)
+    log("clamd: %s" % r[:200])
+    return None
+
+
+rescans = []
+rescans_cv = threading.Condition()
+
+
+def rescan_later(uid, fd, st, key):
+    with rescans_cv:
+        if len(rescans) < 1000 and all(k != key for _, _, _, k in rescans):
+            rescans.append((uid, os.dup(fd), st, key))
+            rescans_cv.notify()
+
+
+def rescanner():
+    """the background scans of programs that started on an older clean
+    verdict; a detection is told, and stops the program's next start"""
+    while True:
+        with rescans_cv:
+            while not rescans:
+                rescans_cv.wait()
+            uid, fd, st, key = rescans.pop(0)
+        try:
+            with verdicts.lock:
+                verdicts.d.pop(key, None)
+            v = scan_fd(uid, fd, st)
+            if v and v[0] and not allowed(fd):
+                path = fd_path(fd)
+                qid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+                tell(uid, {"id": qid, "name": os.path.basename(path) or "(program)", "folder": os.path.dirname(path),
+                           "signature": v[1], "time": now_iso(), "how": "image", "action": "found"})
+                count("found")
+                log("uid %d: %s found in %s after it started (new definitions): stopped from now on" % (uid, v[1], path))
+        except OSError as e:
+            log("a background scan failed: %s" % e)
+        finally:
+            os.close(fd)
+
+
+def sha256_fd(fd):
+    h = hashlib.sha256()
+    off = 0
+    while True:
+        b = os.pread(fd, 1 << 20, off)
+        if not b:
+            return h.hexdigest()
+        h.update(b)
+        off += len(b)
+
+
+def allowed(fd):
+    """restored by an administrator: this exact file is let be"""
+    try:
+        with open(os.path.join(STATE, "allowed")) as f:
+            sums = {line.split()[0] for line in f if line.strip()}
+    except OSError:
+        return False
+    if not sums:
+        return False
+    try:
+        return sha256_fd(fd) in sums
+    except OSError:
+        return False
+
+
+# -- what is kept and said ----------------------------------------------------
+
+def chown_quiet(path, uid, gid):
+    if TESTING:
+        return
+    try:
+        os.chown(path, uid, gid)
+    except OSError:
+        pass
+
+
+def private_group(user):
+    """the person's primary group is theirs alone (Debian's user groups): it
+    may be what lets them read their notices. A group others share is not."""
+    try:
+        g = grp.getgrgid(user.pw_gid)
+    except KeyError:
+        return False
+    if any(m != user.pw_name for m in g.gr_mem):
+        return False
+    return not any(p.pw_gid == user.pw_gid and p.pw_uid != user.pw_uid for p in pwd.getpwall())
+
+
+def notice_dir(uid):
+    """notices/<uid>: root's; readable by that person alone (their private
+    group, or an ACL entry for them when their group is shared)"""
+    ndir = os.path.join(NOTICES, str(uid))
+    os.makedirs(NOTICES, mode=0o755, exist_ok=True)
+    os.makedirs(ndir, mode=0o750, exist_ok=True)
+    if TESTING:
+        return ndir
+    user = pwd.getpwuid(uid)
+    if private_group(user):
+        chown_quiet(ndir, 0, user.pw_gid)
+        os.chmod(ndir, 0o750)
+    else:
+        chown_quiet(ndir, 0, 0)
+        os.chmod(ndir, 0o750)
+        subprocess.run(["setfacl", "-m", "u:%d:rx,d:u:%d:r" % (uid, uid), ndir], capture_output=True, check=False)
+    return ndir
+
+
+def write_private(ndir, name, data):
+    tmp = os.path.join(ndir, ".%s.%s.tmp" % (name, secrets.token_hex(4)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=1)
+    try:
+        st = os.stat(ndir)
+        chown_quiet(tmp, 0, st.st_gid)
+    except OSError:
+        pass
+    os.replace(tmp, os.path.join(ndir, name))
+
+
+def tell(uid, record):
+    """the person's notice: their session shows it, Settings lists it"""
+    try:
+        write_private(notice_dir(uid), record["id"] + ".json", record)
+    except (KeyError, OSError) as e:
+        log("could not tell uid %d: %s" % (uid, e))
+
+
+def clean_hint(path):
+    """the caller's word for where the file is: shown to them and used for a
+    restore as them, never acted on by root"""
+    path = "".join(c for c in (path or "") if c.isprintable())[:1024]
+    return path if path.startswith("/") else ""
+
+
+def quarantine(fd, st, uid, signature, path, how):
+    """Keep a copy of the open file in the quarantine (root's alone) and tell
+    its person. The original is removed by whoever may remove it (the
+    caller's own Wine, or a scan child that is the person), not by root."""
+    qdir = os.path.join(STATE, "quarantine")
+    os.makedirs(qdir, mode=0o700, exist_ok=True)
+    os.chmod(qdir, 0o700)
+    qid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    kept = False
+    digest = ""
+    with state_lock:
+        mine = []
+        for n in os.listdir(qdir):
+            if n.endswith(".json"):
+                try:
+                    with open(os.path.join(qdir, n)) as f:
+                        m = json.load(f)
+                    if int(m.get("uid", -1)) == uid:
+                        mine.append(m)
+                except (OSError, ValueError):
+                    pass
+        if st.st_size <= QUARANTINE_MAX_FILE and len(mine) < QUARANTINE_MAX_PER_UID:
+            dst = os.path.join(qdir, qid + ".bin")
+            h = hashlib.sha256()
+            try:
+                out = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(out, "wb") as f:
+                    off = 0
+                    while True:
+                        b = os.pread(fd, 1 << 20, off)
+                        if not b:
+                            break
+                        h.update(b)
+                        f.write(b)
+                        off += len(b)
+                digest = h.hexdigest()
+                same = [m for m in mine if m.get("sha256") == digest and m.get("path") == path]
+                if same:        # the same file again: one entry
+                    os.unlink(dst)
+                    qid = same[0]["id"]
+                    kept = True
+                else:
+                    kept = True
+            except OSError as e:
+                log("could not keep a copy: %s" % e)
+                try:
+                    os.unlink(dst)
+                except OSError:
+                    pass
+        meta = {"id": qid, "path": path, "uid": uid, "signature": signature, "size": st.st_size,
+                "sha256": digest, "mode": st.st_mode & 0o777, "time": now_iso(), "how": how, "kept": kept}
+        if kept:
+            jp = os.path.join(qdir, qid + ".json")
+            fdj = os.open(jp + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fdj, "w") as f:
+                json.dump(meta, f, indent=1)
+            os.replace(jp + ".tmp", jp)
+    tell(uid, {"id": qid, "name": os.path.basename(path) or "(script)", "folder": os.path.dirname(path),
+               "signature": signature, "time": meta["time"], "how": how,
+               "action": "quarantined" if kept else "blocked"})
+    count("found")
+    return qid
+
+
+status = {}
+
+
+def count(what, n=1):
+    with state_lock:
+        status[what] = status.get(what, 0) + n
+
+
+def status_write():
+    version = engine_version()
+    with state_lock:
+        back = realtime_back()
+        status.update({"enabled": enabled(), "realtime": enabled() and not back,
+                       "realtime_back": datetime.datetime.fromtimestamp(back).isoformat(timespec="minutes") if back else "",
+                       "engine": version or status.get("engine", "")})
+        os.makedirs(STATE, mode=0o755, exist_ok=True)
+        tmp = os.path.join(STATE, "status.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(status, f, indent=1)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(STATE, "status.json"))
+
+
+# -- the person's rights: children that are them ------------------------------
+
+def credentials(uid):
+    """(uid, gid, groups) of the account, looked up before a fork (no NSS in
+    the child of a threaded process)"""
+    if TESTING:
+        return (uid, None, None)
+    user = pwd.getpwuid(uid)
+    return (uid, user.pw_gid, os.getgrouplist(user.pw_name, user.pw_gid))
+
+
+def become(cred):
+    """this process (a child) becomes the person, their groups too; niced, idle I/O"""
+    os.nice(max(0, 19 - os.nice(0)))
+    try:   # ioprio_set(IOPRIO_WHO_PROCESS, 0, IOPRIO_CLASS_IDLE)
+        libc.syscall(251, 1, 0, 3 << 13)
+    except (OSError, AttributeError):
+        pass
+    uid, gid, groups = cred
+    if TESTING:
+        return
+    os.setgroups(groups)
+    os.setgid(gid)
+    os.setuid(uid)
+    if os.getuid() != uid or os.geteuid() != uid or os.getgid() != gid:
+        os._exit(3)
+
+
+def send_fd(sock, msg, fd):
+    sock.sendmsg([msg], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
+
+
+def recv_fd(sock, size=8192):
+    msg, anc, flags, _ = sock.recvmsg(size, socket.CMSG_SPACE(4))
+    fds = []
+    for level, typ, data in anc:
+        if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+            a = array.array("i")
+            a.frombytes(data[:len(data) - len(data) % 4])
+            fds.extend(a)
+    if flags & socket.MSG_CTRUNC:
+        for f in fds:
+            os.close(f)
+        return msg, None
+    if len(fds) > 1:
+        for f in fds[1:]:
+            os.close(f)
+    return msg, (fds[0] if fds else None)
+
+
+def as_user(uid, fn, *args):
+    """Run fn(sock, *args) in a child that is the person; the parent serves
+    its requests: ("F", path) + descriptor -> scan, b"U" to remove it."""
+    cred = credentials(uid)
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            parent.close()
+            become(cred)
+            fn(child, *args)
+            child.close()
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    child.close()
+    return parent, pid
+
+
+def open_as(uid, path):
+    """The file at PATH, opened as its person would (O_NOFOLLOW): a
+    descriptor, or None. Root never opens a path in someone's folders."""
+    def child(sock, path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC)
+        except OSError:
+            sock.send(b"-")
+            return
+        send_fd(sock, b"F", fd)
+    sock, pid = as_user(uid, child, path)
+    try:
+        sock.settimeout(30)
+        _, fd = recv_fd(sock)
+    except OSError:
+        fd = None
+    sock.close()
+    os.waitpid(pid, 0)
+    return fd
+
+
+def remove_as(uid, path, st):
+    """Remove PATH as its person, if it is still the file that was scanned"""
+    def child(sock, path, dev, ino):
+        try:
+            d = os.open(os.path.dirname(path) or "/", os.O_RDONLY | os.O_DIRECTORY)
+            name = os.path.basename(path)
+            now = os.stat(name, dir_fd=d, follow_symlinks=False)
+            if (now.st_dev, now.st_ino) == (dev, ino) and stat.S_ISREG(now.st_mode):
+                os.unlink(name, dir_fd=d)
+                sock.send(b"Y")
+                return
+        except OSError:
+            pass
+        sock.send(b"N")
+    sock, pid = as_user(uid, child, path, st.st_dev, st.st_ino)
+    try:
+        sock.settimeout(30)
+        ok = sock.recv(8) == b"Y"
+    except OSError:
+        ok = False
+    sock.close()
+    os.waitpid(pid, 0)
+    return ok
+
+
+# -- on execute: wine-sg's question --------------------------------------------
+
+def peer(conn):
+    pid, uid, gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    return pid, uid, gid
+
+
+def check(uid, kind, hint, fd):
+    """ALLOW, or BLOCK <id> <signature>"""
+    st = readable_regular(fd)
+    if st is None:
+        return "ALLOW"
+    if not realtime():
+        return "ALLOW"
+    where = fd_path(fd)
+    if excluded(where):
+        return "ALLOW"
+    content_key = None
+    if kind == "amsi":      # a script's text, in a memfd: known by its content
+        if st.st_size > (16 << 20):
+            return "ALLOW"
+        try:
+            content_key = ("amsi", uid, sha256_fd(fd))
+        except OSError:
+            return "ALLOW"
+    v = scan_fd(uid, fd, st, content_key, start=kind != "amsi")
+    count("scanned")
+    if v is None or not v[0]:
+        return "ALLOW"
+    if kind != "amsi" and allowed(fd):
+        log("uid %d: %s found in %s, restored by an administrator: let be" % (uid, v[1], hint or where))
+        return "ALLOW"
+    path = clean_hint(hint) or where
+    if kind == "amsi":
+        qid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        tell(uid, {"id": qid, "name": hint[:200] or "(script)", "folder": "", "signature": v[1], "time": now_iso(),
+                   "how": "amsi", "action": "blocked"})
+        count("found")
+    else:
+        qid = quarantine(fd, st, uid, v[1], path, kind)
+    count("blocked")
+    log("uid %d: %s found in %s (%s): blocked (%s)" % (uid, v[1], path or "(script)", kind, qid))
+    status_write()
+    return "BLOCK %s %s" % (qid, v[1].replace(" ", "_"))
+
+
+jobs = {}          # uid -> the scan running for them
+
+
+def handle_conn(conn, slots):
+    fd = None
+    try:
+        conn.settimeout(15)
+        _, uid, _ = peer(conn)
+        msg, fd = recv_fd(conn)
+        line = msg.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+        verb, _, rest = line.partition(" ")
+        if verb == "SCAN1" and fd is not None:
+            kind, _, hint = rest.partition(" ")
+            reply = check(uid, kind if kind in KINDS else "file", hint, fd)
+        elif verb == "START1":
+            reply = start_scan(uid, rest.strip(), fd)
+        elif verb == "PING1":
+            reply = "PONG"
+        else:
+            reply = "ERROR"
+        conn.sendall(reply.encode() + b"\n")
+    except (OSError, ValueError, struct.error) as e:
+        log("a request failed: %s" % e)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        conn.close()
+        slots.release()
+
+
+def serve():
+    os.makedirs(RUNTIME, mode=0o755, exist_ok=True)
+    try:
+        os.unlink(SOCKET)
+    except FileNotFoundError:
+        pass
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+    old = os.umask(0o177)
+    s.bind(SOCKET)
+    os.umask(old)
+    if not TESTING:
+        try:      # the Windows side's people, nobody else
+            os.chown(SOCKET, 0, grp.getgrnam(WINE_GROUP).gr_gid)
+            os.chmod(SOCKET, 0o660)
+        except KeyError:
+            log("no group %s: on-execute scanning is root's alone" % WINE_GROUP)
+    else:
+        os.chmod(SOCKET, 0o600)
+    s.listen(64)
+    slots = threading.BoundedSemaphore(32)
+    while True:
+        conn, _ = s.accept()
+        if not slots.acquire(blocking=False):
+            conn.close()          # too busy: the caller times out into "allowed"
+            continue
+        threading.Thread(target=handle_conn, args=(conn, slots), daemon=True).start()
+
+
+# -- scans: quick, full, custom, the scheduled one ------------------------------
+
+REG_UNESCAPE = re.compile(r"\\(x[0-9a-fA-F]{1,4}|.)")
+
+
+def reg_unescape(s):
+    def sub(m):
+        c = m.group(1)
+        if c[0] == "x" and len(c) > 1:
+            return chr(int(c[1:], 16))
+        return {"n": "\n", "r": "\r", "t": "\t", "0": "\0"}.get(c, c)
+    return REG_UNESCAPE.sub(sub, s)
+
+
+def reg_commands(path, wanted):
+    """The string values WANTED(key, name) picks from a Wine .reg file the
+    machine account (or root) keeps: [(key, name, value)]. Never one a
+    person could have put there."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return []
+    try:
+        st = os.fstat(fd)
+        owners = {0}
+        try:
+            owners.add(pwd.getpwnam(SYSTEM_USER).pw_uid)
+        except KeyError:
+            pass
+        if TESTING:
+            owners.add(os.geteuid())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid not in owners or st.st_size > (256 << 20):
+            return []
+        with os.fdopen(os.dup(fd), "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    finally:
+        os.close(fd)
+    out, key = [], None
+    for line in text.splitlines():
+        if line.startswith("["):
+            e = line.rfind("]")
+            key = reg_unescape(line[1:e]).lower() if e > 0 else None
+            continue
+        if key is None or not line.startswith('"'):
+            continue
+        m = re.match(r'"((?:[^"\\]|\\.)*)"=(?:str\(2\):)?"((?:[^"\\]|\\.)*)"', line)
+        if m:
+            name, value = reg_unescape(m.group(1)), reg_unescape(m.group(2))
+            if wanted(key, name.lower()):
+                out.append((key, name, value))
+    return out
+
+
+RUN_KEYS = {"software\\microsoft\\windows\\currentversion\\run", "software\\microsoft\\windows\\currentversion\\runonce",
+            "software\\wow6432node\\microsoft\\windows\\currentversion\\run",
+            "software\\wow6432node\\microsoft\\windows\\currentversion\\runonce",
+            "software\\microsoft\\windows\\currentversion\\policies\\explorer\\run"}
+SERVICE_KEY = re.compile(r"system\\(currentcontrolset|controlset\d+)\\services\\[^\\]+$")
+WINPATH = re.compile(r'(?:\\\?\?\\)?([A-Za-z]:\\[^"<>|*?\r\n]*?\.(?:exe|com|scr|pif|dll|sys|ocx|cpl|bat|cmd|ps1|vbs|vbe|js|jse|wsf|hta|msi))'
+                     r'(?=$|[\s",])', re.I)
+
+
+def command_paths(cmd, env):
+    """The files a Windows command line runs: its program, and any other
+    Windows path in it with a runnable extension (rundll32's DLL)."""
+    def expand(s):
+        return re.sub(r"%([^%]+)%", lambda m: env.get(m.group(1).lower(), m.group(0)), s)
+    cmd = expand(cmd.strip())
+    out = [m.group(1) for m in WINPATH.finditer(cmd)]
+    if cmd.lower().startswith(("system32\\", "\\systemroot\\")):     # a service's ImagePath, relative
+        out.append("C:\\windows\\" + cmd.split("\\", 1 if cmd.lower().startswith("system32") else 2)[-1].split(" ")[0])
+    return out
+
+
+def win_env(name):
+    prof = "C:\\users\\%s" % name if name else "C:\\users\\Public"
+    return {"systemroot": "C:\\windows", "windir": "C:\\windows", "systemdrive": "C:",
+            "programfiles": "C:\\Program Files", "programfiles(x86)": "C:\\Program Files (x86)",
+            "programw6432": "C:\\Program Files", "commonprogramfiles": "C:\\Program Files\\Common Files",
+            "programdata": "C:\\ProgramData", "allusersprofile": "C:\\ProgramData", "public": "C:\\users\\Public",
+            "userprofile": prof, "appdata": prof + "\\AppData\\Roaming", "localappdata": prof + "\\AppData\\Local",
+            "temp": prof + "\\AppData\\Local\\Temp", "tmp": prof + "\\AppData\\Local\\Temp"}
+
+
+def user_items(uid):
+    """A person's places, scanned as them"""
+    try:
+        user = pwd.getpwuid(uid)
+    except KeyError:
+        return []
+    name, home = user.pw_name, home_of(uid)
+    hive = os.path.join(PREFIX, "user-%d.reg" % uid)
+    if not os.path.exists(hive) and os.path.exists(os.path.join(PREFIX, "user.reg")) and \
+            os.stat(PREFIX).st_uid == uid:
+        hive = os.path.join(PREFIX, "user.reg")
+    env = win_env(name)
+    items = [("cmd", p) for _, _, v in reg_commands(hive, lambda k, n: k in RUN_KEYS) for p in command_paths(v, env)]
+    prof = "C:\\users\\%s" % name
+    if home:
+        items += [("dir", os.path.join(home, "Downloads"), 4, True), ("dir", os.path.join(home, "Desktop"), 4, True)]
+    items += [("win", prof + "\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup", 3, True),
+              ("win", prof + "\\Downloads", 4, True), ("win", prof + "\\Desktop", 4, True),
+              ("win", prof + "\\AppData\\Local\\Temp", 4, True)]
+    return items
+
+
+def system_items():
+    """The machine's places, scanned as the SYSTEM account (or, in a person's
+    own scan, as that person: what they can read)"""
+    env = win_env("")
+    reg = reg_commands(os.path.join(PREFIX, "system.reg"),
+                       lambda k, n: k in RUN_KEYS or (n == "imagepath" and SERVICE_KEY.search(k)))
+    items = [("cmd", p) for _, _, v in reg for p in command_paths(v, env)]
+    items += [("tasks", "C:\\windows\\system32\\tasks"),
+              ("win", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup", 3, True),
+              ("win", "C:\\windows\\system32", 1, True), ("win", "C:\\windows\\syswow64", 1, True),
+              ("win", "C:\\Program Files", 8, True), ("win", "C:\\Program Files (x86)", 8, True),
+              ("win", "C:\\ProgramData", 6, True), ("win", "C:\\windows\\Temp", 4, True)]
+    return items
+
+
+def home_of(uid):
+    """the person's home (the test's own, under SG_DEFENDER_HOMES)"""
+    if HOMES:
+        hit = [h for h, u in homes() if u == uid]
+        return hit[0] if hit else None
+    try:
+        return pwd.getpwuid(uid).pw_dir
+    except KeyError:
+        return None
+
+
+def full_items(uid):
+    home = home_of(uid)
+    items = [("dir", home, 64, False)] if home else []
+    return items + [("win", "C:\\", 64, False)]
+
+
+# The child's side (it is the person). It walks with descriptors: each
+# directory below the starting point opened with O_NOFOLLOW from its parent,
+# never through a link, never onto another file system.
+
+def win_to_unix(wpath):
+    """C:\\... through the prefix's drive letters, matching names without case
+    as Windows does; the person's own lookups"""
+    wpath = wpath.replace("/", "\\")
+    if wpath.startswith("\\??\\"):
+        wpath = wpath[4:]
+    if len(wpath) < 2 or wpath[1] != ":":
+        return None
+    root = os.path.join(PREFIX, "dosdevices", wpath[0].lower() + ":")
+    try:
+        cur = os.path.realpath(root)
+    except OSError:
+        return None
+    for part in [p for p in wpath[2:].split("\\") if p and p != "."]:
+        if part == "..":
+            return None
+        nxt = os.path.join(cur, part)
+        if not os.path.lexists(nxt):
+            try:
+                hit = [n for n in os.listdir(cur) if n.lower() == part.lower()]
+            except OSError:
+                return None
+            if not hit:
+                return None
+            nxt = os.path.join(cur, hit[0])
+        cur = nxt
+    return cur
+
+
+class Walker:
+    def __init__(self, sock, stop_at, excl):
+        self.sock, self.files, self.stop_at = sock, 0, stop_at
+        self.excl = excl
+        self.seen = set()       # (device, inode): a file reached twice is offered once
+
+    def offer(self, dfd, name, path, only_runnable):
+        """open one file (no links), hand it up; remove it if asked"""
+        if excluded(path, self.excl) or time.monotonic() > self.stop_at:
+            return
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | os.O_CLOEXEC, dir_fd=dfd)
+        except OSError:
+            return
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) in self.seen \
+                    or (only_runnable and not runnable_fd(name, fd)):
+                return
+            self.seen.add((st.st_dev, st.st_ino))
+            self.files += 1
+            send_fd(self.sock, ("F " + path).encode("utf-8", errors="surrogateescape"), fd)
+            answer = self.sock.recv(16)
+        finally:
+            os.close(fd)
+        if answer == b"U":
+            try:
+                now = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                if (now.st_dev, now.st_ino) == (st.st_dev, st.st_ino):
+                    os.unlink(name, dir_fd=dfd)
+                    self.sock.send(b"R")
+                    return
+            except OSError:
+                pass
+            self.sock.send(b"K")
+
+    def walk(self, dfd, path, depth, only_runnable, dev):
+        if excluded(path, self.excl) or time.monotonic() > self.stop_at:
+            return
+        try:
+            entries = sorted(os.scandir(dfd), key=lambda e: e.name)
+        except OSError:
+            return
+        for e in entries:
+            p = os.path.join(path, e.name)
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if depth > 1:
+                        try:
+                            sub = os.open(e.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dfd)
+                        except OSError:
+                            continue
+                        try:
+                            if os.fstat(sub).st_dev == dev:
+                                self.walk(sub, p, depth - 1, only_runnable, dev)
+                        finally:
+                            os.close(sub)
+                elif e.is_file(follow_symlinks=False):
+                    self.offer(dfd, e.name, p, only_runnable)
+            except OSError:
+                continue
+
+    def start_dir(self, path, depth, only_runnable):
+        try:
+            dfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        except OSError:
+            return
+        try:
+            self.walk(dfd, os.path.realpath(path), depth, only_runnable, os.fstat(dfd).st_dev)
+        finally:
+            os.close(dfd)
+
+    def one_file(self, path):
+        if not path:
+            return
+        try:
+            d = os.open(os.path.dirname(path) or "/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        except OSError:
+            return
+        try:
+            self.offer(d, os.path.basename(path), path, False)
+        finally:
+            os.close(d)
+
+    def tasks(self, wdir):
+        """Scheduled tasks' actions: each <Exec><Command> of the XML files"""
+        top = win_to_unix(wdir)
+        if not top:
+            return
+        for dirpath, _, names in os.walk(top):
+            for n in names:
+                try:
+                    with open(os.path.join(dirpath, n), "rb") as f:
+                        data = f.read(1 << 20)
+                except OSError:
+                    continue
+                text = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8", "replace")
+                for m in re.finditer(r"<Command>([^<]+)</Command>", text):
+                    for p in command_paths(m.group(1).strip(), win_env("")) or [m.group(1).strip()]:
+                        self.one_file(win_to_unix(p))
+
+
+def walk_child(sock, items, dirfd, budget, excl):
+    w = Walker(sock, time.monotonic() + budget, excl)
+    seen = set()
+    for it in items:
+        if it in seen:
+            continue
+        seen.add(it)
+        kind = it[0]
+        if kind == "cmd":
+            w.one_file(win_to_unix(it[1]))
+        elif kind == "dir":
+            w.start_dir(it[1], it[2], it[3])
+        elif kind == "win":
+            p = win_to_unix(it[1])
+            if p:
+                w.start_dir(p, it[2], it[3])
+        elif kind == "tasks":
+            w.tasks(it[1])
+        elif kind == "dirfd" and dirfd is not None:
+            try:
+                where = os.readlink("/proc/self/fd/%d" % dirfd)
+                w.walk(dirfd, where, 64, False, os.fstat(dirfd).st_dev)
+            except OSError:
+                pass
+    sock.send(("D %d" % w.files).encode())
+
+
+def run_part(job, as_uid, items, dirfd=None):
+    """one person's (or the SYSTEM account's) part of a scan"""
+    cred = credentials(as_uid)
+    excl = exclusions()
+    parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            parent.close()
+            become(cred)
+            walk_child(child, items, dirfd, job["budget"], excl)
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    child.close()
+    parent.settimeout(job["budget"] + 600)
+    try:
+        while True:
+            msg, fd = recv_fd(parent)
+            if not msg:
+                break
+            if msg.startswith(b"D "):
+                break
+            if not msg.startswith(b"F ") or fd is None:
+                if fd is not None:
+                    os.close(fd)
+                parent.send(b"K")
+                continue
+            path = msg[2:].decode("utf-8", errors="replace")
+            try:
+                st = readable_regular(fd)
+                v = scan_fd(as_uid, fd, st) if st is not None else (False, None)
+                job["files"] += 1
+                if v is None:
+                    job["skipped"] += 1
+                if v and v[0] and not allowed(fd):
+                    qid = quarantine(fd, st, job["uid"], v[1], path, "scan")
+                    parent.send(b"U")
+                    gone = parent.recv(8) == b"R"
+                    job["threats"].append({"id": qid, "name": os.path.basename(path), "folder": os.path.dirname(path),
+                                           "signature": v[1], "removed": gone})
+                    log("scan %s: %s found in %s (%s)" % (job["id"], v[1], path, "removed" if gone else "not removable"))
+                else:
+                    parent.send(b"K")
+            finally:
+                os.close(fd)
+            if job["files"] % 50 == 0:
+                save_job(job)
+    except OSError as e:
+        log("scan %s: %s" % (job["id"], e))
+    finally:
+        parent.close()
+        try:
+            os.kill(pid, 9) if not os.waitpid(pid, os.WNOHANG)[0] else None
+        except ChildProcessError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+
+
+def save_job(job):
+    """the person's scans.json: the last 30, newest first"""
+    try:
+        ndir = notice_dir(job["uid"])
+        try:
+            with open(os.path.join(ndir, "scans.json")) as f:
+                scans = json.load(f)
+        except (OSError, ValueError):
+            scans = []
+        rec = {k: job[k] for k in ("id", "type", "state", "start", "end", "files", "skipped")}
+        rec["found"] = len(job["threats"])
+        rec["threats"] = job["threats"][:50]
+        scans = [rec] + [s for s in scans if isinstance(s, dict) and s.get("id") != job["id"]]
+        write_private(ndir, "scans.json", scans[:30])
+    except (KeyError, OSError) as e:
+        log("could not record scan %s: %s" % (job.get("id"), e))
+
+
+def run_job(job, parts, dirfd=None):
+    try:
+        for as_uid, items in parts:
+            run_part(job, as_uid, items, dirfd)
+        job["state"] = "done"
+    except Exception as e:     # a scan's failure is said, never fatal
+        log("scan %s failed: %r" % (job["id"], e))
+        job["state"] = "failed"
+    finally:
+        if dirfd is not None:
+            os.close(dirfd)
+        job["end"] = now_iso()
+        save_job(job)
+        with state_lock:
+            if jobs.get(job["uid"]) is job:
+                del jobs[job["uid"]]
+            status["last_scan"] = job["end"]
+        log("scan %s (%s, uid %d): %d files, %d found" % (job["id"], job["type"], job["uid"], job["files"],
+                                                         len(job["threats"])))
+
+
+def new_job(uid, kind):
+    return {"id": datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3), "uid": uid,
+            "type": kind, "state": "running", "start": now_iso(), "end": "", "files": 0, "skipped": 0,
+            "threats": [], "budget": 6 * 3600 if kind == "full" else 3600}
+
+
+def start_scan(uid, kind, fd):
+    """A person's scan, as them: quick (their places and the machine's, what
+    they can read), full (their home and C:), custom (the folder whose
+    descriptor they pass)."""
+    if not enabled():
+        return "OFF"
+    if kind not in ("quick", "full", "custom") or (kind == "custom") != (fd is not None):
+        return "ERROR"
+    if kind == "custom":
+        try:
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                return "ERROR"
+        except OSError:
+            return "ERROR"
+    with state_lock:
+        if uid in jobs:
+            return "BUSY %s" % jobs[uid]["id"]
+        job = jobs[uid] = new_job(uid, kind)
+    save_job(job)
+    if kind == "quick":
+        parts = [(uid, user_items(uid) + system_items())]
+    elif kind == "full":
+        parts = [(uid, full_items(uid))]
+    else:
+        parts = [(uid, [("dirfd",)])]
+    threading.Thread(target=run_job, args=(job, parts, os.dup(fd) if fd is not None else None), daemon=True).start()
+    return "STARTED %s" % job["id"]
+
+
+def wine_users():
+    """the accounts that run Windows programs here: (uid)"""
+    if HOMES:
+        return sorted({os.stat(h).st_uid for h in HOMES.split(":") if os.path.isdir(h)})
+    try:
+        members = set(grp.getgrnam(WINE_GROUP).gr_mem)
+    except KeyError:
+        members = set()
+    out = []
+    for p in pwd.getpwall():
+        if 1000 <= p.pw_uid < 60000 and p.pw_name != SYSTEM_USER and (p.pw_name in members or not members) \
+                and os.path.isdir(p.pw_dir):
+            out.append(p.pw_uid)
+    return out
+
+
+def scheduled_scan():
+    """Each day's quick scan, as Windows' maintenance does: each person's
+    places as them, the machine's as the SYSTEM account"""
+    try:
+        sys_uid = os.geteuid() if TESTING else pwd.getpwnam(SYSTEM_USER).pw_uid
+    except KeyError:
+        sys_uid = None
+    for uid in wine_users():
+        with state_lock:
+            if uid in jobs:
+                continue
+            job = jobs[uid] = new_job(uid, "scheduled")
+        run_job(job, [(uid, user_items(uid))])
+    if sys_uid is not None:
+        with state_lock:
+            if sys_uid in jobs:
+                return
+            job = jobs[sys_uid] = new_job(sys_uid, "scheduled")
+        run_job(job, [(sys_uid, system_items())])
+
+
+def scheduler():
+    last_file = os.path.join(STATE, "last-scheduled-scan")
+    if not os.path.exists(last_file):     # the first one a day after install, not at its first boot
+        with open(last_file, "w") as f:
+            f.write(now_iso() + "\n")
+    while True:
+        try:
+            last = os.stat(last_file).st_mtime
+        except OSError:
+            last = 0
+        if enabled() and time.time() - last >= SCHEDULE:
+            with open(last_file, "w") as f:
+                f.write(now_iso() + "\n")
+            scheduled_scan()
+            status_write()
+        time.sleep(min(600, max(5, SCHEDULE / 4)))
+
+
+# -- on download: the watched folders ------------------------------------------
+
 class Inotify:
     def __init__(self):
-        libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
         self._add = libc.inotify_add_watch
         self._add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
         self.fd = libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
         if self.fd < 0:
             raise OSError(ctypes.get_errno(), "inotify_init1")
-        self.wd = {}            # wd -> directory
+        self.wd = {}            # wd -> (directory, owner)
 
-    def watch(self, path):
-        wd = self._add(self.fd, path.encode(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE_SELF)
+    def watch(self, path, uid):
+        wd = self._add(self.fd, path.encode(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE_SELF
+                       | IN_ONLYDIR | IN_DONT_FOLLOW)
         if wd >= 0:
-            self.wd[wd] = path
+            self.wd[wd] = (path, uid)
         return wd >= 0
 
     def events(self, timeout):
@@ -135,7 +1336,7 @@ class Inotify:
             if mask & IN_DELETE_SELF:
                 self.wd.pop(wd, None)
             elif d and name:
-                out.append((mask, os.path.join(d, name)))
+                out.append((mask, os.path.join(d[0], name), d[1]))
         return out
 
 
@@ -149,209 +1350,87 @@ def homes():
     return out
 
 
-def owner_of(path, fallback):
+def downloaded(path, uid):
+    """A file written in a watched folder: opened as the folder's person, scanned,
+    quarantined (and removed by them) if found. Returns False to try again later."""
+    name = os.path.basename(path)
+    if runnable_name(name) is None:
+        return True
+    fd = open_as(uid, path)
+    if fd is None:
+        return True
     try:
-        return os.stat(path).st_uid
-    except OSError:
-        return fallback
+        st = readable_regular(fd)
+        if st is None or not runnable_fd(name, fd) or excluded(fd_path(fd)):
+            return True
+        verdict = scan_fd(uid, fd, st)
+        if verdict is None:
+            return False
+        count("scanned")
+        if verdict[0] and allowed(fd):
+            log("%s: %s found, but an administrator restored this file: let be" % (path, verdict[1]))
+        elif verdict[0]:
+            qid = quarantine(fd, st, uid, verdict[1], path, "download")
+            gone = remove_as(uid, path, st)
+            with state_lock:
+                status["last_found"] = now_iso()
+            log("%s: %s found, quarantined (%s)%s" % (path, verdict[1], qid, "" if gone else ", but not removed"))
+        status_write()
+        return True
+    finally:
+        os.close(fd)
 
 
-def status_write(st):
-    os.makedirs(STATE, mode=0o755, exist_ok=True)
-    tmp = os.path.join(STATE, "status.json.tmp")
-    with open(tmp, "w") as f:
-        json.dump(st, f, indent=1)
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, os.path.join(STATE, "status.json"))
-
-
-def engine_version():
-    """ClamAV's engine and definitions: "ClamAV 1.4.3/27780/Fri Oct  3 08:24:01 2026" """
-    try:
-        r = subprocess.run(SCAN[:1] + ["--version"], capture_output=True, text=True, timeout=20)
-        return r.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-
-
-def chown_quiet(path, gid):
-    """root's, readable by the person's group (the test, not root, keeps its own)"""
-    try:
-        os.chown(path, 0, gid)
-    except PermissionError:
-        pass
-
-
-def quarantine(path, uid, signature):
-    qdir = os.path.join(STATE, "quarantine")
-    os.makedirs(qdir, mode=0o700, exist_ok=True)
-    os.chmod(qdir, 0o700)
-    qid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
-    dst = os.path.join(qdir, qid + ".bin")
-    h = hashlib.sha256()
-    try:
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        size = os.path.getsize(path)
-        mode = os.stat(path).st_mode & 0o777
-        try:
-            os.rename(path, dst)
-        except OSError as e:
-            if e.errno != errno.EXDEV:
-                raise
-            shutil.copyfile(path, dst)
-            os.unlink(path)
-        os.chmod(dst, 0o600)
-        # root's alone: not the person's any more, nor shared by the folder's ACL
-        chown_quiet(dst, 0)
-        try:
-            os.removexattr(dst, "system.posix_acl_access")
-        except OSError:
-            pass
-    except OSError as e:
-        log("could not quarantine %s: %s" % (path, e))
-        return None
-    meta = {"id": qid, "path": path, "uid": uid, "signature": signature, "size": size,
-            "sha256": h.hexdigest(), "mode": mode, "time": datetime.datetime.now().isoformat(timespec="seconds")}
-    with open(os.path.join(qdir, qid + ".json"), "w") as f:
-        json.dump(meta, f, indent=1)
-    os.chmod(os.path.join(qdir, qid + ".json"), 0o600)
-    # the person's notice: their session shows it, Settings lists it
-    try:
-        user = pwd.getpwuid(uid)
-        ndir = os.path.join(NOTICES, str(uid))
-        os.makedirs(NOTICES, mode=0o755, exist_ok=True)
-        os.makedirs(ndir, mode=0o750, exist_ok=True)
-        chown_quiet(ndir, user.pw_gid)
-        os.chmod(ndir, 0o750)
-        tmp = os.path.join(ndir, qid + ".tmp")
-        with open(tmp, "w") as f:
-            json.dump({"id": qid, "name": os.path.basename(path), "folder": os.path.dirname(path),
-                       "signature": signature, "time": meta["time"]}, f)
-        chown_quiet(tmp, user.pw_gid)
-        os.chmod(tmp, 0o640)
-        os.replace(tmp, os.path.join(ndir, qid + ".json"))
-    except (KeyError, OSError) as e:
-        log("could not tell uid %d: %s" % (uid, e))
-    return qid
-
-
-clamd_asked = False
-
-
-def start_clamd():
-    """clamav-daemon is skipped at install, before freshclam has fetched its
-    first definitions (ConditionPathExistsGlob), and nothing starts it once
-    they are here (QA VM 2026-10-03): start it when it is not answering.
-    Said once while it stays down, not every 30 s (qa4 2026-10-22)."""
-    global clamd_asked
-    if "SG_DEFENDER_SCAN" in os.environ:
-        return
-    if subprocess.run(["systemctl", "is-active", "-q", "clamav-daemon.service"], check=False).returncode == 0:
-        clamd_asked = False
-        return
-    if not clamd_asked:
-        log("starting clamd")
-    clamd_asked = True
-    subprocess.run(["systemctl", "start", "--no-block", "clamav-daemon.service"], capture_output=True, check=False)
-
-
-def allowed(path):
-    """restored by an administrator: this exact file is let be"""
-    try:
-        with open(os.path.join(STATE, "allowed")) as f:
-            sums = {line.split()[0] for line in f if line.strip()}
-    except OSError:
-        return False
-    if not sums:
-        return False
-    h = hashlib.sha256()
-    try:
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-    except OSError:
-        return False
-    return h.hexdigest() in sums
-
-
-def scan(path, uid, st):
-    """clamd's verdict: (True, signature) found, (False, None) clean, None not known"""
-    try:
-        r = subprocess.run(SCAN + [path], capture_output=True, text=True, timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log("scanning %s failed: %s" % (path, e))
-        return None
-    if r.returncode == 0:
-        return (False, None)
-    if r.returncode == 1:
-        sig = "unknown"
-        for line in r.stdout.splitlines():
-            if line.endswith(" FOUND"):
-                sig = line.rsplit(": ", 1)[-1][:-6]
-        return (True, sig)
-    log("scanning %s: %s" % (path, (r.stderr or r.stdout).strip()[:200]))
-    start_clamd()
-    return None
-
-
-def main():
-    os.umask(0o022)
+def watch():
     ino = Inotify()
-    st = {"enabled": enabled(), "engine": engine_version(), "scanned": 0, "found": 0,
-          "since": datetime.datetime.now().isoformat(timespec="seconds")}
-    status_write(st)
     pending = {}        # path -> (uid, tries, due)
     last_homes = 0
-    log("watching Downloads, Desktop and Applications%s" % ("" if st["enabled"] else " (turned off)"))
     while True:
         now = time.monotonic()
         if now - last_homes > 30:
-            watched = set(ino.wd.values())
-            for home, _ in homes():
+            watched = {d for d, _ in ino.wd.values()}
+            for home, uid in homes():
                 for sub in WATCHED:
                     d = os.path.join(home, sub)
-                    if d not in watched and os.path.isdir(d):
-                        ino.watch(d)
+                    if d not in watched and os.path.isdir(d) and not os.path.islink(d):
+                        # and the folders already in it (made while this was not running)
+                        for sub_d, dirs, _ in os.walk(d):
+                            if sub_d.count("/") - d.count("/") >= 4:
+                                dirs[:] = []
+                            if sub_d not in watched:
+                                ino.watch(sub_d, uid)
             last_homes = now
-            on = enabled()
-            if on != st["enabled"]:
-                st["enabled"] = on
-                log("turned %s" % ("on" if on else "off"))
-            if on:
+            if enabled():
                 start_clamd()
-            st["engine"] = engine_version() or st["engine"]
-            status_write(st)
-        for mask, path in ino.events(1.0):
+            status_write()
+        for mask, path, uid in ino.events(1.0):
             if mask & IN_ISDIR:
-                if mask & (IN_CREATE | IN_MOVED_TO):
-                    ino.watch(path)
+                if mask & (IN_CREATE | IN_MOVED_TO) and not os.path.islink(path):
+                    ino.watch(path, uid)
                 continue
             if mask & (IN_CLOSE_WRITE | IN_MOVED_TO):
                 # settle a moment: a program may write it in more than one go
-                pending[path] = (owner_of(path, 0), 0, time.monotonic() + 0.5)
+                pending[path] = (uid, 0, time.monotonic() + 0.5)
         for path, (uid, tries, due) in list(pending.items()):
             if time.monotonic() < due:
                 continue
             del pending[path]
-            if not st["enabled"] or not os.path.isfile(path) or os.path.islink(path) or not runnable(path):
+            if not realtime():
                 continue
-            verdict = scan(path, uid, st)
-            if verdict is None:
-                if tries < 20:          # clamd still loading its definitions: again shortly
-                    pending[path] = (uid, tries + 1, time.monotonic() + 15)
-                continue
-            st["scanned"] += 1
-            if verdict[0] and allowed(path):
-                log("%s: %s found, but an administrator restored this file: let be" % (path, verdict[1]))
-            elif verdict[0]:
-                qid = quarantine(path, uid, verdict[1])
-                if qid:
-                    st["found"] += 1
-                    st["last_found"] = datetime.datetime.now().isoformat(timespec="seconds")
-                    log("%s: %s found, quarantined (%s)" % (path, verdict[1], qid))
-            status_write(st)
+            if not downloaded(path, uid) and tries < 20:   # clamd still loading its definitions
+                pending[path] = (uid, tries + 1, time.monotonic() + 15)
+
+
+def main():
+    os.umask(0o022)
+    status.update({"scanned": 0, "found": 0, "blocked": 0, "since": now_iso()})
+    engine_version(force=True)
+    status_write()
+    for fn in (serve, scheduler, rescanner):
+        threading.Thread(target=fn, daemon=True).start()
+    log("real-time protection: on execute (%s), and Downloads, Desktop and Applications%s"
+        % (SOCKET, "" if enabled() else " (turned off)"))
+    watch()
 
 
 if __name__ == "__main__":
