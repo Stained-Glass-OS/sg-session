@@ -2061,6 +2061,28 @@ screens included) and types into it. The pieces:
   seat0, which sg-lockd watches.
 - The technician types into the real lock screen; the password goes to PAM
   through sg-lockd as at the console. No new credential path.
+- **Elevated programs' own control group** (i0635): sg-brokerd.service has
+  Delegate=yes + DelegateSubgroup=broker; the broker (as root, before it
+  drops) makes `sg-brokerd.service/elevated` and keeps its cgroup.procs open
+  (the kernel checks a move against the opener's credentials); each elevated
+  program -- launch(), and the monitor's run-as-another-account -- moves itself
+  there before exec (fail closed: exit 126 if the group exists and the move
+  fails). sg-session-start and sg-login-ui pass sg-compositor
+  `-E $SG_ELEVATED_CGROUPS` (sg-common.sh) when it takes it: such a process is
+  refused the privileged socket and the lock's commands. Before, an elevated
+  program could connect privileged (its window over the lock screen) and send
+  UNLOCK -- unlocking the session with no password. Real session (QA VM):
+  the elevated program's priv.sock "refused", UNLOCK "ERR not permitted",
+  consent prompt and its display unaffected.
+- **winlogon.exe** (i0634, wine-sg 9657): sg-lockd starts the stand-in as the
+  SYSTEM account in the session it watches (SG_SESSION_UID; `SG_WINLOGON_CMD`,
+  "" turns it off), holding its standard input: it ends when the watch does.
+  UltraVNC's and AnyDesk's services duplicate its token for their helper, as on
+  Windows. A SYSTEM process's descriptor: the person's program and standard
+  users get access denied (only SYSTEM / an elevated program). Not yet at the
+  sign-in screen (sg-lockd watches user sessions only). Gate
+  `test/winlogon-gate.sh` (QA VM; `make winlogon-probe`); mutant
+  `SG_MUTANT_NO_WINLOGON`.
 
 Gate: `test/remote-support-gate.sh` (in a QA VM, as root, someone signed in;
 TightVNC 2.8 GPL's MSI as a service, loopback only, `test/rfb-client.py` as

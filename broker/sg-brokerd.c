@@ -55,6 +55,78 @@ struct surface { char control[256], priv[256]; };
 static int find_surface(uid_t uid, struct surface *sf);
 static const char *g_elevated_run = "/usr/libexec/stained-glass/sg-elevated-run";
 
+/* Elevated programs' own control group (i0635). They run as the SYSTEM
+ * account, as the consent prompt does, but are none of the machine's own
+ * pieces: on Windows an elevated program lives on the user's desktop, never
+ * on the secure desktop. sg-compositor -E refuses a SYSTEM-account process in
+ * this group its privileged socket (so nothing of it shows while the session
+ * is locked, and it captures and types nothing there) and the lock's
+ * commands (UNLOCK, SECURE, SAS, ...). systemd runs the broker in
+ * sg-brokerd.service/broker (Delegate=yes, DelegateSubgroup=broker); the
+ * group is its sibling sg-brokerd.service/elevated, made here as root. Its
+ * cgroup.procs is opened as root before the broker drops to the SYSTEM
+ * account: the kernel checks a move against the opener's credentials, so the
+ * broker can put a program in, while nothing as the SYSTEM account -- the
+ * program least of all -- can take it out again (both directories are
+ * root's). -1: no delegated group (an older unit, a gate): as before. */
+static int g_elevated_cg = -1;
+static void logmsg(const char *fmt, ...);
+static char g_elevated_cg_path[512];
+
+static void elevated_cgroup_setup(void)
+{
+    char line[512], dir[600];
+    size_t n;
+    FILE *f;
+    const char *root = getenv("SG_CGROUP_ROOT");
+
+    if (!root) root = "/sys/fs/cgroup";
+    if (geteuid() != 0 || !(f = fopen("/proc/self/cgroup", "re"))) return;
+    line[0] = 0;
+    while (fgets(line, sizeof(line), f) && strncmp(line, "0::/", 4)) line[0] = 0;
+    fclose(f);
+    line[strcspn(line, "\n")] = 0;
+    n = strlen(line);
+    /* only under systemd's delegated subgroup: .../sg-brokerd.service/broker */
+    if (n < 4 + 7 || strcmp(line + n - 7, "/broker")) {
+        logmsg("elevated programs share the broker's control group (%s: not delegated)", line[0] ? line + 3 : "?");
+        return;
+    }
+    line[n - 7] = 0;
+    if ((size_t)snprintf(dir, sizeof(dir), "%s%s/elevated", root, line + 3) >= sizeof(dir)) return;
+    if (mkdir(dir, 0755) < 0 && errno != EEXIST) { logmsg("mkdir %s: %s", dir, strerror(errno)); return; }
+    if ((size_t)snprintf(g_elevated_cg_path, sizeof(g_elevated_cg_path), "%.400s/elevated", line + 3) >= sizeof(g_elevated_cg_path)) return;
+    {
+        char procs[640];
+        snprintf(procs, sizeof(procs), "%s/cgroup.procs", dir);
+        g_elevated_cg = open(procs, O_WRONLY | O_CLOEXEC);
+    }
+    if (g_elevated_cg < 0) {
+        logmsg("open %s/cgroup.procs: %s", dir, strerror(errno));
+        g_elevated_cg_path[0] = 0;
+        return;
+    }
+    logmsg("elevated programs run in %s", g_elevated_cg_path);
+}
+
+/* In a child about to become an elevated program: move this process into the
+ * elevated group (everything it starts stays there), and give up the
+ * descriptor. 0 when moved or when there is no group; -1 when there is one
+ * and the move failed -- the program must not run then. */
+static int elevated_cgroup_enter(void)
+{
+    int ok;
+    if (g_elevated_cg < 0) return 0;
+#ifdef SG_MUTANT_ELEVATED_STAYS
+    close(g_elevated_cg); g_elevated_cg = -1; return 0;
+#endif
+    ok = write(g_elevated_cg, "0", 1) == 1;
+    if (!ok) logmsg("cannot move an elevated program into %s: %s", g_elevated_cg_path, strerror(errno));
+    close(g_elevated_cg);
+    g_elevated_cg = -1;
+    return ok ? 0 : -1;
+}
+
 static void logmsg(const char *fmt, ...)
 {
     va_list ap; char ts[32]; time_t t = time(NULL); struct tm tm;
@@ -201,6 +273,8 @@ static int monitor_spawn(uint32_t uid, char *blob, uint32_t len)
         setsid();
         if ((again = fork()) < 0) _exit(1);
         if (again) _exit(0);
+        /* a program run as another account is an elevated program too */
+        if (elevated_cgroup_enter() < 0) _exit(1);
         if (!own_display && *control) {
             /* sg-elevated-run, as root, gives up root for the X server
              * (the SYSTEM account) and for the program (the account) */
@@ -1139,6 +1213,9 @@ static int launch(char **argv, char **envp, const char *cwd, const char *system_
     }
     close(conn);
     if (sfd[0] >= 0) close(sfd[0]);
+    /* the elevated programs' own control group, before anything of the
+     * program runs */
+    if (elevated_cgroup_enter() < 0) _exit(126);
     /* a clean environment: only what the client passed, plus the SYSTEM
      * account's own identity */
     clearenv();
@@ -1252,6 +1329,8 @@ int main(void)
     chmod(sockpath, 0666);
     if (listen(lfd, 16) < 0) { logmsg("listen: %s", strerror(errno)); return 1; }
 
+    /* as root, before the monitor forks: both start elevated programs */
+    elevated_cgroup_setup();
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv) < 0 || (mon = fork()) < 0) return 1;
     if (!mon) { close(sv[1]); close(lfd); monitor_loop(sv[0], helper); _exit(0); }
     close(sv[0]); g_monitor = sv[1];

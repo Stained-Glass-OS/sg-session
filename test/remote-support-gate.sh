@@ -51,7 +51,7 @@ EXP=$(pgrep -u "$U" -f 'explorer.exe' | head -1)
 [ -n "$EXP" ] || { echo "SKIP: $U has no explorer"; exit 77; }
 as_user() {
     # shellcheck disable=SC2046
-    runuser -u "$U" -- env $(tr '\0' '\n' < /proc/"$EXP"/environ | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|XAUTHORITY|HOME|USER|PATH|WINE[A-Z]*|SG_[A-Z_]*)=' | tr '\n' ' ') \
+    runuser -u "$U" -- env $(tr '\0' '\n' < /proc/"$EXP"/environ | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|XAUTHORITY|HOME|USER|PATH|WINE[A-Z]*|SG_[A-Z_]*)=' | grep -v '^WINESERVERSOCKET=' | tr '\n' ' ') \
         WINEDEBUG=-all "$@"
 }
 sys_wine() { runuser -u "$SYS" -- sh -c '. /usr/lib/stained-glass/sg-common.sh; sg_wine_env; export WINEDEBUG=-all; exec "$@"' sh "$@"; }
@@ -80,13 +80,16 @@ if [ -n "$MSI" ] && ! sys_wine wine sc query tvnserver 2>/dev/null | grep -q SER
         SERVER_REGISTER_AS_SERVICE=1 SERVER_ADD_FIREWALL_EXCEPTION=0 >"$T/msi.log" 2>&1
     info "msiexec: $?"
 fi
-# Two of TightVNC's defaults are left out, each an open item of its own (see
-# sg-session's CLAUDE.md, remote support): its Desktop Duplication capture
-# (UseD3D) gives a black picture through DXVK in the QA VM, and removing the
-# wallpaper while viewed (RemoveWallpaper) ends the sign-in screen's greeter.
+# TightVNC's defaults, its Desktop Duplication capture (UseD3D) and
+# RemoveWallpaper included: wine-sg 9655 (its helper's 32-bit hook loader no
+# longer ends the machine's wineserver when it goes, which took the sign-in
+# screen and the helpers' displays with it) and sg-d3d's DXVK 0016 / wine-sg
+# 9656 (a duplicated frame says it has a dirty rectangle: TightVNC copied
+# nothing, its viewers saw black). Settings an earlier run left are removed.
 for v in UseD3D RemoveWallpaper; do
-    sys_wine wine reg add 'HKLM\Software\TightVNC\Server' /v $v /t REG_DWORD /d 0 /f >/dev/null 2>&1
+    sys_wine wine reg delete 'HKLM\Software\TightVNC\Server' /v $v /f >/dev/null 2>&1
 done
+SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 sys_wine wine sc stop tvnserver >/dev/null 2>&1; nap 4
 sys_wine wine sc start tvnserver >/dev/null 2>&1
 nap 5
@@ -164,6 +167,17 @@ $VIEW shot "$T/v3.ppm" 2>/dev/null
 [ "$(lit "$T/v3.ppm")" -gt 300 ] && pass "the viewer sees the desktop again" || fail "the viewer after unlocking: $(lit "$T/v3.ppm")/1000"
 journalctl -b --no-pager -o cat 2>/dev/null | grep -q "remote support is capturing the screen" && pass "the capture is in the journal (audit)" \
     || info "no audit line in the journal (compositor log elsewhere?)"
+# the viewers are gone: each connection's helper went with its own display and
+# its 32-bit hook loader (i0631), the person's shell is still there, and the
+# machine's wineserver never counted a hook below zero (9655, i0630)
+nap 15
+left=$(pgrep -f 'sg-elevated-run --system|hookldr.exe|tvnserver.exe -desktopserver' | wc -l)
+[ "$left" -eq 0 ] && pass "no helper, hook loader or helper display is left after the viewers went" \
+    || fail "$left helper processes left: $(pgrep -af 'sg-elevated-run --system|hookldr.exe|tvnserver.exe -desktopserver' | cut -c1-80 | tr '\n' ';')"
+pgrep -u "$U" -f 'explorer.exe' >/dev/null && pass "$U's shell is still running" || fail "$U's shell is gone"
+journalctl -u sg-wineserver --since "$SINCE" --no-pager -o cat 2>/dev/null | grep -q 'below zero\|Assertion' \
+    && fail "the machine's wineserver counted a hook below zero: $(journalctl -u sg-wineserver --since "$SINCE" --no-pager -o cat | grep -m1 'below zero\|Assertion')" \
+    || pass "the machine's wineserver kept every hook count balanced"
 [ -n "${SG_RS_KEEP:-}" ] && cp "$T"/*.ppm /var/tmp/ 2>/dev/null
 
 echo

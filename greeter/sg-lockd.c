@@ -497,6 +497,61 @@ static int ui_line( struct ui *ui, const char *user, char *line )
     return 0;
 }
 
+/* ---- the session's winlogon.exe (wine-sg 9657, i0634) ---------------------
+ *
+ * On Windows every session has winlogon.exe running as SYSTEM, and
+ * remote-support services (UltraVNC, AnyDesk) start their per-session helper
+ * with a copy of its token. Its stand-in runs here, as the machine account,
+ * in the session watched (SG_SESSION_UID: wine-sg puts a SYSTEM process into
+ * that user's session), for as long as it is watched: it ends when the pipe
+ * on its standard input closes -- when the session goes, or this service
+ * does. Only SYSTEM can open it (a SYSTEM process's descriptor), as on
+ * Windows. SG_WINLOGON_CMD replaces the command ("" disables it). */
+struct winlogon { pid_t pid; int to; };
+
+static void winlogon_start( struct winlogon *wl, uid_t uid )
+{
+    const char *cmd = getenv( "SG_WINLOGON_CMD" );
+    int in[2];
+
+    wl->pid = -1; wl->to = -1;
+#ifdef SG_MUTANT_NO_WINLOGON
+    return;
+#endif
+    if (!cmd) cmd = ". /usr/lib/stained-glass/sg-common.sh && sg_wine_env && WINEDEBUG=-all exec wine winlogon.exe";
+    if (!*cmd || pipe2( in, O_CLOEXEC ) < 0) return;
+    if ((wl->pid = fork()) < 0) { close( in[0] ); close( in[1] ); return; }
+    if (!wl->pid)
+    {
+        char u[16];
+        int nul = open( "/dev/null", O_RDWR );
+        dup2( in[0], 0 );
+        if (nul >= 0) { dup2( nul, 1 ); dup2( nul, 2 ); }
+        setsid();
+        snprintf( u, sizeof(u), "%u", (unsigned)uid );
+        setenv( "SG_SESSION_UID", u, 1 );
+        unsetenv( "SG_LOCK_PRIV" );
+        execl( "/bin/sh", "sh", "-c", cmd, (char *)NULL );
+        _exit( 127 );
+    }
+    close( in[0] );
+    wl->to = in[1];
+    logmsg( "winlogon.exe for uid %u's session (pid %d)", (unsigned)uid, (int)wl->pid );
+}
+
+static void winlogon_stop( struct winlogon *wl )
+{
+    int i;
+    if (wl->to >= 0) close( wl->to );
+    wl->to = -1;
+    if (wl->pid <= 0) return;
+    /* it ends at the end of its input; then its process group, should
+     * anything of it linger */
+    for (i = 0; i < 50 && waitpid( wl->pid, NULL, WNOHANG ) == 0; i++) usleep( 100000 );
+    if (i == 50) { kill( -wl->pid, SIGKILL ); waitpid( wl->pid, NULL, 0 ); }
+    wl->pid = -1;
+}
+
 static int drop_privileges( const char *account )
 {
     struct passwd *pw = getpwnam( account );
@@ -559,6 +614,7 @@ int main( int argc, char **argv )
         struct passwd *pw;
         char user[MAXFIELD], ev[64];
         struct ui ui = { 0 };
+        struct winlogon wl = { -1, -1 };
         int w;
 
         if (scan && !find_session()) { sleep( 1 ); continue; }
@@ -571,6 +627,7 @@ int main( int argc, char **argv )
         snprintf( user, sizeof(user), "%s", pw->pw_name );
         write_full( w, "WATCH\n", 6 );
         logmsg( "watching the session of %s", user );
+        winlogon_start( &wl, cred.uid );
 
         for (;;)
         {
@@ -659,6 +716,7 @@ int main( int argc, char **argv )
             }
         }
         ui_stop( &ui );
+        winlogon_stop( &wl );
         close( w );
         logmsg( "compositor went away; waiting for the next one" );
         sleep( 1 );

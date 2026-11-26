@@ -118,6 +118,7 @@ if [ "$(basename "$SG_COMPOSITOR")" = sg-compositor ] && sg_compositor_takes_sup
     mkdir -m 0755 "$_gdir" 2>/dev/null || true
     if [ -n "$_sys_uid" ] && [ -d "$_gdir" ] && [ -w "$_gdir" ]; then
         set -- -L "$_gdir/priv.sock" -C "$_gdir/control.sock" -U "$_sys_uid" -R "$SG_SUPPORT_CGROUPS"
+        sg_compositor_takes_elevated && set -- "$@" -E "$SG_ELEVATED_CGROUPS"
     fi
 fi
 # -s: Ctrl+Alt+F1-F9 reach the text consoles from the sign-in screen too

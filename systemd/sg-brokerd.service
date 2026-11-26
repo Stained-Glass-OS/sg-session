@@ -19,6 +19,12 @@ Environment=SG_SEAT_DIR=/run/stained-glass-seat/seat0
 RuntimeDirectory=stained-glass-broker
 RuntimeDirectoryMode=0755
 ExecStart=/usr/libexec/stained-glass/sg-brokerd
+# Elevated programs get a control group of their own beside the broker's
+# (sg-brokerd.service/elevated, made by the broker as root): sg-compositor -E
+# refuses them the privileged socket and the lock's commands, which the
+# consent prompt (sg-brokerd.service/broker) keeps (i0635).
+Delegate=yes
+DelegateSubgroup=broker
 Restart=on-failure
 
 [Install]

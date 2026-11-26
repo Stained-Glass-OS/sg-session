@@ -1,3 +1,35 @@
+sg-session (0.1.0-297) unstable; urgency=medium
+
+  * Elevated programs run in a control group of their own (i0635):
+    sg-brokerd.service is delegated (Delegate=yes, DelegateSubgroup=broker)
+    and the broker, as root before it drops, makes
+    sg-brokerd.service/elevated and keeps its cgroup.procs open; every
+    elevated program (and a program run as another account) moves itself
+    there before it starts -- it does not start if that fails. Only root can
+    move it out. sg-session-start and the sign-in screen pass sg-compositor
+    -E with it (0.2.0+sg84, SG_ELEVATED_CGROUPS in sg-common.sh): an
+    elevated program is refused the privileged socket -- its window no
+    longer shows over the locked session -- and the lock's commands; before,
+    its UNLOCK unlocked the session with no password. The consent prompt
+    (sg-brokerd.service/broker), the lock screen and remote support are
+    unaffected. QA VM: an elevated program in the group, refused, audited.
+  * winlogon.exe in the session (i0634, wine-sg 10.0-1177's 9657): sg-lockd
+    starts the stand-in as SYSTEM in the session it watches and ends it with
+    the watch, so UltraVNC's and AnyDesk's services start their helper with
+    a copy of its token, as on Windows. Only SYSTEM may open it. Gate
+    test/winlogon-gate.sh (QA VM, make winlogon-probe: 9/9; mutant
+    SG_MUTANT_NO_WINLOGON 9 FAIL).
+  * test/remote-support-gate.sh runs TightVNC with its defaults (Desktop
+    Duplication and RemoveWallpaper, fixed by wine-sg 9655/9656 and sg-d3d's
+    DXVK 0016) and checks that no helper, hook loader or helper display is
+    left after the viewers, the person's shell is still there, and the
+    machine's wineserver never counted a hook below zero (QA VM 22/22; with
+    1174's server 1 FAIL, with the old DXVK 4 FAIL). The person's environment
+    it borrows leaves out WINESERVERSOCKET (a restarted explorer carries it:
+    wine then failed with "Bad server socket").
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 26 Nov 2026 09:40:00 -0800
+
 sg-session (0.1.0-296) unstable; urgency=medium
 
   * Basic Display Adapter at once even when the login screen starts while

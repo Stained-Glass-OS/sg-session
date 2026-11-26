@@ -1536,6 +1536,15 @@ SG_SUPPORT_CGROUPS="${SG_SUPPORT_CGROUPS:-/system.slice/sg-wineserver.service}"
 sg_compositor_takes_support() {
     "$SG_COMPOSITOR" -h 2>/dev/null | grep -q -- ' -R '
 }
+# Elevated programs run as the SYSTEM account too, in sg-brokerd's control
+# group of their own (i0635): sg-compositor refuses them the privileged
+# socket -- nothing of theirs shows while the session is locked -- and the
+# lock's commands (-E). On Windows an elevated program never reaches the
+# secure desktop either.
+SG_ELEVATED_CGROUPS="${SG_ELEVATED_CGROUPS:-/system.slice/sg-brokerd.service/elevated}"
+sg_compositor_takes_elevated() {
+    "$SG_COMPOSITOR" -h 2>/dev/null | grep -q -- ' -E '
+}
 
 # Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
 # as PE DLLs. Absent on a machine that did not install them, which is a

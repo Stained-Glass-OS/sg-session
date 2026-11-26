@@ -913,6 +913,14 @@ build/rsprobe.exe: test/rsprobe.c
 	@mkdir -p build
 	x86_64-w64-mingw32-gcc -O1 -o $@ test/rsprobe.c -lgdi32 -luser32
 
+# The session's winlogon.exe stand-in (wine-sg 9657, i0634): test/winlogon-gate.sh's
+# probe; the gate itself runs in a QA VM (root, someone signed in).
+.PHONY: winlogon-probe
+winlogon-probe: build/winlogon-probe.exe
+build/winlogon-probe.exe: test/winlogon-probe.c
+	@mkdir -p build
+	x86_64-w64-mingw32-gcc -O1 -o $@ test/winlogon-probe.c -ladvapi32
+
 test-rdp-shadow: rdp procagent vkbd
 	@sh test/rdp-shadow-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 

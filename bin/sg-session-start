@@ -149,6 +149,10 @@ case "$SG_DISPLAY_PATH" in
                 if [ -n "$_uid" ] && sg_compositor_takes_support; then
                     set -- "$@" -R "$SG_SUPPORT_CGROUPS"
                 fi
+                # elevated programs: never the privileged socket (sg-common.sh)
+                if [ -n "$_uid" ] && sg_compositor_takes_elevated; then
+                    set -- "$@" -E "$SG_ELEVATED_CGROUPS"
+                fi
             else
                 sg_log "WARNING: no writable $SG_SEAT_DIR: this session cannot be locked"
             fi
