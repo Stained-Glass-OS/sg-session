@@ -107,7 +107,7 @@ def run(T, mutant, procs):
                SG_DEFENDER_HOMES=home, SG_DEFENDER_CLAMD=os.path.join(T, "clamd.sock"), SG_DEFENDER_RUNTIME=run_dir,
                SG_DEFENDER_EXCLUSIONS=os.path.join(T, "exclusions"), SG_DEFENDER_PREFIX=prefix,
                SG_DEFENDER_SCHEDULE_HOURS="1000", SG_DEFENDER_SCAN_TIMEOUT="2",
-               SG_DEFENDER_ENGINE_CHECK="0.5")
+               SG_DEFENDER_ENGINE_CHECK="0.5", SG_DEFENDER_GROUP="sg-no-such-group")   # root (CI): socket root's alone
     clamd = subprocess.Popen([sys.executable, os.path.join(HERE, "test", "defender-fake-clamd.py"), env["SG_DEFENDER_CLAMD"],
                               clog], env=env)
     procs.append(clamd)
@@ -119,7 +119,7 @@ def run(T, mutant, procs):
         if os.path.exists(sock) and os.path.exists(env["SG_DEFENDER_CLAMD"]):
             break
         time.sleep(0.05)
-    ok(oct(os.stat(sock).st_mode & 0o777) == "0o600", "the socket is its owner's alone (as a user; root's is 0660 root:sgwine)")
+    ok(oct(os.stat(sock).st_mode & 0o777) == "0o600", "the socket is its owner's alone (no Windows-side group here; with one, 0660 root:sgwine: defender-root-test)")
 
     def ask(line, fd=None, timeout=10):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

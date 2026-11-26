@@ -1,3 +1,13 @@
+sg-session (0.1.0-292) unstable; urgency=medium
+
+  * test/defender-exec-test.py run as root on a machine that has the
+    sgwine group (a developer's host) found the socket 0660 root:sgwine,
+    as the service makes it, and failed: the test now names a group that
+    does not exist, so the socket is root's alone wherever it runs (the
+    group's socket is test/defender-root-test.sh's). Test only.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 16:35:19 -0800
+
 sg-session (0.1.0-291) unstable; urgency=medium
 
   * SG Defender, closer to Windows Defender (issue #10, David 2026-11-25:
