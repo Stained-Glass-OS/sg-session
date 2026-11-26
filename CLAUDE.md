@@ -2026,6 +2026,52 @@ Things that will bite you:
   `libpam-wrapper`. It has been seen to fail: a build that ignores the PAM
   verdict fails with "a refused logon reached the session stage".
 
+## Remote support: a service's helper sees and unlocks the console (pattern A)
+
+ADR 0010 pattern A for Windows remote-support tools installed as services
+(VNC servers, AnyDesk): the service starts a helper in the person's session
+"as SYSTEM in that session" -- DuplicateTokenEx of its own token,
+SetTokenInformation(TokenSessionId, WTSGetActiveConsoleSessionId()),
+CreateProcessAsUser -- and the helper captures the screen (lock and sign-in
+screens included) and types into it. The pieces:
+
+- **wine-sg 9624**: TokenSessionId is settable by SeTcbPrivilege (SYSTEM) only.
+  **9625**: a process started with a token of another session than its
+  starter's is exec'd through `sg-elevated-run --system --control
+  <seat>/<uid>/control.sock --uid <uid> --` (the person's seat0 directory, a
+  Remote Desktop seat, or the sign-in screen's). **9626**: its screen capture
+  and SendInput/SetCursorPos go to the compositor's privileged socket
+  (SG_COMPOSITOR_PRIV, checked to be served by SG_SESSION_UID).
+- **`sg-elevated-run --system`**: only when run by the SYSTEM account itself;
+  the program keeps SYSTEM's identity (no SG_ELEVATED_IDENTITY), gets its own
+  Xwayland shown by the person's compositor (as an elevated program), and
+  SG_COMPOSITOR_PRIV. Wine's connection for the new process (WINESERVERSOCKET)
+  is closed in the X server, in the `wine reg import` of apply_user_look and
+  in sg-elevated-run itself after the fork: anyone else holding it kept the
+  process alive in the server, or took its place.
+- **sg-compositor -R** (`SG_SUPPORT_CGROUPS`, default
+  `/system.slice/sg-wineserver.service`, sg-common.sh): capture and injection
+  on the privileged socket for root and the SYSTEM account's processes in the
+  services' cgroup only -- not the lock screen, the consent prompt or an
+  elevated program (sg-brokerd's cgroup), which before could capture the lock
+  screen. sg-session-start passes it when `sg-compositor -h` lists -R. While
+  remote support captures, the amber frame shows (the console shadow's).
+- **The sign-in screen** (sg-login-ui): its compositor gets -L/-C/-U/-R in
+  `/run/stained-glass-seat/greeter/<uid>/` (tmpfiles, 1770 root:sgwine) -- not
+  seat0, which sg-lockd watches.
+- The technician types into the real lock screen; the password goes to PAM
+  through sg-lockd as at the console. No new credential path.
+
+Gate: `test/remote-support-gate.sh` (in a QA VM, as root, someone signed in;
+TightVNC 2.8 GPL's MSI as a service, loopback only, `test/rfb-client.py` as
+the viewer): the helper is SYSTEM in the services' cgroup for the person's
+session, the viewer sees desktop and lock screen, the frame shows, a wrong
+password is refused and the right one unlocks; the person's program and
+SYSTEM outside the services' cgroup capture black and their SendInput of the
+right password does not unlock; another account cannot connect. Negative
+mutants: sg-compositor `SG_MUTANT_SUPPORT_ANY_CGROUP` (the stand-in elevated
+program captures and unlocks).
+
 ## The login screen
 
 `sg-greeter` is a **Windows program**, deliberately. Remote-support tools —

@@ -902,6 +902,15 @@ test-keyring-recover-mutants:
 # views -- or, after the console's yes on its secure surface, controls -- a
 # headless console session where it is (mutants: SG_MUTANT_SHADOW_VIEW_INPUT
 # in sg-compositor, SG_MUTANT_SHADOW_NO_CONSENT in sg-rdp-authd).
+# Remote support (ADR 0010 pattern A): the Windows probe the QA VM gate
+# (test/remote-support-gate.sh, run inside the VM as root) uses as the
+# person's program and as an elevated one. Never installed.
+.PHONY: remote-support-probe
+remote-support-probe: build/rsprobe.exe
+build/rsprobe.exe: test/rsprobe.c
+	@mkdir -p build
+	x86_64-w64-mingw32-gcc -O1 -o $@ test/rsprobe.c -lgdi32 -luser32
+
 test-rdp-shadow: rdp procagent vkbd
 	@sh test/rdp-shadow-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 

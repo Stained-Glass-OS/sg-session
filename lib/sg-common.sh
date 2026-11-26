@@ -1507,6 +1507,20 @@ sg_x11_workarea() {
 # runtime path is independent of any service's lifecycle.
 SG_SEAT_DIR="${SG_SEAT_DIR:-/run/stained-glass-seat/seat0}"
 
+# Remote support (ADR 0010 pattern A): a remote-support tool installed as a
+# Windows service -- a VNC server, AnyDesk -- sees the console, the lock and
+# sign-in screens included, and types into them, as on Windows. sg-compositor
+# grants that capture and input injection on its privileged socket to root and
+# to the SYSTEM account's processes in these control groups only (-R): the
+# Windows services and the per-session helpers they start
+# (CreateProcessAsUser, wine-sg 9625). Not to the lock screen, a consent
+# prompt or an elevated program, though they are the SYSTEM account too.
+SG_SUPPORT_CGROUPS="${SG_SUPPORT_CGROUPS:-/system.slice/sg-wineserver.service}"
+# Does $SG_COMPOSITOR take -R? One from before it would refuse to start.
+sg_compositor_takes_support() {
+    "$SG_COMPOSITOR" -h 2>/dev/null | grep -q -- ' -R '
+}
+
 # Where the image stages the Direct3D translation layers (DXVK, VKD3D-Proton)
 # as PE DLLs. Absent on a machine that did not install them, which is a
 # supported configuration: the prefix simply keeps Wine's own D3D.

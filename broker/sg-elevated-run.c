@@ -19,7 +19,19 @@
  *   4. the display stays while the program or anything it started runs (this
  *      process is their subreaper), then goes.
  *
- * Usage:  sg-elevated-run --control SOCKET --uid UID [--as-uid TARGET] [--] PROGRAM [ARG...]
+ * Usage:  sg-elevated-run --control SOCKET --uid UID [--as-uid TARGET | --system] [--] PROGRAM [ARG...]
+ *
+ * --system (wine-sg 9625, ADR 0010 pattern A): a Windows service's helper,
+ * which the service starts in a person's session with SYSTEM's own token
+ * (CreateProcessAsUser after SetTokenInformation(TokenSessionId)) -- the
+ * per-session half of a remote-support tool. Run by the SYSTEM account itself
+ * (Wine execs it for the new process: PROGRAM is Wine's loader, already
+ * holding its connection to the wineserver), never by anyone else. The
+ * display is the same; the program keeps SYSTEM's identity (it is nobody's
+ * elevated program) and is told where the compositor's privileged socket is
+ * (SG_COMPOSITOR_PRIV), where it captures the screen and injects input --
+ * which the compositor grants only to remote support (its -R), by the
+ * kernel's word on who connected, never because of anything here.
  *
  * --as-uid (wine-sg 1711, run as another account): started as root by the
  * broker's monitor, for a program of another account that has no session
@@ -77,6 +89,29 @@ static int write_full(int fd, const void *buf, size_t len)
     const char *p = buf;
     while (len) { ssize_t n = write(fd, p, len); if (n <= 0) { if (n < 0 && errno == EINTR) continue; return -1; } p += n; len -= (size_t)n; }
     return 0;
+}
+
+/* Wine's connection to the wineserver for the process being started, when
+ * this runs for Wine's loader (--system): WINESERVERSOCKET names the
+ * descriptor. Only the program may hold it. Anything else holding it --
+ * Xwayland, a `wine reg import`, this process waiting -- would keep the
+ * process alive in the server's eyes after it ended, or take its place. */
+static int wine_process_socket(void)
+{
+    const char *s = getenv("WINESERVERSOCKET");
+    char *end;
+    long v;
+    if (!s || !*s) return -1;
+    v = strtol(s, &end, 10);
+    return (*end || v < 3 || v > 65535) ? -1 : (int)v;
+}
+
+static void drop_wine_process_slot(void)
+{
+    int fd = wine_process_socket();
+    if (fd >= 0) close(fd);
+    unsetenv("WINESERVERSOCKET");
+    unsetenv("WINEPRELOADRESERVE");
 }
 
 /* An Xauthority file with one FamilyWild MIT-MAGIC-COOKIE-1 entry: it matches
@@ -289,6 +324,7 @@ static void apply_user_look(const char *desktop)
         char unixpath[64];
         int nul = open("/dev/null", O_RDWR);
         if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        drop_wine_process_slot();
         snprintf(unixpath, sizeof(unixpath), "Z:%s", path);
         execlp("wine", "wine", "reg", "import", unixpath, (char *)NULL);
         _exit(127);
@@ -368,6 +404,7 @@ int main(int argc, char **argv)
 {
     const char *control = getenv("SG_ELEVATED_CONTROL"), *xwayland = getenv("SG_XWAYLAND");
     long uid_arg = -1, as_uid = -1;
+    int system_helper = 0;
     struct passwd *as_pw = NULL, *sys_pw = NULL;
     int first = 1, wl[2], wm[2], ready[2], dfd[2], program_status = 125, display = -1, status_fd = -1;
     const char *env_fd;
@@ -380,6 +417,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[first], "--control") && first + 1 < argc) { control = argv[first + 1]; first += 2; }
         else if (!strcmp(argv[first], "--uid") && first + 1 < argc) { uid_arg = strtol(argv[first + 1], NULL, 10); first += 2; }
         else if (!strcmp(argv[first], "--as-uid") && first + 1 < argc) { as_uid = strtol(argv[first + 1], NULL, 10); first += 2; }
+        else if (!strcmp(argv[first], "--system")) { system_helper = 1; first++; }
         else if (!strcmp(argv[first], "--")) { first++; break; }
         else break;
     }
@@ -388,6 +426,18 @@ int main(int argc, char **argv)
         return 125;
     }
     if (!xwayland) xwayland = "Xwayland";
+    if (system_helper) {
+        const char *sys = getenv("SG_SYSTEM_USER");
+        struct passwd *spw = getpwnam(sys && *sys ? sys : "sgsystem");
+        /* the SYSTEM account's own helper, started by itself: never root,
+         * never anyone else, never with --as-uid */
+#ifndef SG_MUTANT_SYSTEM_HELPER_ANYONE
+        if (as_uid >= 0 || !spw || geteuid() != spw->pw_uid || getuid() != spw->pw_uid) {
+            logmsg("--system refused: only the SYSTEM account starts its own helper");
+            return 125;
+        }
+#endif
+    }
     if (as_uid >= 0) {
         const char *sys = getenv("SG_SYSTEM_USER");
         /* only root starts a program as another account, and never as root,
@@ -439,7 +489,18 @@ int main(int argc, char **argv)
         char wls[16], wms[16], dfs[16];
         prctl(PR_SET_PDEATHSIG, SIGTERM);
         if (getppid() != ppid) _exit(127);
-        /* the three inherited descriptors, and nothing else of ours */
+        /* the three inherited descriptors, and nothing else of ours -- nor
+         * anything we were given (Wine's connection for the program,
+         * --system): close-on-exec on all the rest */
+        {
+            int keep[3] = { wl[1], wm[1], dfd[1] }, i, j, t, from = 3;
+            for (i = 0; i < 3; i++) for (j = i + 1; j < 3; j++) if (keep[j] < keep[i]) { t = keep[i]; keep[i] = keep[j]; keep[j] = t; }
+            for (i = 0; i < 3; i++) {
+                if (keep[i] > from) close_range((unsigned)from, (unsigned)keep[i] - 1, CLOSE_RANGE_CLOEXEC);
+                from = keep[i] + 1;
+            }
+            close_range((unsigned)from, ~0u, CLOSE_RANGE_CLOEXEC);
+        }
         fcntl(wl[1], F_SETFD, 0); fcntl(wm[1], F_SETFD, 0); fcntl(dfd[1], F_SETFD, 0);
         snprintf(wls, sizeof(wls), "%d", wl[1]); snprintf(wms, sizeof(wms), "%d", wm[1]); snprintf(dfs, sizeof(dfs), "%d", dfd[1]);
         setenv("WAYLAND_SOCKET", wls, 1);
@@ -493,8 +554,18 @@ int main(int argc, char **argv)
         char sess[24];
         snprintf(sess, sizeof(sess), "%ld", uid_arg);
         setenv("SG_SESSION_UID", sess, 1);
-        elevated_identity((uid_t)uid_arg);
+        if (!system_helper) elevated_identity((uid_t)uid_arg);
         apply_user_look(desk + strlen("WinSta0\\"));
+    }
+    /* a service's helper: the compositor's privileged socket, beside its
+     * control socket, for screen capture and input (wine-sg 9626) */
+    if (system_helper) {
+        char priv[sizeof(((struct sockaddr_un *)0)->sun_path) + 16];
+        const char *slash = strrchr(control, '/');
+        if (slash && (size_t)(slash - control) + sizeof("/priv.sock") <= sizeof(priv)) {
+            snprintf(priv, sizeof(priv), "%.*s/priv.sock", (int)(slash - control), control);
+            setenv("SG_COMPOSITOR_PRIV", priv, 1);
+        }
     }
 
     {
@@ -545,6 +616,8 @@ int main(int argc, char **argv)
             execvp(args[0], args);
             _exit(127);
         }
+        /* the program has Wine's connection; we must not keep it open */
+        if (system_helper) drop_wine_process_slot();
         /* Wait for the program, then for everything it left running. */
         program_status = wait_program(pid, &xpid, &status_fd);
     }

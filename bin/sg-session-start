@@ -144,6 +144,11 @@ case "$SG_DISPLAY_PATH" in
                 export SG_RELOAD_COMMAND
                 set -- -s -L "$SG_LOCK_PRIV" -C "$SG_LOCK_CONTROL"
                 [ -n "$_uid" ] && set -- "$@" -U "$_uid"
+                # remote support: capture and input for the Windows services
+                # and their helpers only (see sg-common.sh)
+                if [ -n "$_uid" ] && sg_compositor_takes_support; then
+                    set -- "$@" -R "$SG_SUPPORT_CGROUPS"
+                fi
             else
                 sg_log "WARNING: no writable $SG_SEAT_DIR: this session cannot be locked"
             fi

@@ -103,6 +103,23 @@ fi
 # Through systemd-cat so the compositor's and bridge's output -- including the
 # compositor's audit lines -- reaches the journal (tag sg-login); greetd does
 # not forward a greeter's output anywhere.
+# Remote support at the sign-in screen (ADR 0010 pattern A): a remote-support
+# service's helper (a VNC server's, AnyDesk's) sees and types into it, as on
+# Windows, so a machine nobody is signed in to can be reached. The sign-in
+# screen's compositor gets a privileged and a control socket for that, in a
+# directory of its own (not seat0, which sg-lockd watches: this is nobody's
+# session to lock), taking capture and input only from the SYSTEM account's
+# services (-R, sg-common.sh). Without the directory, or with a compositor
+# that has no -R, it runs as before.
+set --
+if [ "$(basename "$SG_COMPOSITOR")" = sg-compositor ] && sg_compositor_takes_support; then
+    _sys_uid=$(id -u "$SG_SYSTEM_USER" 2>/dev/null || true)
+    _gdir="${SG_GREETER_SEAT_DIR:-/run/stained-glass-seat/greeter}/$(id -u)"
+    mkdir -m 0755 "$_gdir" 2>/dev/null || true
+    if [ -n "$_sys_uid" ] && [ -d "$_gdir" ] && [ -w "$_gdir" ]; then
+        set -- -L "$_gdir/priv.sock" -C "$_gdir/control.sock" -U "$_sys_uid" -R "$SG_SUPPORT_CGROUPS"
+    fi
+fi
 # -s: Ctrl+Alt+F1-F9 reach the text consoles from the sign-in screen too
-exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -s -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
+exec systemd-cat -t sg-login -- "$SG_COMPOSITOR" -s "$@" -- "$LIBEXEC/sg-greet-bridge" /usr/bin/sg-session-start \
     "env -u WAYLAND_DISPLAY SG_SIGN_IN_SCREEN=1 $SG_LIB/sg-ui-scale wine $LIBEXEC/sg-greeter64.exe"

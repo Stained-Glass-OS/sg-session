@@ -1,3 +1,27 @@
+sg-session (0.1.0-294) unstable; urgency=medium
+
+  * Remote support (ADR 0010 pattern A): a remote-support tool installed as a
+    Windows service sees the console -- the lock and sign-in screens
+    included -- and the technician types into it, as on Windows.
+    sg-elevated-run --system runs a service's helper (wine-sg 9625: a
+    process started with SYSTEM's token given a person's session) on a
+    display of its own on the person's screen, as SYSTEM, and tells it the
+    compositor's privileged socket; it runs only for the SYSTEM account
+    itself, and keeps Wine's connection for the program out of Xwayland, of
+    the reg import and of itself. Every session's compositor gets -R
+    /system.slice/sg-wineserver.service (SG_SUPPORT_CGROUPS), so capture and
+    input go to the Windows services and their helpers only, never to an
+    elevated program, the lock screen or a user's program; the sign-in
+    screen's compositor gets a privileged socket for it in
+    /run/stained-glass-seat/greeter (not seat0, which sg-lockd watches).
+    Gate: test/remote-support-gate.sh in a QA VM (TightVNC as a service,
+    test/rfb-client.py as the viewer: lock screen seen and unlocked by the
+    password typed through the viewer; the person's program and SYSTEM
+    outside the services capture black and unlock nothing; another account
+    refused), 19/19; sg-compositor mutant SUPPORT_ANY_CGROUP caught.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 17:55:00 -0800
+
 sg-session (0.1.0-293) unstable; urgency=medium
 
   * SG Defender: a full scan looks at Wine's own installed files
