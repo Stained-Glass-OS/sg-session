@@ -40,6 +40,7 @@ MUTANTS = {
                        "                    self.sock.send(b\"K\")"),
     "NO_TASKS": ("            w.tasks(it[1])", "            pass"),
     "NO_SERVICES": (" or (n == \"imagepath\" and SERVICE_KEY.search(k))", ""),
+    "FULL_SKIPS_WINE": (", (\"dir\", WINE_DIR, 64, True)]", "]"),
     "NO_RUN_KEYS": ("    items = [(\"cmd\", p) for _, _, v in reg_commands(hive", "    items = [] and [(\"cmd\", p) for _, _, v in reg_commands(hive"),
 }
 RC = 0
@@ -107,7 +108,7 @@ def run(T, mutant, procs):
                SG_DEFENDER_HOMES=home, SG_DEFENDER_CLAMD=os.path.join(T, "clamd.sock"), SG_DEFENDER_RUNTIME=run_dir,
                SG_DEFENDER_EXCLUSIONS=os.path.join(T, "exclusions"), SG_DEFENDER_PREFIX=prefix,
                SG_DEFENDER_SCHEDULE_HOURS="1000", SG_DEFENDER_SCAN_TIMEOUT="2",
-               SG_DEFENDER_ENGINE_CHECK="0.5", SG_DEFENDER_GROUP="sg-no-such-group")   # root (CI): socket root's alone
+               SG_DEFENDER_ENGINE_CHECK="0.5", SG_DEFENDER_WINE_DIR=os.path.join(T, "wine"), SG_DEFENDER_GROUP="sg-no-such-group")   # root (CI): socket root's alone
     clamd = subprocess.Popen([sys.executable, os.path.join(HERE, "test", "defender-fake-clamd.py"), env["SG_DEFENDER_CLAMD"],
                               clog], env=env)
     procs.append(clamd)
@@ -369,9 +370,13 @@ def run(T, mutant, procs):
        "custom scan: the folder, every file in it, by its descriptor [%s]" % r.stdout.strip().replace("\n", " | "))
     with open(os.path.join(home, "notes.txt"), "wb") as f:
         f.write(EICAR)
+    os.makedirs(os.path.join(T, "wine", "lib", "wine", "x86_64-windows"))
+    with open(os.path.join(T, "wine", "lib", "wine", "x86_64-windows", "evil.dll"), "wb") as f:
+        f.write(b"MZ" + EICAR + b" in Wine's own folder")
     r = subprocess.run([sys.executable, os.path.join(HERE, "bin", "sg-defender-scan"), "full", "--wait"], env=env_scan,
                        capture_output=True, text=True, timeout=300)
     ok("notes.txt: Eicar" in r.stdout, "full scan: every file in the home")
+    ok("evil.dll: Eicar" in r.stdout, "full scan: Wine's own installed files too (trusted only at a start)")
     return RC
 
 

@@ -93,6 +93,7 @@ SOCKET = os.path.join(RUNTIME, "socket")
 CLAMD = ENV("SG_DEFENDER_CLAMD", "/run/clamav/clamd.ctl")
 HOMES = ENV("SG_DEFENDER_HOMES")          # test: watch these homes only (":"-separated)
 PREFIX = ENV("SG_DEFENDER_PREFIX", "/var/lib/stained-glass/prefix")
+WINE_DIR = ENV("SG_DEFENDER_WINE_DIR", "/opt/wine-sg")    # Wine's own files: trusted at a start (wine-sg 9461), scanned here
 SYSTEM_USER = ENV("SG_DEFENDER_SYSTEM_USER", "sgsystem")
 WINE_GROUP = ENV("SG_DEFENDER_GROUP", "sgwine")
 SCHEDULE = float(ENV("SG_DEFENDER_SCHEDULE_HOURS", "24")) * 3600   # the scheduled quick scan
@@ -945,7 +946,10 @@ def home_of(uid):
 def full_items(uid):
     home = home_of(uid)
     items = [("dir", home, 64, False)] if home else []
-    return items + [("win", "C:\\", 64, False)]
+    # Wine's own installed files too: a program's start trusts them (root's, in
+    # root's folders, as Windows trusts its signed system files); a full scan
+    # still looks at them, as Windows Defender's does
+    return items + [("win", "C:\\", 64, False), ("dir", WINE_DIR, 64, True)]
 
 
 # The child's side (it is the person). It walks with descriptors: each

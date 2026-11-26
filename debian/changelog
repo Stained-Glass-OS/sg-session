@@ -1,3 +1,15 @@
+sg-session (0.1.0-293) unstable; urgency=medium
+
+  * SG Defender: a full scan looks at Wine's own installed files
+    (/opt/wine-sg) too. A program's start trusts them now (wine-sg 9461:
+    root's, writable by root alone, in root's folders -- as Windows trusts
+    its signed system files and Defender does not make them wait), so a
+    scan is where they are checked, as Windows Defender's full scan does.
+    SG_DEFENDER_WINE_DIR for the test; test/defender-exec-test.py checks
+    it (mutant FULL_SKIPS_WINE).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 16:55:50 -0800
+
 sg-session (0.1.0-292) unstable; urgency=medium
 
   * test/defender-exec-test.py run as root on a machine that has the
