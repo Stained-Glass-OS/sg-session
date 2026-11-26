@@ -1,3 +1,16 @@
+sg-session (0.1.0-295) unstable; urgency=medium
+
+  * sg-session-check: the 32-bit Notepad check finds the 32-bit Notepad's own
+    window (by its process, _NET_WM_PID), after the 64-bit one's window has
+    gone. The closing 64-bit window was taken for the 32-bit one: the check
+    passed without seeing it, and the 32-bit Notepad's window came up seconds
+    after the check returned -- over Setup, which the install gate had opened
+    meanwhile, so the gate typed into Notepad (i0637, next33).
+    SG_CHECK_MUTANT=ANY_NOTEPAD: the old match. Gate (in lint, no session:
+    stand-ins for wine, pgrep, xwininfo, xprop): test/session-check-np32-test.sh.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Wed, 25 Nov 2026 22:45:00 -0800
+
 sg-session (0.1.0-294) unstable; urgency=medium
 
   * Remote support (ADR 0010 pattern A): a remote-support tool installed as a

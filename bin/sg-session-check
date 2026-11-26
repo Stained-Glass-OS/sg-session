@@ -260,6 +260,29 @@ fi
 pkill -f 'notepad.exe' >/dev/null 2>&1 || true
 kill "$NOTEPAD_SHELL_PID" >/dev/null 2>&1 || true
 
+# The X windows inside the desktop titled Notepad whose program is one of the
+# given processes (_NET_WM_PID, which winex11 sets on every window).
+notepad_windows_of() {
+    desktop_children | grep 'Notepad' | awk '{print $1}' | while read -r _w; do
+        _wp=$(xprop -id "$_w" _NET_WM_PID 2>/dev/null | awk '{print $3}')
+        for _p in "$@"; do [ "$_wp" = "$_p" ] && echo "$_w"; done
+    done
+}
+# The 64-bit Notepad's window must be gone before the 32-bit one is looked
+# for. It outlives the process for a moment, and was taken for the 32-bit
+# one: the check passed without having seen it, and the 32-bit Notepad's
+# window appeared seconds after the check had returned -- over Setup, which
+# the install gate had opened meanwhile (i0637, next33).
+if [ "${SG_CHECK_MUTANT:-}" != ANY_NOTEPAD ]; then
+    waited=0
+    while desktop_children | grep -q 'Notepad'; do
+        [ "$waited" -ge 30 ] && break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    desktop_children | grep -q 'Notepad' && fail "the 64-bit notepad's window is still there ${waited}s after it was closed"
+fi
+
 # --- 5. a 32-bit Windows app runs in the shell ----------------------------
 # The point of shipping wine-sg rather than a distribution Wine is that this
 # machine runs 32-bit Windows applications without i386 multiarch. Proving the
@@ -283,14 +306,25 @@ else
     info "launching the 32-bit notepad.exe"
     wine 'C:\windows\syswow64\notepad.exe' >"$_np32_out" 2>&1 &
 
+    # Its own window: one whose program is the 32-bit Notepad (SG_CHECK_MUTANT=
+    # ANY_NOTEPAD: any Notepad window, as before i0637).
+    np32_window() {
+        if [ "${SG_CHECK_MUTANT:-}" = ANY_NOTEPAD ]; then
+            desktop_children | grep 'Notepad' | awk '{print $1}' | head -1
+        else
+            # shellcheck disable=SC2046  # one argument per process
+            notepad_windows_of $(pgrep -u "$_me" -f 'syswow64.notepad\.exe') | head -1
+        fi
+    }
     waited=0
-    while ! desktop_children | grep -q 'Notepad'; do
+    while [ -z "$(np32_window)" ]; do
         [ "$waited" -ge "$TIMEOUT" ] && break
-        sleep 2
-        waited=$((waited + 2))
+        sleep 1
+        waited=$((waited + 1))
     done
-    if desktop_children | grep -q 'Notepad'; then
-        pass "32-bit app runs in the shell: $(desktop_children | grep 'Notepad' | sed 's/^ *//' | head -1)"
+    _np32_win=$(np32_window)
+    if [ -n "$_np32_win" ]; then
+        pass "32-bit app runs in the shell: $(desktop_children | grep "^ *$_np32_win " | sed 's/^ *//' | head -1) (pid $(xprop -id "$_np32_win" _NET_WM_PID 2>/dev/null | awk '{print $3}'))"
     else
         fail "the 32-bit notepad did not appear inside the desktop after ${TIMEOUT}s"
         info "output:"; sed 's/^/      /' "$_np32_out" 2>/dev/null | head -20

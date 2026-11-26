@@ -393,6 +393,8 @@ lint:
 	@sh test/mono-support-refresh-test.sh
 	@sh test/backdrop-first-test.sh
 	@sh test/keep-running-test.sh
+	@sh test/session-check-np32-test.sh >/dev/null 2>&1 || { sh test/session-check-np32-test.sh; exit 1; }
+	@! sh test/session-check-np32-test.sh --mutant ANY_NOTEPAD >/dev/null 2>&1 || { echo "session-check-np32-test: mutant ANY_NOTEPAD passed"; exit 1; }
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-kiosk
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-sni-bridge
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' test/sni-item.py
