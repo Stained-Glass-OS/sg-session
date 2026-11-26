@@ -1,3 +1,13 @@
+sg-session (0.1.0-296) unstable; urgency=medium
+
+  * Basic Display Adapter at once even when the login screen starts while
+    udev still has boot events queued: sg_basic_display_env waits the queue
+    out (up to SG_UDEV_WAIT, default 5 s; a card that appears ends it) before
+    deciding. Before, wlroots' ten-second wait for a GPU came back on those
+    boots (next34 nouveau gate, the image's own initrd, fake Ada card).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Thu, 26 Nov 2026 03:10:00 +0000
+
 sg-session (0.1.0-295) unstable; urgency=medium
 
   * sg-session-check: the 32-bit Notepad check finds the 32-bit Notepad's own

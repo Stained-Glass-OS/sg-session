@@ -422,16 +422,32 @@ sg_cursor_env
 # every sign-in each sat ten seconds on a blank screen. While udev still has
 # events queued (a driver may be loading) or is not running, wlroots waits as
 # before. Windows starts on its Basic Display Adapter with no wait.
-# SG_BASIC_DISPLAY set by hand still wins. Stand-ins: SG_DRM_SYSFS,
-# SG_UDEV_RUN (/run/udev).
-sg_basic_display_env() {
-    [ -n "${SG_BASIC_DISPLAY:-}" ] && return 0
+# udev's queue is waited out first, up to SG_UDEV_WAIT seconds (default 5,
+# polled every 0.2 s, a card that appears meanwhile ends it): a login screen
+# started while udev still had boot events queued took wlroots' full ten
+# seconds on a machine that never gets a card (next34 nouveau gate, the
+# image's own initrd). SG_BASIC_DISPLAY set by hand still wins. Stand-ins:
+# SG_DRM_SYSFS, SG_UDEV_RUN (/run/udev).
+sg_drm_card_present() {
     for _c in "${SG_DRM_SYSFS:-/sys/class/drm}"/card*; do
         case "${_c##*/}" in *-*) continue ;; esac
         [ -e "$_c" ] && return 0
     done
+    return 1
+}
+sg_basic_display_env() {
+    [ -n "${SG_BASIC_DISPLAY:-}" ] && return 0
+    sg_drm_card_present && return 0
     _ur=${SG_UDEV_RUN:-/run/udev}
-    [ -e "$_ur/control" ] && [ ! -e "$_ur/queue" ] || return 0
+    [ -e "$_ur/control" ] || return 0
+    _n=$(( ${SG_UDEV_WAIT:-5} * 5 ))
+    while [ -e "$_ur/queue" ]; do
+        [ "$_n" -gt 0 ] || return 0
+        sleep 0.2 2>/dev/null || sleep 1
+        _n=$((_n - 1))
+        sg_drm_card_present && return 0
+    done
+    sg_drm_card_present && return 0
     export SG_BASIC_DISPLAY=1
     return 0
 }
