@@ -384,6 +384,26 @@ with open(os.path.join(tmp, "outputs.json"), "w") as f:
 code, lines = ctl("display", "restore", env=XENV)
 check("display restore: another set of monitors keeps its own layout (none yet: left as it is)",
       not [c for c in calls() if "--pos" in c], lines)
+# the main display alone at 1920,0 after the one on its left was unplugged (GitHub #17): at 0,0,
+# as Windows keeps its main monitor -- the X screen kept the empty strip, framed Linux windows
+# went off the screen
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump([dict(o3[0], position={"x": 1920, "y": 0})], f)
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+check("display restore: one display left away from the corner goes to 0,0",
+      "wlr-randr --output DP-1 --pos 0,0" in cl and any("RESTORED *\tlayout\tDP-1:0,0" in x for x in lines), (lines, cl))
+# a set with no layout kept, both away from the corner: moved together, the gap between kept
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump([dict(o3[0], position={"x": 1920, "y": 0}), dict(o3[1], position={"x": 3840, "y": 0})], f)
+code, lines = ctl("display", "restore", env=XENV)
+cl = calls()
+check("display restore: displays away from the corner move together to it",
+      "wlr-randr --output DP-1 --pos 0,0 --output DP-2 --pos 1920,0" in cl, (lines, cl))
+with open(os.path.join(tmp, "outputs.json"), "w") as f:
+    json.dump([dict(o3[0], position={"x": 0, "y": 0})], f)
+code, lines = ctl("display", "restore", env=XENV)
+check("display restore: a display at 0,0 is left alone", not [c for c in calls() if "--pos" in c], lines)
 three([(0, 0), (1920, 0), (3840, 0)])
 code, lines = ctl("display", "project", "duplicate", env=XENV)
 check("display project duplicate: all three at 0,0",

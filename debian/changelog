@@ -1,3 +1,16 @@
+sg-session (0.1.0-298) unstable; urgency=medium
+
+  * Display restore puts the displays' top-left corner at 0,0 when no kept
+    layout says otherwise (GitHub #17): a display unplugged from the LEFT of
+    the main one left the main display alone at 1920,0 -- the X screen kept
+    the empty strip beside it and a Linux program's window framed by Wine
+    went by those coordinates, off the screen. Windows keeps its main
+    monitor at 0,0. A single remaining display goes to 0,0; displays away
+    from the corner move together, the gaps kept. settingsctl-test: three
+    new checks (mutant SG_MUTANT_ORIGIN_KEPT fails two).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 10:03:32 -0800
+
 sg-session (0.1.0-297) unstable; urgency=medium
 
   * Elevated programs run in a control group of their own (i0635):

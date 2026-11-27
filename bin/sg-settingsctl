@@ -1062,7 +1062,35 @@ def display_restore():
         if t in TRANSFORMS and transform_of(o) != t:
             run(["wlr-randr", "--output", name, "--transform", t])
             out.append("RESTORED %s\ttransform\t%s" % (clean(name), t))
-    return out + restore_layout()
+    lay = restore_layout()
+    if not any("\tlayout\t" in x or "\tproject\t" in x for x in lay):
+        lay += restore_origin()
+    return out + lay
+
+
+def restore_origin():
+    """The displays' top-left corner at 0,0, as Windows' virtual screen starts at
+    its monitors (the main one at 0,0): a monitor unplugged from the left of the
+    main display left the main one at 1920,0, alone -- the X screen kept the empty
+    strip beside it, and a Linux program's window framed by Wine went where those
+    coordinates said, off the screen (GitHub #17). Also a set of monitors with
+    no layout kept that the compositor placed away from the corner."""
+    if os.environ.get("SG_MUTANT_ORIGIN_KEPT"):
+        return []
+    outs = [o for o in outputs() if o.get("enabled", True) and o.get("name")]
+    if not outs:
+        return []
+    places = {o.get("name"): place_of(o)[:2] for o in outs}
+    mx = min(p[0] for p in places.values())
+    my = min(p[1] for p in places.values())
+    if (mx, my) == (0, 0):
+        return []
+    argv = ["wlr-randr"]
+    for n, (x, y) in places.items():
+        argv += ["--output", n, "--pos", "%d,%d" % (x - mx, y - my)]
+    run(argv)
+    return ["RESTORED *\tlayout\t%s" % " ".join("%s:%d,%d" % (clean(n), x - mx, y - my)
+                                                 for n, (x, y) in places.items())]
 
 
 # ---- screen rotation (David 2026-10-07: "a tablet can auto rotate, or turn it off
