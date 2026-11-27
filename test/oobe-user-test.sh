@@ -24,7 +24,7 @@ chmod +x "$T/bin/wine" "$T/bin/winepath"
 run() {
     W=""; [ "$1" = welcome ] && { W=--welcome; shift; }
     rm -f "$T/imported.reg"
-    printf 'STAMP=%s\nREGION_LOCALE=en-GB\nREGION_GEO=242\nKEYBOARD_IDS=00000809\nMICROPHONE=%s\nLOCATION=0\nADVERTISING=0\nTAILORED=0\n' "$1" "$2" > "$T/oobe.conf"
+    printf 'STAMP=%s\nREGION_LOCALE=%s\nREGION_GEO=242\nKEYBOARD_IDS=%s\nMICROPHONE=%s\nLOCATION=0\nADVERTISING=0\nTAILORED=0\n' "$1" "${LOC:-en-GB}" "${IDS:-00000809}" "$2" > "$T/oobe.conf"
     env PATH="$T/bin:$PATH" SG_LIB="$HERE/lib" SG_WINE_DIR=/nonexistent SG_OOBE_CONF="$T/oobe.conf" \
         XDG_RUNTIME_DIR="$T" sh "$HERE/lib/sg-oobe-user" $W 2>/dev/null
     tr -d '\r' < "$T/imported.reg" 2>/dev/null
@@ -49,6 +49,27 @@ out=$(run welcome 3 1)
 welcome_ok "$out" && pass "--welcome: the region and keyboards only, under AppliedWelcome" || fail "welcome: $out"
 out=$(SG_MUTANT_OOBE_NO_WELCOME=1 run welcome 3 1)
 welcome_ok "$out" && fail "mutant OOBE_NO_WELCOME passed" || pass "MUTANT OOBE_NO_WELCOME: the person's switches too (test catches it)"
+# The keyboards, as Windows' setup writes them (ledger i0562): the chosen language's input methods.
+# Preload 1 is the language's own id, substituted when the keyboard is another; a second keyboard is
+# d001LLLL, substituted. Mutant SG_MUTANT_OOBE_PLAIN_PRELOAD (the KLIDs as they are) fails both.
+section() { printf '%s\n' "$1" | tr -d '\r' | sed -n "/^\[HKEY_CURRENT_USER\\\\Keyboard Layout\\\\$2\]/,/^\$/p" | tr '\n' '|'; }
+preload_ok() {
+    out=$(LOC=en-GB IDS=00000809,00000407 run welcome 4 0)
+    case "$(section "$out" Preload)$(section "$out" Substitutes)" in
+    *'"1"="00000809"|"2"="d0010809"|'*'"d0010809"="00000407"|'*) ;; *) return 1 ;; esac
+    out=$(LOC=en-AU IDS=00000409 run welcome 5 0)
+    case "$(section "$out" Preload)$(section "$out" Substitutes)" in
+    *'"1"="00000c09"|'*'"00000c09"="00000409"|'*) ;; *) return 1 ;; esac
+    out=$(LOC=en-AU IDS=00000407,00000c09 run welcome 7 0)
+    case "$(section "$out" Preload)$(section "$out" Substitutes)" in
+    *'"1"="d0010c09"|"2"="00000c09"|'*'"d0010c09"="00000407"|'*) ;; *) return 1 ;; esac
+    out=$(LOC=en-US IDS=00000409 run welcome 6 0)
+    [ -z "$(section "$out" Substitutes)" ] && case "$(section "$out" Preload)" in *'"1"="00000409"|'*) ;; *) return 1 ;; esac
+}
+preload_ok && pass "keyboards: en-GB + German is 00000809, d0010809 -> 00000407; en-AU's US keyboard 00000c09 -> 00000409; en-US plain" \
+    || fail "keyboards: Windows' Preload form: $(section "$out" Preload) $(section "$out" Substitutes)"
+SG_MUTANT_OOBE_PLAIN_PRELOAD=1 preload_ok && fail "mutant OOBE_PLAIN_PRELOAD passed" \
+    || pass "MUTANT OOBE_PLAIN_PRELOAD: the plain KLIDs (test catches it)"
 echo
 [ "$RC" -eq 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "$RC"

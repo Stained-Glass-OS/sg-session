@@ -1,3 +1,20 @@
+sg-session (0.1.0-300) unstable; urgency=medium
+
+  * The first-run setup's keyboards are written as Windows' setup writes
+    them (i0562): they are input methods of the chosen language, so the
+    language's own keyboard is its plain identifier in HKCU\Keyboard
+    Layout\Preload (00000809 for en-GB) and every other is d00NLLLL, mapped
+    to the keyboard by Substitutes (en-GB with a German keyboard too:
+    d0010809 -> 00000407); with none of the language's own the first
+    keyboard takes the plain identifier, substituted (en-AU's US keyboard:
+    00000c09 -> 00000409). sg-oobe-user wrote the bare KLIDs (Preload 2 =
+    00000407, which on Windows means the German language). The OOBE's
+    regions map to their language identifiers in sg-oobe-user.
+    test/oobe-user-test.sh: the old script FAIL, now PASS; mutant
+    SG_MUTANT_OOBE_PLAIN_PRELOAD caught.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 11:29:15 -0800
+
 sg-session (0.1.0-299) unstable; urgency=medium
 
   * winlogon.exe at the sign-in screen too (i0644): on Windows the console's

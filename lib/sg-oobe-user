@@ -31,6 +31,19 @@ applied=$(wine reg query "$key" /v "$val" 2>/dev/null | tr -d '\r' | awk -v v="$
 [ "$applied" = "$stamp" ] && exit 0
 
 onoff() { [ "$1" = 1 ] && echo Allow || echo Deny; }
+CRLF=$(printf '\r\n_'); CRLF=${CRLF%_}
+# The first-run setup's regions (sg-oobe.c) as Windows language identifiers
+# (the low word of a keyboard layout's HKL, and of Preload's ids)
+oobe_langid() {
+    case "$1" in
+    en-US) echo 0409 ;; en-GB) echo 0809 ;; en-AU) echo 0c09 ;; en-CA) echo 1009 ;; en-IN) echo 4009 ;;
+    en-IE) echo 1809 ;; en-NZ) echo 1409 ;; en-ZA) echo 1c09 ;; de-DE) echo 0407 ;; de-AT) echo 0c07 ;;
+    de-CH) echo 0807 ;; fr-FR) echo 040c ;; fr-BE) echo 080c ;; pt-BR) echo 0416 ;; pt-PT) echo 0816 ;;
+    cs-CZ) echo 0405 ;; da-DK) echo 0406 ;; fi-FI) echo 040b ;; hu-HU) echo 040e ;; it-IT) echo 0410 ;;
+    ja-JP) echo 0411 ;; es-MX) echo 080a ;; es-ES) echo 0c0a ;; nl-NL) echo 0413 ;; nb-NO) echo 0414 ;;
+    pl-PL) echo 0415 ;; sv-SE) echo 041d ;;
+    esac
+}
 reg=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/sg-oobe-user.XXXXXX") || exit 0
 cs='HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore'
 {
@@ -45,9 +58,32 @@ cs='HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\CapabilityAccess
         printf '\r\n'
     fi
     if printf '%s' "$ids" | grep -Eq '^[0-9a-f]{8}(,[0-9a-f]{8})?$'; then
-        printf '[HKEY_CURRENT_USER\\Keyboard Layout\\Preload]\r\n'
-        n=1; for id in $(echo "$ids" | tr ',' ' '); do printf '"%d"="%s"\r\n' "$n" "$id"; n=$((n + 1)); done
-        printf '\r\n'
+        # As Windows' setup writes them: the keyboards are the chosen language's
+        # input methods. The language's own keyboard is its plain identifier
+        # (0000LLLL); every other is d00NLLLL, which Substitutes maps to the
+        # keyboard (en-GB with a German one too: d0010809 -> 00000407). With
+        # none of the language's own, the first keyboard takes the plain
+        # identifier, substituted (en-AU's US keyboard: 00000c09 -> 00000409).
+        lang=$(oobe_langid "$locale")
+        own=0; case ",$ids," in *",0000$lang,"*) own=1 ;; esac
+        n=1 d=0 pre='' sub=''
+        for id in $(echo "$ids" | tr ',' ' '); do
+            if [ -z "$lang" ] || [ -n "${SG_MUTANT_OOBE_PLAIN_PRELOAD:-}" ] || [ "$id" = "0000$lang" ]; then
+                pre="$pre\"$n\"=\"$id\"$CRLF"
+            elif [ "$n" = 1 ] && [ "$own" = 0 ]; then
+                pre="$pre\"1\"=\"0000$lang\"$CRLF"
+                sub="$sub\"0000$lang\"=\"$id\"$CRLF"
+            else
+                d=$((d + 1)); _s=$(printf 'd%03x%s' "$d" "$lang")
+                pre="$pre\"$n\"=\"$_s\"$CRLF"
+                sub="$sub\"$_s\"=\"$id\"$CRLF"
+            fi
+            n=$((n + 1))
+        done
+        printf '[-HKEY_CURRENT_USER\\Keyboard Layout\\Preload]\r\n\r\n'
+        printf '[-HKEY_CURRENT_USER\\Keyboard Layout\\Substitutes]\r\n\r\n'
+        printf '[HKEY_CURRENT_USER\\Keyboard Layout\\Preload]\r\n%s\r\n' "$pre"
+        [ -n "$sub" ] && printf '[HKEY_CURRENT_USER\\Keyboard Layout\\Substitutes]\r\n%s\r\n' "$sub"
     fi
     # the rest is a person's own: not the system accounts'
     if [ "$welcome" = 0 ]; then
