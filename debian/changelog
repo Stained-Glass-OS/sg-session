@@ -1,3 +1,27 @@
+sg-session (0.1.0-299) unstable; urgency=medium
+
+  * winlogon.exe at the sign-in screen too (i0644): on Windows the console's
+    session has one before anyone signs in, and a remote-support service at
+    a machine nobody is signed in to starts its helper with its token.
+    sg-lockd now also watches the sign-in screen's compositor -- only the
+    greeter account's directory, only a compositor that really runs as that
+    account (SO_PEERCRED), followed with SESSION (notifications only, so it
+    is not made the sign-in screen's lock service) -- and keeps the
+    stand-in in that session while it is up. Same access as before: only
+    SYSTEM may open it; the greeter account and standard users get access
+    denied. Gate test/winlogon-signin-gate.sh (QA VM, nobody signed in:
+    0.1.0-297 10 FAIL, now 11/11; mutant SG_MUTANT_NO_GREETER_WINLOGON 10
+    FAIL); the signed-in test/winlogon-gate.sh still 9/9.
+  * Windowed Setup fits the screen (i0555): when its framed window is larger
+    than the work area (an 800x600 screen less the taskbar) it is laid out
+    full screen, as Windows' Setup is -- filling the monitor in the
+    foreground, the taskbar goes behind it -- keeping windowed Setup's
+    Close, without Try or Shut down. Gate make test-setupfit
+    (test/setup-fit-gate.sh: 800x600 and 1280x800 shell desktops; 0.1.0-297
+    2 FAIL, mutant SG_MUTANT_SETUP_ALWAYS_FRAMED 3 FAIL).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 10:22:31 -0800
+
 sg-session (0.1.0-298) unstable; urgency=medium
 
   * Display restore puts the displays' top-left corner at 0,0 when no kept

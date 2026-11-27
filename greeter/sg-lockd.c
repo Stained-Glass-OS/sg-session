@@ -37,6 +37,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -552,6 +553,92 @@ static void winlogon_stop( struct winlogon *wl )
     wl->pid = -1;
 }
 
+/* ---- the sign-in screen's winlogon.exe (i0644) ------------------------------
+ *
+ * On Windows winlogon.exe runs in every session, the console's before anyone
+ * signs in too: a remote-support service at a machine nobody is signed in to
+ * finds it there and starts its helper with its token. The sign-in screen's
+ * compositor (sg-login-ui, as the greeter account) has its control socket in
+ * SG_GREETER_SEAT_DIR/<uid> -- not seat0: nobody's session to lock. This
+ * watches only the greeter account's directory, and only a compositor that
+ * really runs as that account (SO_PEERCRED): anyone in sgwine can make a
+ * directory there. It follows the compositor with SESSION -- notifications
+ * only; WATCH would make this the lock service of the sign-in screen
+ * (Ctrl+Alt+Del's security screen) -- and keeps winlogon.exe in that session
+ * as long as the compositor is up. Nothing here reaches the PAM monitor. */
+static void greeter_loop( const char *dir, uid_t greeter_uid )
+{
+    char path[256], line[128];
+
+    prctl( PR_SET_PDEATHSIG, SIGTERM );
+    if ((size_t)snprintf( path, sizeof(path), "%s/%u/control.sock", dir, (unsigned)greeter_uid ) >= sizeof(path))
+        return;
+    g_control = path;
+    for (;;)
+    {
+        struct winlogon wl = { -1, -1 };
+        struct ucred cred;
+        socklen_t clen = sizeof(cred);
+        struct timeval tv = { 5, 0 };
+        int fd = control_connect();
+
+        if (getppid() == 1) _exit( 0 );
+        if (fd < 0) { sleep( 1 ); continue; }
+        if (getsockopt( fd, SOL_SOCKET, SO_PEERCRED, &cred, &clen ) < 0 || cred.uid != greeter_uid)
+        {
+            logmsg( "ignoring %s: not served by the sign-in screen's account", path );
+            close( fd ); sleep( 5 ); continue;
+        }
+        setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv) );
+        if (write_full( fd, "SESSION\n", 8 ) < 0 || read_line( fd, line, sizeof(line) ) < 0
+            || strncmp( line, "OK session", 10 ))
+        { close( fd ); sleep( 1 ); continue; }
+        tv.tv_sec = 0;
+        setsockopt( fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv) );
+        logmsg( "watching the sign-in screen (uid %u)", (unsigned)greeter_uid );
+#ifndef SG_MUTANT_NO_GREETER_WINLOGON
+        winlogon_start( &wl, greeter_uid );
+#endif
+        /* its notifications mean nothing here; the end of the connection
+         * is the compositor's end */
+        while (read_line( fd, line, sizeof(line) ) == 0) ;
+        winlogon_stop( &wl );
+        close( fd );
+        logmsg( "the sign-in screen went away" );
+        sleep( 1 );
+    }
+}
+
+static void greeter_start( void )
+{
+    const char *dir = getenv( "SG_GREETER_SEAT_DIR" );
+    const char *name = getenv( "SG_GREETER_USER" );
+    static char sibling[256];
+    struct passwd *pw;
+    pid_t pid;
+
+    /* beside the seat's directory (/run/stained-glass-seat/seat0 ->
+     * /run/stained-glass-seat/greeter), so a test's own seat directory never
+     * leads to the machine's sign-in screen */
+    if (!dir)
+    {
+        const char *slash = strrchr( g_seat_dir, '/' );
+        if (!slash || (size_t)snprintf( sibling, sizeof(sibling), "%.*s/greeter", (int)(slash - g_seat_dir),
+                                        g_seat_dir ) >= sizeof(sibling))
+            return;
+        dir = sibling;
+    }
+    if (!*dir) return;
+    if (!name || !*name) name = "sggreet";
+    if (!(pw = getpwnam( name ))) return;
+    if ((pid = fork()) < 0) { logmsg( "cannot watch the sign-in screen" ); return; }
+    if (pid) return;
+    close( g_monitor );
+    g_monitor = -1;
+    greeter_loop( dir, pw->pw_uid );
+    _exit( 0 );
+}
+
 static int drop_privileges( const char *account )
 {
     struct passwd *pw = getpwnam( account );
@@ -606,6 +693,9 @@ int main( int argc, char **argv )
     /* initgroups keeps the machine account's groups (sgwine), which the
      * shared Wine prefix needs; the PAM helper is the monitor's alone. */
     if (geteuid() == 0 && drop_privileges( account ) < 0) { logmsg( "cannot drop to %s", account ); return 1; }
+    /* the sign-in screen's session (i0644): whenever this service scans the
+     * seat, or the sign-in screen's directory is named */
+    if (scan || getenv( "SG_GREETER_SEAT_DIR" )) greeter_start();
 
     for (;;)
     {

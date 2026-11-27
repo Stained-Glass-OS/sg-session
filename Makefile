@@ -914,12 +914,23 @@ build/rsprobe.exe: test/rsprobe.c
 	x86_64-w64-mingw32-gcc -O1 -o $@ test/rsprobe.c -lgdi32 -luser32
 
 # The session's winlogon.exe stand-in (wine-sg 9657, i0634): test/winlogon-gate.sh's
-# probe; the gate itself runs in a QA VM (root, someone signed in).
+# probe; the gate itself runs in a QA VM (root, someone signed in). The sign-in
+# screen's (i0644): test/winlogon-signin-gate.sh, same probe, QA VM, nobody signed in.
 .PHONY: winlogon-probe
 winlogon-probe: build/winlogon-probe.exe
 build/winlogon-probe.exe: test/winlogon-probe.c
 	@mkdir -p build
 	x86_64-w64-mingw32-gcc -O1 -o $@ test/winlogon-probe.c -ladvapi32
+
+# Windowed Setup fits the screen (i0555): an 800x600 shell desktop and a 1280x800 one.
+# Xvfb listens: on a shared host run it inside a private network namespace.
+.PHONY: setup-fit-probe test-setupfit
+setup-fit-probe: build/setup-fit-probe.exe
+build/setup-fit-probe.exe: test/setup-fit-probe.c
+	@mkdir -p build
+	x86_64-w64-mingw32-gcc -O1 -o $@ test/setup-fit-probe.c -luser32
+test-setupfit: greeter setup-fit-probe
+	@sh test/setup-fit-gate.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc
 
 test-rdp-shadow: rdp procagent vkbd
 	@sh test/rdp-shadow-e2e.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || exit $$rc

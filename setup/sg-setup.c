@@ -120,6 +120,13 @@ static void load_palette( void )
 
 static HANDLE g_in, g_out;
 static BOOL g_windowed;
+/* the window has the system's frame: windowed Setup, when the framed window
+ * fits the work area. When it does not (an 800x600 screen less the taskbar,
+ * i0555) windowed Setup is laid out full screen, as Windows' Setup is on a
+ * screen too small for its window -- in the foreground filling the monitor,
+ * the taskbar goes behind it -- with its own caption and Close; it stays
+ * windowed Setup in what it does (Close, no "Try", no Shut down). */
+static BOOL g_framed;
 static HWND g_main, g_next, g_back, g_left;
 static HWND g_lang, g_locale, g_kbd, g_install, g_try, g_lictext, g_accept, g_upgrade, g_custom;
 static HWND g_name, g_account, g_pass, g_pass2, g_host;
@@ -979,7 +986,7 @@ static void handle_line( char *line )
 /* --- drawing ----------------------------------------------------------------- */
 
 static int X( int x ) { return g_rc.left + x; }
-static int Y( int y ) { return g_rc.top + (g_windowed ? 0 : CAP_H) + y; }
+static int Y( int y ) { return g_rc.top + (g_framed ? 0 : CAP_H) + y; }
 
 static void fill( HDC dc, int l, int t, int r, int b, COLORREF c )
 {
@@ -1168,7 +1175,7 @@ static void paint( HWND hwnd )
     oldbm = SelectObject( dc, bm );
     SetBkMode( dc, TRANSPARENT );
 
-    if (!g_windowed)
+    if (!g_framed)
     {
         HDC bdc = CreateCompatibleDC( wdc );
         HBITMAP old;
@@ -1655,6 +1662,20 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
 
     if (g_windowed)
     {
+        RECT r = { 0, 0, CW, CH }, work;
+        DWORD ws = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+        AdjustWindowRect( &r, ws, FALSE );
+        if (!SystemParametersInfoA( SPI_GETWORKAREA, 0, &work, 0 ))
+            SetRect( &work, 0, 0, GetSystemMetrics( SM_CXSCREEN ), GetSystemMetrics( SM_CYSCREEN ) );
+        g_framed = r.right - r.left <= work.right - work.left && r.bottom - r.top <= work.bottom - work.top;
+#ifdef SG_MUTANT_SETUP_ALWAYS_FRAMED
+        g_framed = TRUE;
+#endif
+        if (!g_framed) log_line( "sg-setup: the window does not fit the work area (%ldx%ld): full screen",
+                                 work.right - work.left, work.bottom - work.top );
+    }
+    if (g_framed)
+    {
         RECT r = { 0, 0, CW, CH };
         DWORD ws = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
         AdjustWindowRect( &r, ws, FALSE );
@@ -1724,10 +1745,11 @@ int WINAPI WinMain( HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show_cmd 
     g_cancel = child( "BUTTON", "Cancel", style | BS_OWNERDRAW, 0, 694, 346, 66, 26, ID_CANCEL );
     g_left = child( "BUTTON", "", style | BS_PUSHBUTTON, 0, 24, CH - 104, 130, 34, ID_LEFT );
     g_next = child( "BUTTON", "", style | BS_PUSHBUTTON, 0, CW - 24 - 130, CH - 104, 130, 34, ID_NEXT );
-    if (!g_windowed)
-    {
+    if (!g_framed)
         g_close = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, g_rc.right - 46, g_rc.top,
                                    46, CAP_H - 1, g_main, (HMENU)(INT_PTR)ID_CLOSE, inst, NULL );
+    if (!g_windowed)
+    {
         g_power = CreateWindowExA( 0, "BUTTON", "", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                                    GetSystemMetrics( SM_CXSCREEN ) - 72, GetSystemMetrics( SM_CYSCREEN ) - 72,
                                    48, 48, g_main, (HMENU)(INT_PTR)ID_POWER, inst, NULL );

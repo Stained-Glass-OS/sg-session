@@ -682,6 +682,14 @@ still decides (`nullok`). Logging out returns to Setup. The shortcut starts
 sg-setup64.exe without a bridge; it then starts one itself
 (`\\?\unix\usr\bin\systemd-cat -t sg-setup sg-setup-bridge "wine sg-setup64.exe --windowed"`),
 which runs it again, windowed (`SG_SETUP_BRIDGED` tells them apart).
+Windowed Setup whose framed window (800x568 client) does not fit
+SPI_GETWORKAREA (an 800x600 screen less the taskbar, i0555) is laid out full
+screen like the sign-in screen's -- foreground and filling the monitor, the
+taskbar goes behind it (wine-sg 0597) -- but stays windowed in behaviour:
+its own caption's Close, no Try, no Shut down / Ease buttons (`g_framed`
+vs `g_windowed`). Gate `make test-setupfit` (test/setup-fit-gate.sh, 800x600
+and 1280x800 shell desktops; host: inside netns-run.sh); mutant
+`SG_MUTANT_SETUP_ALWAYS_FRAMED`.
 
 - **Never put a socket under `/run/stained-glass`.** It is sg-wineserver's
   `RuntimeDirectory`: systemd chowned the installer's socket to sgsystem, and
@@ -2079,10 +2087,22 @@ screens included) and types into it. The pieces:
   "" turns it off), holding its standard input: it ends when the watch does.
   UltraVNC's and AnyDesk's services duplicate its token for their helper, as on
   Windows. A SYSTEM process's descriptor: the person's program and standard
-  users get access denied (only SYSTEM / an elevated program). Not yet at the
-  sign-in screen (sg-lockd watches user sessions only). Gate
+  users get access denied (only SYSTEM / an elevated program). Gate
   `test/winlogon-gate.sh` (QA VM; `make winlogon-probe`); mutant
   `SG_MUTANT_NO_WINLOGON`.
+- **The sign-in screen's winlogon.exe** (i0644): as on Windows, the console's
+  session has one before anyone signs in. sg-lockd forks (after its drop to
+  the machine account, without the PAM monitor's socket) a watcher of
+  `SG_GREETER_SEAT_DIR/<greeter uid>/control.sock` only (`SG_GREETER_USER`,
+  default sggreet; `SG_GREETER_SEAT_DIR` defaults to `greeter` beside
+  SG_SEAT_DIR, "" turns it off), served -- by
+  SO_PEERCRED -- by that account; it follows the compositor with SESSION
+  (notifications only: WATCH would make it the sign-in screen's lock service,
+  and Ctrl+Alt+Del there would isolate with nobody to draw the security
+  screen) and keeps winlogon.exe (SG_SESSION_UID = the greeter account) for
+  as long as that connection lasts. Same access as the session's: SYSTEM
+  only. Gate `test/winlogon-signin-gate.sh` (QA VM, root, nobody signed in:
+  11/11; it also restarts greetd); mutant `SG_MUTANT_NO_GREETER_WINLOGON`.
 
 Gate: `test/remote-support-gate.sh` (in a QA VM, as root, someone signed in;
 TightVNC 2.8 GPL's MSI as a service, loopback only, `test/rfb-client.py` as
