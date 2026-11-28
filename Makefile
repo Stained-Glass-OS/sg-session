@@ -557,7 +557,7 @@ test-sni:
 .PHONY: test-notify-bridge
 test-notify-bridge:
 	@$(SG_NETNS) sh test/notify-bridge-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -ne 0 ] && exit $$rc; \
-	for m in SG_MUTANT_NOTIFY_NO_APPID SG_MUTANT_NOTIFY_NO_ACTIONS; do \
+	for m in SG_MUTANT_NOTIFY_NO_APPID SG_MUTANT_NOTIFY_NO_ACTIONS SG_MUTANT_NOTIFY_NO_LAUNCHER; do \
 	    if env $$m=1 $(SG_NETNS) sh test/notify-bridge-test.sh >/dev/null 2>&1; then echo "notify-bridge-test: mutant $$m survived"; exit 1; fi; done
 
 test-deskcomp-start:

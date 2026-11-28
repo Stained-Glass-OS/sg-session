@@ -20,6 +20,13 @@ whose time runs out stays in the notification centre, as on Windows (and in
 GNOME's message tray): nothing is said then, unless the program asked for a
 transient one (NotificationClosed 1, expired).
 
+It also hears the launcher entries Linux programs broadcast
+(com.canonical.Unity.LauncherEntry's Update: Telegram's unread count, a
+download's progress, urgency) and passes them on (LAUNCHER): the host puts
+the count as a badge and the progress on the taskbar buttons of the app's
+windows, as a Windows program's ITaskbarList3 overlay and progress, and
+flashes them while the app is urgent.
+
   sg-notify-bridge [HOST...]   HOST defaults to: wine rundll32.exe windows.ui.dll,SgLinuxNotifications
 
 It ends when the host does (sg-run-explorer starts both again).
@@ -207,6 +214,9 @@ class Bridge:
         info = Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0]
         self.reg = self.con.register_object(PATH, info, self.method, None, None)
         # another notification daemon a package brought (one that allows it) gives way
+        self.launchers = {}
+        self.con.signal_subscribe(None, 'com.canonical.Unity.LauncherEntry', 'Update', None, None,
+                                  Gio.DBusSignalFlags.NONE, self.launcher_update)
         Gio.bus_own_name_on_connection(self.con, IFACE, Gio.BusNameOwnerFlags.REPLACE,
                                        lambda c, n: log('own %s' % n), lambda c, n: log('lost %s' % n))
 
@@ -296,6 +306,28 @@ class Bridge:
         self.send('SHOW %d\t%s\t%s\t%s' % (nid, aumid, name.replace('\t', ' ').replace('\n', ' '), xml))
         log('notify %d from %s (%s) as %s: %s' % (nid, sender, app_name, aumid, summary))
         return nid
+
+    def launcher_update(self, con, sender, path, iface, signal, params):
+        """a program's launcher entry changed (only what changed is in it)"""
+        try:
+            uri, props = params.unpack()
+        except (TypeError, ValueError):
+            return
+        entry = uri[len('application://'):] if uri.startswith('application://') else uri
+        entry = os.path.basename(entry)
+        if entry.endswith('.desktop'):
+            entry = entry[:-8]
+        if not entry or os.environ.get('SG_MUTANT_NOTIFY_NO_LAUNCHER'):
+            return
+        st = self.launchers.setdefault(entry, {'count': 0, 'count-visible': False, 'progress': 0.0,
+                                               'progress-visible': False, 'urgent': False})
+        for k in st:
+            if k in props:
+                st[k] = props[k]
+        count = int(st['count']) if st['count-visible'] else 0
+        progress = max(0, min(100, int(round(float(st['progress']) * 100)))) if st['progress-visible'] else -1
+        self.send('LAUNCHER %s%s\t%d\t%d\t%d' % (PREFIX, entry, max(count, 0), progress, 1 if st['urgent'] else 0))
+        log('launcher %s: count %d progress %d urgent %s' % (entry, count, progress, st['urgent']))
 
     def closed(self, nid, reason):
         note = self.notes.pop(nid, None)

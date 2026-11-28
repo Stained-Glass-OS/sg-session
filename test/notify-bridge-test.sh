@@ -14,8 +14,10 @@
 #   - CloseNotification: the host hides it, NotificationClosed n 3;
 #   - replaces_id: the same number, shown again (the host replaces it by tag);
 #   - a toast whose time ran out stays (no NotificationClosed), a transient one is closed (1);
-#   - GetCapabilities says actions, body, persistence.
-# Mutants (environment): SG_MUTANT_NOTIFY_NO_APPID, SG_MUTANT_NOTIFY_NO_ACTIONS.
+#   - GetCapabilities says actions, body, persistence;
+#   - a launcher entry (com.canonical.Unity.LauncherEntry Update: count, progress, urgent, each
+#     only when it changes) goes to the host whole, as LAUNCHER <the app's ID> count progress urgent.
+# Mutants (environment): SG_MUTANT_NOTIFY_NO_APPID, SG_MUTANT_NOTIFY_NO_ACTIONS, SG_MUTANT_NOTIFY_NO_LAUNCHER.
 # Its sockets are a private bus's: run it in a network namespace of its own (the Makefile does,
 # through SG_NETNS when given).
 set -u
@@ -89,6 +91,9 @@ printf 'EXPIRED 3\n' > "$T/inj"; sleep 0.5
 N 'gate-tool' 0 '' 'Brief' 'gone soon' "[]" "{'transient': <true>}" 'int32 -1' > "$T/n4"
 sleep 0.5
 printf 'EXPIRED 4\n' > "$T/inj"; sleep 1
+E() { gdbus emit --session -o /com/canonical/unity/launcherentry/1 -s com.canonical.Unity.LauncherEntry.Update "\$@"; }
+E "'application://org.gate.Mail.desktop'" "{'count': <int64 3>, 'count-visible': <true>}"; sleep 0.5
+E "'application://org.gate.Mail.desktop'" "{'progress': <0.42>, 'progress-visible': <true>, 'urgent': <true>}"; sleep 1
 EOF
 # a bus that starts nothing by itself: the machine's own notification daemon (one a package
 # brought, D-Bus-activatable) must not answer in the bridge's place
@@ -119,6 +124,8 @@ grep -qx 'HIDE 2' "$T/host.in" && grep -qx 'NotificationClosed 2 3' "$T/signals"
 grep -q '(uint32 3,)' "$T/n3b" && [ "$(grep -c '^SHOW 3	' "$T/host.in")" = 2 ] && pass "replaces_id: the same number, shown again" || fail "replace: $(cat "$T/n3b")"
 grep -q '^NotificationClosed 3 ' "$T/signals" && fail "a toast whose time ran out was closed" || pass "a toast whose time ran out stays (in the notification centre)"
 grep -qx 'NotificationClosed 4 1' "$T/signals" && grep -qx 'HIDE 4' "$T/host.in" && pass "a transient one is closed when its time runs out (1)" || fail "transient: $(tr '\n' '|' < "$T/signals")"
+grep -qx 'LAUNCHER SG.LinuxApp.org.gate.Mail	3	-1	0' "$T/host.in" && pass "a launcher entry's count goes to the host (LAUNCHER, the app's ID)" || fail "launcher count: $(grep LAUNCHER "$T/host.in" | head -1)"
+grep -qx 'LAUNCHER SG.LinuxApp.org.gate.Mail	3	42	1' "$T/host.in" && pass "its progress and urgency, the count kept" || fail "launcher progress: $(grep LAUNCHER "$T/host.in" | tail -1)"
 grep -q "'actions'" "$T/caps" && grep -q "'body'" "$T/caps" && grep -q "'persistence'" "$T/caps" && pass "GetCapabilities: actions, body, persistence" || fail "caps: $(cat "$T/caps")"
 
 echo

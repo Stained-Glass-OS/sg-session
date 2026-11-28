@@ -1,3 +1,16 @@
+sg-session (0.1.0-304) unstable; urgency=medium
+
+  * Linux programs' launcher entries on their taskbar buttons (linux1,
+    ledger i0814; with wine-sg 10.0-1208's 9514): sg-notify-bridge hears
+    com.canonical.Unity.LauncherEntry's Update (Telegram's unread count, a
+    download's progress, urgency; each only when it changes), keeps each
+    app's whole entry and passes it to the toast host (LAUNCHER <app ID>
+    count progress urgent), which shows the count as a badge and the
+    progress on the app's buttons. Gate notify-bridge-test.sh (mutant
+    SG_MUTANT_NOTIFY_NO_LAUNCHER).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 22:05:00 -0800
+
 sg-session (0.1.0-303) unstable; urgency=medium
 
   * sg-settingsctl sound apps / app-volume / app-mute: the programs
