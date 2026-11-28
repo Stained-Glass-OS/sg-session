@@ -238,6 +238,7 @@ install: d3d-probe greeter token-probe procagent polkitagent rdp power portal
 	@# the kiosk app (Settings > Accounts > Kiosk): Python, so not in LIBS
 	install -m 0755 lib/sg-kiosk $(LIBDIR)
 	install -m 0755 lib/sg-sni-bridge $(LIBDIR)
+	install -m 0755 lib/sg-notify-bridge $(LIBDIR)
 	install -m 0644 lib/sg-mklnk.js $(LIBDIR)
 	install -m 0644 config/sg-session.env config/greetd-config.toml $(SHAREDIR)
 	@# Windows programs opened from Linux programs (Firefox's downloads): sg-open-windows-file
@@ -397,6 +398,7 @@ lint:
 	@! sh test/session-check-np32-test.sh --mutant ANY_NOTEPAD >/dev/null 2>&1 || { echo "session-check-np32-test: mutant ANY_NOTEPAD passed"; exit 1; }
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-kiosk
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-sni-bridge
+	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' lib/sg-notify-bridge
 	@python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' test/sni-item.py
 	@sh test/kiosk-test.sh
 	@sh test/wineserver-wait-test.sh
@@ -548,6 +550,15 @@ test-polkit: procagent polkitagent
 # sg-shell's sg-sni64.exe (SG_SNI_EXE; SG_SNI_MUT its SNI_NO_MENU mutant) in a scratch prefix.
 test-sni:
 	@sh test/sni-test.sh
+
+# Linux programs' notifications: sg-notify-bridge (org.freedesktop.Notifications) with a stand-in
+# toast host on a private bus that starts nothing by itself, in a network namespace of its own
+# when SG_NETNS names a runner (/var/tmp/sgwork/netns-run.sh); its two mutants must fail it.
+.PHONY: test-notify-bridge
+test-notify-bridge:
+	@$(SG_NETNS) sh test/notify-bridge-test.sh; rc=$$?; [ $$rc -eq 77 ] && exit 0 || [ $$rc -ne 0 ] && exit $$rc; \
+	for m in SG_MUTANT_NOTIFY_NO_APPID SG_MUTANT_NOTIFY_NO_ACTIONS; do \
+	    if env $$m=1 $(SG_NETNS) sh test/notify-bridge-test.sh >/dev/null 2>&1; then echo "notify-bridge-test: mutant $$m survived"; exit 1; fi; done
 
 test-deskcomp-start:
 	@sh test/deskcomp-start-test.sh

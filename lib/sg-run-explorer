@@ -233,6 +233,10 @@ if [ -d "$_profile" ]; then cd "$_profile"; else sg_log "no profile directory at
 #   - Linux programs' tray icons (sg-sni-bridge, with sg-shell's sg-sni64.exe):
 #     the session's StatusNotifierWatcher; Flameshot's, KeePassXC's and
 #     Nextcloud's icons appear beside ours.
+#   - Linux programs' notifications (sg-notify-bridge, with wine-sg's toast
+#     host, windows.ui.dll's SgLinuxNotifications): the session's
+#     org.freedesktop.Notifications; Thunderbird's new mail, Telegram's
+#     messages, notify-send are toasts of their apps, kept in the centre.
 #   - voice typing's hold-to-talk listener (sg-dictate /background), if
 #     sg-shell and sg-dictate are installed; it exits at once unless the user
 #     turned hold-to-talk on (Control Panel > Speech Recognition).
@@ -257,6 +261,9 @@ _sgvolume="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-volume64.exe"
 _sgnotify="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-notify64.exe"
 _sgsni="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}/sg-sni64.exe"
 _sgshelldir="${SG_SHELL_DIR:-/usr/libexec/stained-glass/shell}"
+# Linux programs' notifications need the Wine that hosts them (wine-sg 9512)
+_sgtoasthost=""
+grep -qa SgLinuxNotifications "${SG_WINE_DIR:-/opt/wine-sg}/lib/wine/x86_64-windows/windows.ui.dll" 2>/dev/null && _sgtoasthost=1
 # The shell's helpers, kept running while the desktop is there (sg_keep_running):
 # started now, and again within seconds of one dying or the shell's restart --
 # at most SG_HELPER_RESTARTS times each, so one that cannot run is let be.
@@ -304,7 +311,7 @@ sg_shell_helpers() {
                 # in the old tray, sg-deskcomp drew into the old desktop) --
                 # all started again, for the new shell
                 sg_log "the shell came back: its helpers started again for it"
-                for _h in sg-deskcomp sg-start64.exe sg-netflyout64.exe sg-battery64.exe sg-volume64.exe sg-notify64.exe sg-dictate64.exe sg-sni-bridge sg-sni64.exe; do
+                for _h in sg-deskcomp sg-start64.exe sg-netflyout64.exe sg-battery64.exe sg-volume64.exe sg-notify64.exe sg-dictate64.exe sg-sni-bridge sg-sni64.exe sg-notify-bridge; do
                     pkill -u "$(id -u)" -x "$(printf '%.15s' "$_h")" 2>/dev/null
                 done
                 sleep 1
@@ -336,6 +343,9 @@ sg_shell_helpers() {
             fi
             if [ -f "$_sgsni" ] && [ -x "$SG_LIB/sg-sni-bridge" ]; then
                 SG_SHELL_DIR="$_sgshelldir" sg_helper sg-sni-bridge _n_sni "$SG_LIB/sg-sni-bridge"
+            fi
+            if [ -n "$_sgtoasthost" ] && [ -x "$SG_LIB/sg-notify-bridge" ]; then
+                sg_helper sg-notify-bridge _n_ntb "$SG_LIB/sg-notify-bridge"
             fi
             if [ -f "$_sgdictate" ] && command -v sg-dictate >/dev/null 2>&1 && sg_dictate_wanted; then
                 sg_helper sg-dictate64.exe _n_dic wine "$_sgdictate" /background

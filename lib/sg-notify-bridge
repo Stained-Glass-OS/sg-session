@@ -1,0 +1,375 @@
+#!/usr/bin/python3
+"""sg-notify-bridge -- Linux programs' notifications as Stained Glass toasts.
+
+A Linux program notifies through the session's org.freedesktop.Notifications
+(libnotify, notify-send, Firefox's and Thunderbird's notifications,
+Telegram, GApplication without GNOME Shell). Nothing owned that name, so
+every one of them was lost: no toast, nothing in the notification centre
+(David 2026-11-27: Linux programs first class).
+
+This owns it and hands each notification to wine-sg's host of Linux
+programs' notifications (rundll32 windows.ui.dll,SgLinuxNotifications, wine-sg
+9512) on its standard input, which shows it as a toast of the program's
+AppUserModelID -- SG.LinuxApp.<desktop id>, the ID its Start shortcut has
+(sg-shell's sg-linuxapp) -- as Windows shows a program's toast: the same
+look and place, kept in the notification centre, turned off per app. The
+program is told what the person did: a click on it ActionInvoked "default",
+a button its action's key, then NotificationClosed (2, dismissed); its close
+button NotificationClosed 2; CloseNotification NotificationClosed 3. A toast
+whose time runs out stays in the notification centre, as on Windows (and in
+GNOME's message tray): nothing is said then, unless the program asked for a
+transient one (NotificationClosed 1, expired).
+
+  sg-notify-bridge [HOST...]   HOST defaults to: wine rundll32.exe windows.ui.dll,SgLinuxNotifications
+
+It ends when the host does (sg-run-explorer starts both again).
+SG_NOTIFY_BRIDGE_LOG=<file> logs what it did, for gates. SG_NOTIFY_CACHE: the
+pictures' folder (else the prefix's Temp\\sg-notify) and SG_NOTIFY_CACHE_WIN
+its Windows name.
+
+Copyright (C) 2026 Stained Glass OS contributors
+SPDX-License-Identifier: AGPL-3.0-or-later
+"""
+import glob
+import html
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+from xml.sax.saxutils import escape, quoteattr
+
+import gi
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gio, GLib, GdkPixbuf  # noqa: E402
+
+IFACE = 'org.freedesktop.Notifications'
+PATH = '/org/freedesktop/Notifications'
+XML = """
+<node>
+  <interface name="org.freedesktop.Notifications">
+    <method name="GetCapabilities"><arg type="as" direction="out"/></method>
+    <method name="Notify">
+      <arg type="s" direction="in"/><arg type="u" direction="in"/><arg type="s" direction="in"/>
+      <arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="as" direction="in"/>
+      <arg type="a{sv}" direction="in"/><arg type="i" direction="in"/><arg type="u" direction="out"/>
+    </method>
+    <method name="CloseNotification"><arg type="u" direction="in"/></method>
+    <method name="GetServerInformation">
+      <arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/>
+    </method>
+    <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
+    <signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
+  </interface>
+</node>"""
+CAPS = ['actions', 'body', 'icon-static', 'persistence']
+PREFIX = 'SG.LinuxApp.'
+OTHER_PREFIX = 'SG.LinuxNotify.'
+ICON_PX = 48
+MAX_ACTIONS = 5
+
+LOG = os.environ.get('SG_NOTIFY_BRIDGE_LOG')
+
+
+def log(msg):
+    if LOG:
+        with open(LOG, 'a') as f:
+            f.write(msg + '\n')
+
+
+def cache_dirs():
+    """the pictures' folder, as this program and as Wine sees it"""
+    if os.environ.get('SG_NOTIFY_CACHE'):
+        unix = os.environ['SG_NOTIFY_CACHE']
+        win = os.environ.get('SG_NOTIFY_CACHE_WIN', 'Z:' + unix.replace('/', '\\'))
+    else:
+        user = os.environ.get('USER') or os.environ.get('LOGNAME') or 'user'
+        prefix = os.environ.get('WINEPREFIX', os.path.expanduser('~/.wine'))
+        unix = os.path.join(prefix, 'drive_c', 'users', user, 'AppData', 'Local', 'Temp', 'sg-notify')
+        win = 'C:\\users\\%s\\AppData\\Local\\Temp\\sg-notify' % user
+    os.makedirs(unix, mode=0o700, exist_ok=True)
+    return unix, win
+
+
+def data_dirs():
+    home = os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share')
+    return [home] + [d for d in (os.environ.get('XDG_DATA_DIRS') or '/usr/local/share:/usr/share').split(':') if d]
+
+
+def find_icon(name):
+    """an icon name, as the icon themes give it, or a file"""
+    if not name:
+        return None
+    if name.startswith('file://'):
+        name = urllib.parse.unquote(name[7:])
+    if os.path.isabs(name):
+        return name if os.path.exists(name) else None
+    roots = [os.path.expanduser('~/.icons')] + [os.path.join(d, 'icons') for d in data_dirs()]
+    themes = ('hicolor', 'Adwaita', 'breeze', 'Papirus', 'gnome', 'locolor')
+    best = None
+    for root in roots:
+        for theme in themes:
+            for path in glob.glob(os.path.join(root, theme, '*', '*', name + '.*')) + \
+                    glob.glob(os.path.join(root, theme, '*', name + '.*')):
+                if not path.endswith(('.png', '.svg', '.xpm')):
+                    continue
+                m = re.search(r'/(\d+)x\d+/', path)
+                size = 1000 if 'scalable' in path else (int(m.group(1)) if m else 0)
+                score = (size >= ICON_PX, -abs(size - ICON_PX) if size != 1000 else -1)
+                if best is None or score > best[0]:
+                    best = (score, path)
+        if best:
+            return best[1]
+    for d in data_dirs():
+        for ext in ('.png', '.svg', '.xpm'):
+            cand = os.path.join(d, 'pixmaps', name + ext)
+            if os.path.exists(cand):
+                return cand
+    return None
+
+
+class Desktop:
+    """the session's .desktop files: a notification's program by its
+    desktop-entry hint, its process's program or its name"""
+
+    def __init__(self):
+        self.by_id = {}
+        self.stamp = None
+
+    def load(self):
+        dirs = [os.path.join(d, 'applications') for d in data_dirs()]
+        stamp = tuple(os.stat(d).st_mtime if os.path.isdir(d) else 0 for d in dirs)
+        if stamp == self.stamp:
+            return
+        self.stamp = stamp
+        self.by_id = {}
+        for d in reversed(dirs):           # the most particular folder wins
+            for path in glob.glob(os.path.join(d, '*.desktop')):
+                kf = GLib.KeyFile()
+                try:
+                    kf.load_from_file(path, GLib.KeyFileFlags.NONE)
+                except GLib.Error:
+                    continue
+
+                def get(key, kf=kf):
+                    try:
+                        return kf.get_string('Desktop Entry', key)
+                    except GLib.Error:
+                        return ''
+                name = ''
+                try:
+                    name = kf.get_locale_string('Desktop Entry', 'Name', None)
+                except GLib.Error:
+                    pass
+                exe = (get('Exec').split() or [''])[0].strip('"')
+                self.by_id[os.path.basename(path)[:-8]] = {
+                    'name': name, 'icon': get('Icon'), 'exe': os.path.basename(exe),
+                    'class': get('StartupWMClass')}
+
+    def find(self, entry, exe, app_name):
+        self.load()
+        entry = (entry or '').strip()
+        if entry.endswith('.desktop'):
+            entry = entry[:-8]
+        if entry in self.by_id:
+            return entry
+        for key in (exe, app_name):
+            if not key:
+                continue
+            low = key.lower()
+            for i, d in self.by_id.items():
+                if low in (i.lower(), d['exe'].lower(), d['class'].lower()):
+                    return i
+        if app_name:
+            for i, d in self.by_id.items():
+                if d['name'] and d['name'].lower() == app_name.lower():
+                    return i
+        return None
+
+
+def strip_markup(text):
+    """the body as text: markup a program sent anyway, entities"""
+    text = re.sub(r'<br\s*/?>', '\n', text or '', flags=re.I)
+    return html.unescape(re.sub(r'<[^>]*>', '', text))
+
+
+class Bridge:
+    def __init__(self, host_cmd):
+        self.loop = GLib.MainLoop()
+        self.next_id = 1
+        self.notes = {}          # id -> (sender, hints)
+        self.desktop = Desktop()
+        self.cache = cache_dirs()
+        self.proc = subprocess.Popen(host_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        GLib.io_add_watch(self.proc.stdout.fileno(), GLib.IO_IN | GLib.IO_HUP | GLib.IO_ERR, self.from_host)
+        self.buf = b''
+        self.con = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        info = Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0]
+        self.reg = self.con.register_object(PATH, info, self.method, None, None)
+        # another notification daemon a package brought (one that allows it) gives way
+        Gio.bus_own_name_on_connection(self.con, IFACE, Gio.BusNameOwnerFlags.REPLACE,
+                                       lambda c, n: log('own %s' % n), lambda c, n: log('lost %s' % n))
+
+    def send(self, line):
+        try:
+            self.proc.stdin.write((line + '\n').encode('utf-8', 'replace'))
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            self.loop.quit()
+
+    def sender_exe(self, sender):
+        try:
+            pid = self.con.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                                     'GetConnectionUnixProcessID', GLib.Variant('(s)', (sender,)),
+                                     GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
+            return os.path.basename(os.readlink('/proc/%d/exe' % pid))
+        except (GLib.Error, OSError):
+            return ''
+
+    def picture(self, nid, hints, app_icon, entry):
+        """the notification's picture as a PNG Wine reads, its file: URL"""
+        dest = os.path.join(self.cache[0], '%d.png' % nid)
+        pb = None
+        for key in ('image-data', 'image_data', 'icon_data'):
+            if key in hints:
+                try:
+                    w, h, stride, alpha, bits, chans, data = hints[key]
+                    pb = GdkPixbuf.Pixbuf.new_from_bytes(GLib.Bytes.new(bytes(data)), GdkPixbuf.Colorspace.RGB,
+                                                         bool(alpha), bits, w, h, stride)
+                except (ValueError, TypeError, GLib.Error):
+                    pb = None
+                break
+        if pb is None:
+            for name in (hints.get('image-path'), hints.get('image_path'), app_icon,
+                         self.desktop.by_id.get(entry, {}).get('icon') if entry else None):
+                path = find_icon(name) if name else None
+                if not path:
+                    continue
+                try:
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, ICON_PX * 2, ICON_PX * 2, True)
+                    break
+                except GLib.Error:
+                    continue
+        if pb is None:
+            return None
+        try:
+            if pb.get_width() > 256 or pb.get_height() > 256:
+                pb = pb.scale_simple(256, max(1, pb.get_height() * 256 // pb.get_width()), GdkPixbuf.InterpType.BILINEAR)
+            pb.savev(dest, 'png', [], [])
+        except GLib.Error:
+            return None
+        win = self.cache[1] + '\\%d.png' % nid
+        return 'file:///' + urllib.parse.quote(win.replace('\\', '/'), safe='/:')
+
+    def notify(self, sender, app_name, replaces, app_icon, summary, body, actions, hints, timeout):
+        nid = replaces if replaces in self.notes else self.next_id
+        if nid == self.next_id:
+            self.next_id += 1
+        entry = self.desktop.find(hints.get('desktop-entry', ''), self.sender_exe(sender), app_name)
+        if entry and not os.environ.get('SG_MUTANT_NOTIFY_NO_APPID'):
+            aumid = PREFIX + entry
+            name = self.desktop.by_id[entry]['name'] or app_name or entry
+        else:
+            aumid = OTHER_PREFIX + (re.sub(r'[^A-Za-z0-9.-]+', '-', app_name).strip('-') or 'Linux')
+            name = app_name or 'Linux app'
+        attrs = ' launch="default"'
+        urgency = hints.get('urgency', 1)
+        if urgency == 2 or timeout == 0 or hints.get('resident'):
+            attrs += ' scenario="reminder"'          # stays until the person acts on it
+        xml = '<toast%s><visual><binding template="ToastGeneric">' % attrs
+        xml += '<text>%s</text>' % escape(strip_markup(summary))
+        if body:
+            xml += '<text>%s</text>' % escape(strip_markup(body))
+        pic = self.picture(nid, hints, app_icon, entry)
+        if pic:
+            xml += '<image placement="appLogoOverride" src=%s/>' % quoteattr(pic)
+        xml += '</binding></visual>'
+        buttons = [(actions[i], actions[i + 1]) for i in range(0, len(actions) - 1, 2) if actions[i] != 'default']
+        if buttons and not os.environ.get('SG_MUTANT_NOTIFY_NO_ACTIONS'):
+            xml += '<actions>'
+            for key, label in buttons[:MAX_ACTIONS]:
+                xml += '<action content=%s arguments=%s/>' % (quoteattr(label or key), quoteattr(key))
+            xml += '</actions>'
+        xml += '</toast>'
+        xml = xml.replace('\n', '&#10;').replace('\t', '&#9;').replace('\r', '')
+        self.notes[nid] = (sender, {k: hints[k] for k in ('transient', 'resident') if k in hints})
+        self.send('SHOW %d\t%s\t%s\t%s' % (nid, aumid, name.replace('\t', ' ').replace('\n', ' '), xml))
+        log('notify %d from %s (%s) as %s: %s' % (nid, sender, app_name, aumid, summary))
+        return nid
+
+    def closed(self, nid, reason):
+        note = self.notes.pop(nid, None)
+        if note is None:
+            return
+        self.con.emit_signal(None, PATH, IFACE, 'NotificationClosed', GLib.Variant('(uu)', (nid, reason)))
+        log('closed %d (%d)' % (nid, reason))
+
+    def method(self, con, sender, path, iface, method, params, inv):
+        if method == 'GetCapabilities':
+            inv.return_value(GLib.Variant('(as)', (CAPS,)))
+        elif method == 'GetServerInformation':
+            inv.return_value(GLib.Variant('(ssss)', ('Stained Glass', 'Stained Glass OS', '1.0', '1.2')))
+        elif method == 'Notify':
+            a = params.unpack()
+            inv.return_value(GLib.Variant('(u)', (self.notify(sender, *a),)))
+        elif method == 'CloseNotification':
+            nid = params.unpack()[0]
+            inv.return_value(None)
+            if nid in self.notes:
+                self.send('HIDE %d' % nid)
+                self.closed(nid, 3)
+        else:
+            inv.return_dbus_error('org.freedesktop.DBus.Error.UnknownMethod', method)
+
+    def from_host(self, fd, cond):
+        data = os.read(fd, 4096) if cond & GLib.IO_IN else b''
+        if not data:
+            log('host ended')
+            self.loop.quit()
+            return False
+        self.buf += data
+        while b'\n' in self.buf:
+            line, self.buf = self.buf.split(b'\n', 1)
+            self.command(line.decode('utf-8', 'replace').rstrip('\r'))
+        return True
+
+    def command(self, line):
+        verb, _, rest = line.partition(' ')
+        if verb == 'READY':
+            log('host ready')
+            return
+        nid_s, _, arg = rest.partition('\t')
+        try:
+            nid = int(nid_s)
+        except ValueError:
+            return
+        note = self.notes.get(nid)
+        if note is None:
+            return
+        if verb == 'ACT':
+            key = arg or 'default'
+            self.con.emit_signal(None, PATH, IFACE, 'ActionInvoked', GLib.Variant('(us)', (nid, key)))
+            log('action %d %s' % (nid, key))
+            if not note[1].get('resident'):
+                self.closed(nid, 2)
+        elif verb == 'CLOSED':
+            self.closed(nid, 3 if arg == '3' else 2)
+        elif verb == 'EXPIRED' and note[1].get('transient'):
+            self.send('HIDE %d' % nid)
+            self.closed(nid, 1)
+
+    def run(self):
+        self.loop.run()
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+
+
+def main():
+    cmd = sys.argv[1:] or ['wine', 'rundll32.exe', 'windows.ui.dll,SgLinuxNotifications']
+    Bridge(cmd).run()
+
+
+if __name__ == '__main__':
+    main()

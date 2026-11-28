@@ -1,3 +1,24 @@
+sg-session (0.1.0-302) unstable; urgency=medium
+
+  * Linux programs' notifications are toasts (linux1, ledger i0811; with
+    wine-sg 10.0-1200's 9512): sg-notify-bridge owns the session's
+    org.freedesktop.Notifications -- nothing did, and notify-send,
+    Thunderbird's new mail, Telegram's messages and browsers' web
+    notifications were lost -- and hands each to wine-sg's toast host
+    (rundll32 windows.ui.dll,SgLinuxNotifications): a toast of the app's
+    AppUserModelID (desktop-entry hint, the sender's program or its name ->
+    SG.LinuxApp.<desktop id>, else SG.LinuxNotify.<name>), kept in the
+    notification centre; its icon (image data, image path, app icon or the
+    .desktop Icon) as a PNG; actions as buttons, "default" as the click;
+    ActionInvoked / NotificationClosed back to the program; a toast whose
+    time runs out stays in the centre as on Windows (a transient one is
+    closed). sg-run-explorer keeps it running beside the shell when the
+    Wine has the host. Gate test/notify-bridge-test.sh (make
+    test-notify-bridge; mutants SG_MUTANT_NOTIFY_NO_APPID,
+    SG_MUTANT_NOTIFY_NO_ACTIONS).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 21:10:00 -0800
+
 sg-session (0.1.0-301) unstable; urgency=medium
 
   * The main display is kept (i0655): with several displays on, 1 sign-in
