@@ -169,4 +169,48 @@ if [ "$ctl" = "DP-1 0 0;DP-2 1920 300;" ] && [ "${first%% *}" = display ] && [ "
     && [ "$(grep -c "^display restore$" "$T/q.ctl")" -ge 1 ] && [ "$(tail -1 "$T/q.ctl")" = "display restore" ]; then
     echo "PASS  monitors moved by another tool keep their places (kept as the layout); a monitor plugged in gets the kept layout back"
 else echo "FAIL  move kept: calls '$(tr '\n' '|' < "$T/q.ctl")'"; RC=1; fi
+# The main display kept (ledger i0655): Xwayland forgets the X primary when the compositor
+# takes an output away and gives it back; with two monitors on and none primary the kept
+# layout is put back (display restore), once per loss -- not every poll -- and again after
+# the next loss. xrandr replays: primary, lost x3, primary, lost x3, primary...
+cat > "$T/bin/wlr-randr" <<'W'
+#!/bin/sh
+printf 'DP-1 "A"\n  Enabled: yes\n  Modes:\n    1920x1080 px, 60.000000 Hz (current)\n  Position: 0,0\nDP-2 "B"\n  Enabled: yes\n  Modes:\n    2560x1440 px, 60.000000 Hz (current)\n  Position: 1920,0\n'
+W
+cat > "$T/bin/xrandr" <<'W'
+#!/bin/sh
+s=$(head -n 1 "$Q.x"); [ -n "$s" ] && sed -i 1d "$Q.x"
+[ -n "$s" ] || s=p
+if [ "$s" = p ]; then p2='*'; else p2=''; fi
+printf 'Monitors: 2\n 0: +DP-1 1920/600x1080/340+0+0  DP-1\n 1: +%sDP-2 2560/600x1440/340+1920+0  DP-2\n' "$p2"
+W
+cat > "$T/bin/sg-settingsctl" <<'W'
+#!/bin/sh
+echo "$*" >> "$Q.ctl"
+[ "$*" = "display restore" ] && printf 'RESTORED DP-2\tprimary\tyes\n'
+W
+cat > "$T/bin/xwininfo" <<'W'
+#!/bin/sh
+printf '  Width: 4480\n  Height: 1440\n'
+W
+cat > "$T/bin/wine" <<'W'
+#!/bin/sh
+W
+chmod +x "$T/bin/wlr-randr" "$T/bin/xrandr" "$T/bin/sg-settingsctl" "$T/bin/xwininfo" "$T/bin/wine"
+printf '%s\n' p n n n p n n n > "$T/q.x"
+: > "$T/q.ctl"
+sleep 30 & SESSION=$!
+( Q="$T/q" PATH="$T/bin:$PATH" SG_SHELL_DIR="$T/shell" SG_DESKTOP_WATCH_SECONDS=0.1 SG_METRICS_DELAY=0
+  SG_WORKAREA_TRIES=1 XDG_RUNTIME_DIR="$T" WAYLAND_DISPLAY=sg-test-wl DISPLAY=:sg-test
+  SG_MUTANT_PRIMARY_UNWATCHED=${SG_MUTANT_PRIMARY_UNWATCHED:-}
+  export Q PATH SG_SHELL_DIR SG_DESKTOP_WATCH_SECONDS SG_METRICS_DELAY SG_WORKAREA_TRIES XDG_RUNTIME_DIR \
+      WAYLAND_DISPLAY DISPLAY SG_MUTANT_PRIMARY_UNWATCHED
+  . "$HERE/lib/sg-common.sh"; sg_desktop_follow 4480x1440 "$SESSION" ) 2>"$T/q.log" &
+W=$!
+sleep 2
+kill "$SESSION" 2>/dev/null; wait "$SESSION" 2>/dev/null; sleep 0.3; kill "$W" 2>/dev/null
+n=$(grep -c '^display restore$' "$T/q.ctl")
+if [ "$n" = 2 ] && grep -q 'lost its main display: RESTORED DP-2' "$T/q.log"; then
+    echo "PASS  the X primary lost (an output given back): the kept main display again, once per loss"
+else echo "FAIL  primary lost: $n restores (want 2): '$(tr '\n' '|' < "$T/q.ctl")'"; RC=1; fi
 exit $RC

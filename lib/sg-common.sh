@@ -83,6 +83,28 @@ sg_desktop_follow() {
             fi
             _df_sig_last=$_df_sig
             [ -n "$_df_sig" ] && _df_sig_seen=1
+            # the main display, kept: Xwayland forgets the X primary whenever the
+            # compositor takes an output away and gives it back (randr's
+            # RROutputDestroy), and an output that came back at sign-in, after
+            # the layout was put back and before the watch above began, left
+            # the main taskbar on the left display (1 boot in 3, ledger i0655).
+            # Windows never loses the main display: with several on and none
+            # primary, the kept layout's main display again (once per loss --
+            # with no layout kept there is nothing to put back)
+            if [ -n "${DISPLAY:-}" ] && [ -z "${SG_MUTANT_PRIMARY_UNWATCHED:-}" ] && command -v xrandr >/dev/null 2>&1 \
+                && command -v sg-settingsctl >/dev/null 2>&1; then
+                _df_mons=$(xrandr --listmonitors 2>/dev/null)
+                if [ "$(printf '%s\n' "$_df_mons" | grep -c '^ *[0-9][0-9]*: ')" -gt 1 ] \
+                    && ! printf '%s\n' "$_df_mons" | grep -q '^ *[0-9][0-9]*: [+]*\*'; then
+                    if [ -z "${_df_noprim:-}" ]; then
+                        _df_noprim=1
+                        _df_r=$(sg-settingsctl display restore 2>/dev/null | grep '^RESTORED' | tr '\t\n' '  ')
+                        sg_log "the X screen lost its main display: ${_df_r:-no layout kept to put back}"
+                    fi
+                else
+                    _df_noprim=
+                fi
+            fi
         fi
         _df_now=$(xwininfo -root 2>/dev/null | awk '/^ *Width:/ {w=$2} /^ *Height:/ {h=$2} END {if (w && h) print w "x" h}')
         if [ -z "$_df_now" ] || [ "$_df_now" = "$_df_last" ]; then continue; fi

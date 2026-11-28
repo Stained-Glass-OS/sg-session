@@ -1,3 +1,19 @@
+sg-session (0.1.0-301) unstable; urgency=medium
+
+  * The main display is kept (i0655): with several displays on, 1 sign-in
+    in 3 the main taskbar and icons came up on the left display. Xwayland
+    forgets the X primary output whenever the compositor takes an output
+    away and gives it back (RandR's RROutputDestroy), and an output that
+    did so after the session put the layout back, before the display watch
+    began (or within one of its polls, at the same mode), was never
+    followed. sg_desktop_follow now watches the X primary itself: several
+    displays on and none primary puts the kept layout's main display back
+    (sg-settingsctl display restore), once per loss, logged. Windows never
+    loses the main display. test/desktop-follow-test.sh: +1 check (old 0
+    restores, new 2), mutant SG_MUTANT_PRIMARY_UNWATCHED.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 20:15:00 -0800
+
 sg-session (0.1.0-300) unstable; urgency=medium
 
   * The first-run setup's keyboards are written as Windows' setup writes
