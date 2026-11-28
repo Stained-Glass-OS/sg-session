@@ -15,12 +15,15 @@ trap 'rm -rf "$T"' EXIT INT TERM
 TOOL="$HERE/../bin/sg-print-setup"
 # --mutant: the TitlePref lines left out (the PDF named with cups-pdf's garbled title)
 if [ "${1:-}" = --mutant ]; then sed 's/-o TitlePref=1/-o TitlePref=0/' "$TOOL" > "$T/tool"; TOOL="$T/tool"; fi
+# --mutant-location: the queue still says "Saved in Documents" (Windows programs ask now)
+if [ "${1:-}" = --mutant-location ]; then sed 's/^LOCATION=.*/LOCATION="Saved in Documents"/' "$TOOL" > "$T/tool"; TOOL="$T/tool"; fi
 printf '#!/bin/sh\nexit 0\n' > "$T/cups-pdf"; chmod +x "$T/cups-pdf"
 printf '### Key: Out\n#Out ${HOME}/PDF\n### Key: Label\n#Label 0\n' > "$T/cups-pdf.conf"
 cat > "$T/lpstat" <<'S'
 #!/bin/sh
 case "$1" in
 -p) [ -f "$STATE/queue" ] ;;
+-l) [ -f "$STATE/queue" ] || exit 1; printf 'printer %s is idle.\n\tLocation: %s\n' "$3" "$(cat "$STATE/location" 2>/dev/null)" ;;
 -d) if [ -f "$STATE/default" ]; then echo "system default destination: $(cat "$STATE/default")"; else echo "no system default destination"; fi ;;
 esac
 S
@@ -29,6 +32,7 @@ cat > "$T/lpadmin" <<'S'
 echo "$*" >> "$STATE/calls"
 case "$*" in *"-o TitlePref=1"*) mkdir -p "$PPDS"; echo '*DefaultTitlePref: 1' > "$PPDS/Print-to-PDF.ppd" ;; esac
 case "$1" in -p) touch "$STATE/queue" ;; -d) echo "$2" > "$STATE/default" ;; esac
+case "$*" in *" -L "*) printf '%s\n' "$*" | sed 's/.* -L //' > "$STATE/location" ;; esac
 S
 chmod +x "$T/lpstat" "$T/lpadmin"
 mkdir -p "$T/state"
@@ -43,9 +47,19 @@ case "$calls" in *"-p Print-to-PDF -o TitlePref=1"*) pass "the PDF is named afte
 grep -qx 'Out /var/lib/stained-glass/prefix/drive_c/users/${USER}/Documents' "$T/cups-pdf.conf" \
     && grep -qx 'Label 1' "$T/cups-pdf.conf" && pass "cups-pdf writes into the user's Windows Documents, never over a PDF" \
     || fail "cups-pdf.conf: $(cat "$T/cups-pdf.conf")"
+[ "$(cat "$T/state/location" 2>/dev/null)" = "Asks where to save (Linux programs: Documents)" ] \
+    && pass "its location says Windows programs ask where to save" || fail "location: $(cat "$T/state/location" 2>/dev/null)"
 rm -f "$T/state/calls"; echo "Office-Laser" > "$T/state/default"
 run
 [ ! -s "$T/state/calls" ] && pass "a second run changes nothing; an administrator's default stays" || fail "second run: $(cat "$T/state/calls")"
+echo "Saved in Documents" > "$T/state/location"
+run
+[ "$(cat "$T/state/location")" = "Asks where to save (Linux programs: Documents)" ] \
+    && pass "a queue made with the old words gets the new location" || fail "old queue location: $(cat "$T/state/location")"
+rm -f "$T/state/calls"; echo "Front desk" > "$T/state/location"
+run
+[ ! -s "$T/state/calls" ] && [ "$(cat "$T/state/location")" = "Front desk" ] \
+    && pass "a location an administrator wrote stays" || fail "admin location: $(cat "$T/state/calls" 2>/dev/null)"
 rm -f "$T/cups-pdf"; rm -rf "$T/state"; mkdir -p "$T/state"
 run
 [ ! -e "$T/state/calls" ] && pass "without cups-pdf it does nothing" || fail "without cups-pdf"

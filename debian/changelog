@@ -1,3 +1,14 @@
+sg-session (0.1.0-305) unstable; urgency=medium
+
+  * The Print to PDF printer's location says where the PDF goes (print2,
+    ledger i0990): "Asks where to save (Linux programs: Documents)" --
+    Windows programs ask since wine-sg 10.0-1222's 9814. Queues made with
+    the old "Saved in Documents" get the new words at boot; a location an
+    administrator wrote stays. Gate print-setup-test.sh (mutant
+    --mutant-location).
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Sat, 28 Nov 2026 03:40:00 -0800
+
 sg-session (0.1.0-304) unstable; urgency=medium
 
   * Linux programs' launcher entries on their taskbar buttons (linux1,

@@ -3,8 +3,9 @@
 # CUPS queue on cups-pdf (printer-driver-cups-pdf). Wine lists CUPS's
 # printers as Windows printers (winspool, localspl), so Notepad, WordPad,
 # LibreOffice, a browser -- any program's Print dialog -- can print to it.
-# The PDF lands in the user's Documents (C:\users\NAME\Documents), named
-# after the document, as Windows' own PDF printer saves where it is told.
+# A Windows program asks where to save the PDF (wine-sg's Save Print Output
+# As, named after the document) as Windows' own PDF printer does; a Linux
+# program's PDF lands in the user's Documents (C:\users\NAME\Documents).
 #
 # Run as root at boot (sg-print-setup.service, after CUPS): creates the
 # queue if it is missing, makes it the default if there is none, and points
@@ -39,9 +40,16 @@ if [ -f "$CONF" ]; then
     set_conf Label 1
 fi
 
+# the location Settings and the Print dialog show says where the PDF goes
+LOCATION="Asks where to save (Linux programs: Documents)"
+OLD_LOCATION="Saved in Documents"
 if ! "$LPSTAT" -p "$QUEUE" >/dev/null 2>&1; then
-    "$LPADMIN" -p "$QUEUE" -E -v cups-pdf:/ -P "$PPD" -D "Print to PDF" -L "Saved in Documents"
+    "$LPADMIN" -p "$QUEUE" -E -v cups-pdf:/ -P "$PPD" -D "Print to PDF" -L "$LOCATION"
     echo "sg-print-setup: added the $QUEUE printer"
+elif "$LPSTAT" -l -p "$QUEUE" 2>/dev/null | grep -qx "[[:space:]]*Location: $OLD_LOCATION"; then
+    # a queue made before Windows programs asked: only our own old words
+    # change, a location an administrator wrote stays
+    "$LPADMIN" -p "$QUEUE" -L "$LOCATION"
 fi
 # the PDF named after the document: cups-pdf takes the title from the
 # PostScript (TitlePref 0, the PPD's default) with sscanf's %c, which does
