@@ -1,3 +1,15 @@
+sg-session (0.1.0-303) unstable; urgency=medium
+
+  * sg-settingsctl sound apps / app-volume / app-mute: the programs
+    playing sound (PipeWire's streams: index, volume, mute, process, name)
+    and their volume and mute, for the Volume Mixer (sg-shell). A Windows
+    program's stream volume is its audio session's volume (wine-sg 9416),
+    as Windows' Volume Mixer shows the session's. test/settingsctl-test.py:
+    +3 checks and 5 refusals (stream not a number, volume over 150, mute
+    not yes/no, option smuggling); mutant SG_MUTANT_APPS_NO_MUTE caught.
+
+ -- Stained Glass OS <ke7oxh@gmail.com>  Fri, 27 Nov 2026 21:07:01 -0800
+
 sg-session (0.1.0-302) unstable; urgency=medium
 
   * Linux programs' notifications are toasts (linux1, ledger i0811; with

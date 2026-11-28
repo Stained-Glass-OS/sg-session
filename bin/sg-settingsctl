@@ -308,6 +308,29 @@ def sound(args):
         kind = one_of(args[1], ("sink", "source"), "the device kind")
         on = one_of(args[3], ("yes", "no"), "mute")
         run(["pactl", "set-%s-mute" % kind, device_name(args[2]), "1" if on == "yes" else "0"])
+    elif verb == "apps" and len(args) == 1:
+        # the programs playing sound, as the Volume Mixer lists them: Windows
+        # programs' streams carry their session's volume (wine-sg 9416)
+        try:
+            streams = json.loads(run(["pactl", "--format=json", "list", "sink-inputs"]) or "[]")
+        except ValueError:
+            raise Fail("failed", "pactl gave an answer that is not JSON")
+        out = []
+        for d in streams:
+            props = d.get("properties") or {}
+            name = props.get("application.name") or props.get("media.name") or props.get("application.process.binary") or "?"
+            muted = d.get("mute") and not os.environ.get("SG_MUTANT_APPS_NO_MUTE")
+            out.append("APP %d\t%d\t%s\t%s\t%s" % (int(d.get("index", -1)), percent_of(d), yn(muted),
+                                                   clean(props.get("application.process.id", "")), clean(name)))
+        return out
+    elif verb == "app-volume" and len(args) == 3:
+        index = integer(args[1], 0, 99999, "the stream")
+        pct = integer(args[2], 0, 150, "the volume")
+        run(["pactl", "set-sink-input-volume", str(index), "%d%%" % pct])
+    elif verb == "app-mute" and len(args) == 3:
+        index = integer(args[1], 0, 99999, "the stream")
+        on = one_of(args[2], ("yes", "no"), "mute")
+        run(["pactl", "set-sink-input-mute", str(index), "1" if on == "yes" else "0"])
     elif verb == "chime" and len(args) == 1:
         chime()
     elif verb == "step" and len(args) in (2, 3):
@@ -337,7 +360,7 @@ def sound(args):
         muted = run(["pactl", "get-sink-mute", sink], check=False).strip().endswith("yes")
         return ["MUTED %s" % yn(muted)]
     else:
-        raise Fail("invalid", "usage: sound [default|volume|mute|chime|step|mute-toggle ...]")
+        raise Fail("invalid", "usage: sound [default|volume|mute|apps|app-volume|app-mute|chime|step|mute-toggle ...]")
     return []
 
 

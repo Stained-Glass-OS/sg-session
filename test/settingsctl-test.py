@@ -62,10 +62,20 @@ with open(os.path.join(tmp, "sinks.json"), "w") as f:
     json.dump(SINKS, f)
 with open(os.path.join(tmp, "sources.json"), "w") as f:
     json.dump(SOURCES, f)
+# the programs playing: a Windows program (its session at -6 dB, 79%) and a Linux one, muted
+SINK_INPUTS = [
+    {"index": 86, "mute": False, "volume": {"front-left": {"value_percent": "79%"}, "front-right": {"value_percent": "79%"}},
+     "properties": {"application.name": "spotify.exe", "application.process.id": "4242", "media.name": "audio stream #1"}},
+    {"index": 91, "mute": True, "volume": {"mono": {"value_percent": "100%"}},
+     "properties": {"application.name": "Firefox", "application.process.id": "5151"}},
+]
+with open(os.path.join(tmp, "sink-inputs.json"), "w") as f:
+    json.dump(SINK_INPUTS, f)
 with open(os.path.join(tmp, "outputs.json"), "w") as f:
     json.dump(OUTPUTS, f)
 stand_in("pactl", """case "$*" in
   "--format=json list sinks") cat %(t)s/sinks.json ;;
+  "--format=json list sink-inputs") cat %(t)s/sink-inputs.json ;;
   "--format=json list sources") cat %(t)s/sources.json ;;
   "get-default-sink") echo alsa_output.pci-0000_00_1f.3.analog-stereo ;;
   "get-default-source") echo alsa_input.pci-0000_00_1f.3.analog-stereo ;;
@@ -217,8 +227,18 @@ check("sound default: runs pactl set-default-source",
       code == 0 and "pactl set-default-source alsa_input.pci-0000_00_1f.3.analog-stereo" in calls(), lines)
 code, lines = ctl("sound", "mute", "sink", "bluez_output.AA_BB.1", "no")
 check("sound mute: runs pactl set-sink-mute 0", code == 0 and "pactl set-sink-mute bluez_output.AA_BB.1 0" in calls(), lines)
+# the Volume Mixer's programs (wine-sg 9416: a Windows program's session volume is its stream's)
+code, lines = ctl("sound", "apps")
+check("sound apps: the programs playing, with volume and mute",
+      code == 0 and "APP 86\t79\tno\t4242\tspotify.exe" in lines and "APP 91\t100\tyes\t5151\tFirefox" in lines, lines)
+code, lines = ctl("sound", "app-volume", "86", "50")
+check("sound app-volume: runs pactl set-sink-input-volume", code == 0 and "pactl set-sink-input-volume 86 50%" in calls(), lines)
+code, lines = ctl("sound", "app-mute", "91", "no")
+check("sound app-mute: runs pactl set-sink-input-mute 0", code == 0 and "pactl set-sink-input-mute 91 0" in calls(), lines)
 for bad in (["volume", "sink", "x", "151"], ["volume", "sink", "x", "-5"], ["volume", "sink", "--help", "5"],
-            ["volume", "sink", "a b", "5"], ["default", "both", "x"], ["mute", "sink", "x", "maybe"]):
+            ["volume", "sink", "a b", "5"], ["default", "both", "x"], ["mute", "sink", "x", "maybe"],
+            ["app-volume", "86", "151"], ["app-volume", "-1", "5"], ["app-volume", "@DEFAULT_SINK@", "5"],
+            ["app-mute", "86", "maybe"], ["app-mute", "--help", "yes"]):
     code, lines = ctl("sound", *bad)
     check("sound refuses %s" % " ".join(bad), code == 2 and lines[-1].startswith("ERROR invalid") and not calls(), lines)
 
